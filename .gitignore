@@ -5,3 +5,15 @@ bin/
 *.suo
 *.VC.db
 *.VC.opendb
+
+# local dev/build artifacts
+build_last.log
+jlink_smoke.exe
+*.obj
+jlink_bind_debug.txt
+jlink_exports.txt
+_tmp_*.py
+__pycache__/
+dll/*.pdb
+dll/*.exp
+dll/*.lib

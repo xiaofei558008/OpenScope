@@ -22,11 +22,6 @@
 # Retrospective Status:
 #   - optional: Can be completed but not required
 #   - done: Retrospective has been completed
-#
-# WORKFLOW NOTES:
-# ===============
-# - Epic 1 已进入 in-progress（首个故事即将开发）
-# - 每完成一个故事即更新状态并提交 checkpoint
 
 generated: 2026-08-08
 last_updated: 2026-08-08
@@ -36,17 +31,17 @@ tracking_system: file-system
 story_location: _bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: in-progress
-  1-1-unified-build-and-fix-framework-compile-errors: review
-  1-2-fix-elf-dwarf-compile-errors: review
-  1-3-app-launch-and-module-load-selfcheck: review
+  epic-1: done
+  1-1-unified-build-and-fix-framework-compile-errors: done
+  1-2-fix-elf-dwarf-compile-errors: done
+  1-3-app-launch-and-module-load-selfcheck: done
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-jlink-driver-module-skeleton: backlog
-  2-2-jlink-device-scan-and-connect-config-dialog: backlog
-  2-3-jlink-x64-dll-dynamic-bind-and-connect-disconnect: backlog
-  2-4-mcu-memory-read-write-and-timestamp-samples: backlog
+  epic-2: done
+  2-1-jlink-driver-module-skeleton: done
+  2-2-jlink-device-scan-and-connect-config-dialog: done
+  2-3-jlink-x64-dll-dynamic-bind-and-connect-disconnect: done
+  2-4-mcu-memory-read-write-and-timestamp-samples: done
   epic-2-retrospective: optional
 
   epic-3: backlog

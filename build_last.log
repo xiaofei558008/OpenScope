@@ -1,6 +1,7 @@
 适用于 .NET Framework MSBuild 版本 18.8.2+ce25c0108
 
-  elf.c
+  jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
+  module_mgr.c
   OpenScope.vcxproj -> D:\OpenScope\bin\Release\OpenScope.exe
 
 Build OK.

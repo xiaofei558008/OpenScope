@@ -9,7 +9,7 @@ static void dll_dir(wchar_t* out, int outlen)
     GetModuleFileNameW(NULL, exe, MAX_PATH);
     slash = wcsrchr(exe, L'\\');
     if (slash) *slash = 0;
-    _snwprintf(out, outlen, L"%s\\dll", exe);
+    _snwprintf(out, outlen, L"%s\\..\\..\\dll", exe);
 }
 
 static int name_has_jlink(const char* name)
