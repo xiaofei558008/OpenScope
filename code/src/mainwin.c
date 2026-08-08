@@ -41,6 +41,17 @@
 #define IDD_RN_OK          2602
 #define IDD_RN_CANCEL      2603
 
+/* 连接配置行（直接放主界面，不弹对话框） */
+#define IDC_CFG_DEVICE   2101
+#define IDC_CFG_IFACE    2102
+#define IDC_CFG_SPEED    2103
+#define IDC_CFG_EMU      2104
+#define IDC_CFG_REFRESH  2105
+#define IDC_CFG_LBL_DEV  2091
+#define IDC_CFG_LBL_IF   2092
+#define IDC_CFG_LBL_SPD  2093
+#define IDC_CFG_LBL_EMU  2094
+
 #define IDD_PICK_OK      2401
 #define IDD_PICK_CANCEL  2402
 #define IDD_PICK_EDIT    2403
@@ -304,20 +315,35 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 static void layout(void)
 {
     RECT rc;
-    int bw, bh = 34, sw, logh, right_h, right_w;
+    int bw, bh = 34, cfg_h = 30, sw, logh, right_h, right_w;
     int parts[4];
     GetClientRect(g_app.hMain, &rc);
     bw = rc.right;
     sw = g_app.tree_w;
     logh = g_app.log_h;
-    right_h = rc.bottom - bh - logh - 22;
+    right_h = rc.bottom - bh - cfg_h - logh - 22;
     right_w = bw - sw - 5;
-    MoveWindow(g_app.hSplitV, sw, bh, 5, right_h, TRUE);
-    MoveWindow(g_app.hTree, 0, bh, sw, right_h, TRUE);
-    MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
+    /* 连接配置行：MCU型号 / 接口 / 速度 / J-Link设备 / 刷新 */
+    {
+        static const struct { int id; int x; int w; } cfg[] = {
+            { IDC_CFG_LBL_DEV, 6, 58 }, { IDC_CFG_DEVICE, 68, 142 },
+            { IDC_CFG_LBL_IF, 214, 34 }, { IDC_CFG_IFACE, 250, 62 },
+            { IDC_CFG_LBL_SPD, 318, 52 }, { IDC_CFG_SPEED, 372, 92 },
+            { IDC_CFG_LBL_EMU, 470, 42 }, { IDC_CFG_EMU, 514, 280 },
+            { IDC_CFG_REFRESH, 800, 56 },
+        };
+        int i;
+        for (i = 0; i < (int)(sizeof(cfg) / sizeof(cfg[0])); i++) {
+            HWND c = GetDlgItem(g_app.hMain, cfg[i].id);
+            if (c) MoveWindow(c, cfg[i].x, bh + 4, cfg[i].w, 22, TRUE);
+        }
+    }
+    MoveWindow(g_app.hSplitV, sw, bh + cfg_h, 5, right_h, TRUE);
+    MoveWindow(g_app.hTree, 0, bh + cfg_h, sw, right_h, TRUE);
+    MoveWindow(g_app.hRight, sw + 5, bh + cfg_h, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
-    MoveWindow(g_app.hLog, 0, bh + right_h, bw, logh, TRUE);
+    MoveWindow(g_app.hLog, 0, bh + cfg_h + right_h, bw, logh, TRUE);
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
     SendMessageW(g_app.hStatus, SB_SETPARTS, 4, (LPARAM)parts);
@@ -473,19 +499,31 @@ static void cmd_connect(void)
 {
     int rc, c = 0;
     OS_DriverInfo info;
+    OS_ConnectCfg cfg;
+    wchar_t wdev[128];
+    LRESULT ifi, spi, emu;
+    static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
     if (!g_app.driver || !g_app.driver->command) {
-        MessageBoxW(g_app.hMain, L"未加载驱动模块（jlink.dll）", L"连接", MB_OK | MB_ICONERROR);
+        os_log(OS_LOG_ERROR, "未加载驱动模块（jlink.dll）");
+        set_status(0, L"未加载驱动模块");
         return;
     }
-    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONFIGURE, (void*)g_app.hMain, NULL);
-    if (rc == OS_ERR_CANCELED) return;
+    /* 直接读取界面配置，不再弹配置对话框 */
+    memset(&cfg, 0, sizeof(cfg));
+    ifi = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
+    cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
+    spi = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_SPEED), CB_GETCURSEL, 0, 0);
+    if (spi < 0 || spi >= (LRESULT)(sizeof(speeds) / sizeof(speeds[0]))) spi = 0;
+    cfg.speed_khz = speeds[spi];
+    GetDlgItemTextW(g_app.hMain, IDC_CFG_DEVICE, wdev, 128);
+    WideCharToMultiByte(CP_UTF8, 0, wdev, -1, cfg.device, sizeof(cfg.device), NULL, NULL);
+    emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
+    cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
+    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
     if (rc != OS_ERR_OK) {
-        MessageBoxW(g_app.hMain, L"配置失败", L"连接", MB_OK | MB_ICONERROR);
-        return;
-    }
-    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, NULL, NULL);
-    if (rc != OS_ERR_OK) {
-        MessageBoxW(g_app.hMain, L"连接 MCU 失败，请检查仿真器与目标板", L"连接", MB_OK | MB_ICONERROR);
+        set_status(0, L"连接失败");
+        os_log(OS_LOG_ERROR, "连接失败 (rc=%d)，请检查仿真器与目标板", rc);
+        os_mainwin_update_buttons();
         return;
     }
     g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
@@ -508,6 +546,61 @@ static void cmd_disconnect(void)
     os_log(OS_LOG_INFO, "已断开连接");
     refresh_status();
     os_mainwin_update_buttons();
+}
+
+/* 扫描 J-Link 设备并填充主界面下拉（不弹窗，结果进日志/下拉） */
+static void cfg_fill_emus(void)
+{
+    OS_DeviceInfo items[16];
+    OS_ScanReq req;
+    HWND h;
+    int i, n;
+    if (!g_app.driver || !g_app.driver->command) return;
+    memset(&req, 0, sizeof(req));
+    req.items = items;
+    req.capacity = 16;
+    g_app.driver->command(g_app.driver_ctx, OS_CMD_SCAN, &req, NULL);
+    n = req.count;
+    h = GetDlgItem(g_app.hMain, IDC_CFG_EMU);
+    if (!h) return;
+    SendMessageW(h, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < n && i < 16; i++) {
+        wchar_t line[256];
+        _snwprintf(line, 256, L"%hs (SN:%hs)", items[i].name, items[i].serial);
+        SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)line);
+    }
+    if (n > 0) {
+        SendMessageW(h, CB_SETCURSEL, 0, 0);
+    } else {
+        SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)L"未发现 J-Link 设备");
+        SendMessageW(h, CB_SETCURSEL, 0, 0);
+    }
+    os_log(OS_LOG_INFO, "J-Link 设备扫描: %d 个", n);
+}
+
+/* 主界面连接配置初始化：接口/速度下拉 + 扫描设备列表（模块加载后调用） */
+void os_mainwin_cfg_init(void)
+{
+    HWND h;
+    const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
+    static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
+    int i;
+    h = GetDlgItem(g_app.hMain, IDC_CFG_IFACE);
+    if (h) {
+        for (i = 0; i < 2; i++) SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)ifaces[i]);
+        SendMessageW(h, CB_SETCURSEL, 0, 0);
+    }
+    h = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
+    if (h) {
+        for (i = 0; i < 7; i++) {
+            wchar_t b[32];
+            if (speeds[i] == 0) _snwprintf(b, 32, L"0 (自动)");
+            else _snwprintf(b, 32, L"%d", speeds[i]);
+            SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)b);
+        }
+        SendMessageW(h, CB_SETCURSEL, 5, 0); /* 默认 4000 */
+    }
+    cfg_fill_emus();
 }
 
 static void cmd_start_acq(void)
@@ -1186,6 +1279,40 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                    g_app.hInst, NULL);
             SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
+        /* 连接配置行（直接放主界面，不再弹配置对话框） */
+        {
+            static const struct { int id; const wchar_t* text; int x; int w; } ctl[] = {
+                { IDC_CFG_LBL_DEV, L"MCU型号", 6, 58 },
+                { IDC_CFG_DEVICE, L"STM32F407VG", 68, 142 },
+                { IDC_CFG_LBL_IF, L"接口", 214, 34 },
+                { IDC_CFG_IFACE, L"", 250, 62 },
+                { IDC_CFG_LBL_SPD, L"速度kHz", 318, 52 },
+                { IDC_CFG_SPEED, L"", 372, 92 },
+                { IDC_CFG_LBL_EMU, L"J-Link", 470, 42 },
+                { IDC_CFG_EMU, L"", 514, 280 },
+                { IDC_CFG_REFRESH, L"刷新", 800, 56 },
+            };
+            int i;
+            for (i = 0; i < (int)(sizeof(ctl) / sizeof(ctl[0])); i++) {
+                const wchar_t* cls = L"STATIC";
+                DWORD style = SS_LEFT;
+                int hh = 22;
+                HWND c;
+                if (ctl[i].id == IDC_CFG_DEVICE) {
+                    cls = L"EDIT"; style = WS_BORDER | ES_AUTOHSCROLL;
+                } else if (ctl[i].id == IDC_CFG_IFACE || ctl[i].id == IDC_CFG_SPEED ||
+                           ctl[i].id == IDC_CFG_EMU) {
+                    cls = L"COMBOBOX"; style = CBS_DROPDOWNLIST | WS_TABSTOP; hh = 120;
+                } else if (ctl[i].id == IDC_CFG_REFRESH) {
+                    cls = L"BUTTON"; style = BS_PUSHBUTTON;
+                }
+                c = CreateWindowW(cls, ctl[i].text,
+                                  WS_CHILD | WS_VISIBLE | style,
+                                  ctl[i].x, 38, ctl[i].w, hh, hwnd,
+                                  (HMENU)(INT_PTR)ctl[i].id, g_app.hInst, NULL);
+                if (c) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            }
+        }
         g_app.hTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                       WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
                                       TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_CHECKBOXES,
@@ -1348,6 +1475,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_OPEN: cmd_open_elf(); break;
         case IDC_BTN_CONNECT: cmd_connect(); break;
         case IDC_BTN_DISCON: cmd_disconnect(); break;
+        case IDC_CFG_REFRESH: cfg_fill_emus(); break;
         case IDC_BTN_START: cmd_start_acq(); break;
         case IDC_BTN_STOP: cmd_stop_acq(); break;
         case IDC_BTN_LOGSTART: cmd_log_start(); break;
@@ -1355,7 +1483,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.3.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.4.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:

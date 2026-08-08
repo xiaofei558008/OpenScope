@@ -148,7 +148,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.3.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.4.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -165,6 +165,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_modmgr_load();
     os_mainwin_update_buttons(); /* 模块加载后启用“连接”按钮 */
     os_mainwin_rebuild_window_menu();
+    os_mainwin_cfg_init(); /* 主界面连接配置：接口/速度/J-Link 设备列表 */
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
     {

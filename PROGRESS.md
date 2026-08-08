@@ -76,6 +76,12 @@
   - 修复日志 bug：`os_log` 窄字符 vsnprintf 的 `%ls` 遇中文按 C locale 转换失败输出空行（布局已正确保存但日志为空）——重命名日志先转 UTF-8 再 `%s` 输出。
   - 回归：`tests/ui_rename_drive.ps1`（父窗口=Tab、钩子重命名、对话框 OK、布局保存）开发版+安装版 ALL PASS；`ui_windows_drive`/`ui_layout_drive`/`ui_connect_drive` 全部 ALL PASS；构建 0 error/0 warning。
   - 版本 1.3.0：重新打包 `dist/OpenScope-Setup-1.3.0.exe`（10.3MB），安装版验证版本 1.3.0.0 + 重命名功能。
+- **checkpoint-14（2026-08-09）**：连接配置直接嵌入主界面，连接不再弹配置对话框（1.4.0）。
+  - 主界面新增连接配置行（按钮栏下方）：MCU 型号 EDIT、仿真接口 COMBO（SWD/JTAG）、时钟速度 COMBO（0自动~5000kHz）、J-Link 设备 COMBO、刷新按钮；启动/模块加载后自动扫描填充设备列表，刷新按钮可重扫。
+  - `cmd_connect` 重写：直接读取界面控件构造 `OS_ConnectCfg`（接口/速度/设备名/仿真器索引）调 `OS_CMD_CONNECT`，不再 `OS_CMD_CONFIGURE` 弹窗；成功/失败只走状态栏+日志，无任何弹窗；布局中树/右侧/日志下移一行。
+  - `module/jlink/tests/ui_connect_drive.ps1` 重写为主界面直连回归：校验控件齐全、设备列表自动扫描+刷新、输入 STM32L432KB 直连成功、无配置对话框、断开成功；支持 `-ExePath` 跑安装版。
+  - 回归：连接测试开发版+安装版 ALL PASS；ui_windows_drive/ui_layout_drive/ui_rename_drive 全部 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.4.0：重新打包 `dist/OpenScope-Setup-1.4.0.exe`（10.3MB），安装版验证版本 1.4.0.0 + 主界面直连功能。
 
 ## 待办（BMAD 规划产出后更新）
 

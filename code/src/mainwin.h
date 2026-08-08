@@ -17,5 +17,6 @@ int os_mainwin_active_tab(void);
 void os_mainwin_select_tab(int idx);
 void os_mainwin_refresh_layout(void);
 HWND os_win_create_by_type(const char* type, const wchar_t* title);
+void os_mainwin_cfg_init(void);
 
 #endif
