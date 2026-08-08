@@ -24,6 +24,8 @@ typedef struct OS_Alloc {
     struct OS_Alloc* next;
 } OS_Alloc;
 
+typedef struct DW_Unit DW_Unit;
+
 struct OS_ElfFile {
     const uint8_t* data;
     size_t data_len;
@@ -53,6 +55,14 @@ struct OS_ElfFile {
     OS_Variable* vars;
     int var_count;
     int var_cap;
+
+    /* all parsed DWARF units (kept during parse, freed afterwards) */
+    DW_Unit* units;
+    int n_units, cap_units;
+    uint64_t* die_glob_off;   /* sorted absolute DIE offsets */
+    int* die_glob_unit;       /* owning unit index */
+    int* die_glob_idx;        /* local die index in unit */
+    int die_glob_count, die_glob_cap;
 
     OS_Alloc* allocs;
 };
@@ -370,9 +380,12 @@ static int elf_parse_sections(OS_ElfFile* f, char* errbuf, int errbuf_len)
 #define DW_FORM_addrx        0x1b
 #define DW_FORM_data16       0x1e
 #define DW_FORM_line_strp    0x1f
+#define DW_FORM_ref_sig8     0x20
 #define DW_FORM_implicit_const 0x21
 #define DW_FORM_loclistx     0x22
 #define DW_FORM_rnglistx     0x23
+#define DW_FORM_ref_sup4     0x1c
+#define DW_FORM_ref_sup8     0x1d
 #define DW_FORM_strx1        0x25
 #define DW_FORM_strx2        0x26
 #define DW_FORM_strx3        0x27
@@ -533,16 +546,22 @@ static DW_Die* unit_die(DW_Unit* u, int idx)
     return &u->dies[idx];
 }
 
-static int unit_die_by_off(DW_Unit* u, uint64_t off)
+static DW_Die* die_glob_find(OS_ElfFile* f, uint64_t off, DW_Unit** out_u, int* out_idx)
 {
-    int lo = 0, hi = u->ndies - 1;
+    int lo = 0, hi = f->die_glob_count - 1;
     while (lo <= hi) {
         int mid = (lo + hi) / 2;
-        if (u->die_offs[mid] == off) return u->die_index[mid];
-        if (u->die_offs[mid] < off) lo = mid + 1;
+        if (f->die_glob_off[mid] == off) {
+            int ui = f->die_glob_unit[mid];
+            int di = f->die_glob_idx[mid];
+            if (out_u) *out_u = &f->units[ui];
+            if (out_idx) *out_idx = di;
+            return &f->units[ui].dies[di];
+        }
+        if (f->die_glob_off[mid] < off) lo = mid + 1;
         else hi = mid - 1;
     }
-    return -1;
+    return NULL;
 }
 
 /* ------------------------ DIE walker ------------------------------ */
@@ -613,27 +632,48 @@ static int parse_one_die(DW_Unit* u, uint64_t off, int parent, DW_Abbrev* abbrev
             break;
         case DW_FORM_data1:
         case DW_FORM_flag:
-        case DW_FORM_ref1:
             if (p >= end) return -1;
             die_add_attr(d, an, 1, *p, NULL);
             ++p;
             break;
+        case DW_FORM_ref1:
+            if (p >= end) return -1;
+            die_add_attr(d, an, 1, u->unit_off + *p, NULL);
+            ++p;
+            break;
         case DW_FORM_data2:
-        case DW_FORM_ref2:
             if (p + 2 > end) return -1;
             die_add_attr(d, an, 1, rd_u16(p, f->le), NULL);
             p += 2;
             break;
+        case DW_FORM_ref2:
+            if (p + 2 > end) return -1;
+            die_add_attr(d, an, 1, u->unit_off + rd_u16(p, f->le), NULL);
+            p += 2;
+            break;
         case DW_FORM_data4:
-        case DW_FORM_ref4:
         case DW_FORM_sec_offset:
         case DW_FORM_strp:
             if (p + 4 > end) return -1;
             die_add_attr(d, an, (af == DW_FORM_strp) ? 5 : 1, rd_u32(p, f->le), NULL);
             p += 4;
             break;
+        case DW_FORM_ref4:
+            if (p + 4 > end) return -1;
+            die_add_attr(d, an, 1, u->unit_off + rd_u32(p, f->le), NULL);
+            p += 4;
+            break;
         case DW_FORM_data8:
+            if (p + 8 > end) return -1;
+            die_add_attr(d, an, 1, rd_u64(p, f->le), NULL);
+            p += 8;
+            break;
         case DW_FORM_ref8:
+            if (p + 8 > end) return -1;
+            die_add_attr(d, an, 1, u->unit_off + rd_u64(p, f->le), NULL);
+            p += 8;
+            break;
+        case DW_FORM_ref_sig8:
             if (p + 8 > end) return -1;
             die_add_attr(d, an, 1, rd_u64(p, f->le), NULL);
             p += 8;
@@ -642,12 +682,22 @@ static int parse_one_die(DW_Unit* u, uint64_t off, int parent, DW_Abbrev* abbrev
             if (p + 16 > end) return -1;
             p += 16;
             break;
+        case DW_FORM_ref_sup4:
+            if (p + 4 > end) return -1;
+            p += 4;
+            break;
+        case DW_FORM_ref_sup8:
+            if (p + 8 > end) return -1;
+            p += 8;
+            break;
         case DW_FORM_sdata:
             die_add_attr(d, an, 3, (uint64_t)rd_sleb(p, end, &p), NULL);
             break;
         case DW_FORM_udata:
-        case DW_FORM_ref_udata:
             die_add_attr(d, an, 2, rd_uleb(p, end, &p), NULL);
+            break;
+        case DW_FORM_ref_udata:
+            die_add_attr(d, an, 1, u->unit_off + rd_uleb(p, end, &p), NULL);
             break;
         case DW_FORM_string:
             if (p >= end) return -1;
@@ -724,9 +774,11 @@ static int parse_one_die(DW_Unit* u, uint64_t off, int parent, DW_Abbrev* abbrev
         case DW_FORM_ref_addr:
             if (u->version <= 2) {
                 if (p + u->addr_size > end) return -1;
+                die_add_attr(d, an, 1, rd_addr(p, f->le, (int)u->addr_size), NULL);
                 p += u->addr_size;
             } else {
                 if (p + 4 > end) return -1;
+                die_add_attr(d, an, 1, rd_u32(p, f->le), NULL);
                 p += 4;
             }
             break;
@@ -1023,8 +1075,11 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
     case DW_TAG_typedef: {
         const char* own = name;
         if (have_type) {
-            int ref = unit_die_by_off(u, type_ref);
-            OS_Type* child = ref >= 0 ? build_type(u, ref, depth + 1) : NULL;
+            DW_Unit* tu = NULL;
+            int tidx = -1;
+            OS_Type* child = NULL;
+            if (die_glob_find(f, type_ref, &tu, &tidx))
+                child = build_type(tu, tidx, depth + 1);
             if (child) {
                 if (child->kind == OS_TYPE_INT || child->kind == OS_TYPE_UINT ||
                     child->kind == OS_TYPE_FLOAT || child->kind == OS_TYPE_BOOL ||
@@ -1053,8 +1108,11 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
     case DW_TAG_volatile_type:
     case DW_TAG_restrict_type:
         if (have_type) {
-            int ref = unit_die_by_off(u, type_ref);
-            t = ref >= 0 ? build_type(u, ref, depth + 1) : NULL;
+            DW_Unit* tu = NULL;
+            int tidx = -1;
+            t = NULL;
+            if (die_glob_find(f, type_ref, &tu, &tidx))
+                t = build_type(tu, tidx, depth + 1);
             if (!t) { t = type_new(u, OS_TYPE_OTHER, name ? name : "?"); }
         } else {
             t = type_new(u, OS_TYPE_OTHER, name ? name : "?");
@@ -1070,8 +1128,11 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
         t->is_ptr = 1;
         t->is_signed = 0;
         if (have_type) {
-            int ref = unit_die_by_off(u, type_ref);
-            OS_Type* child = ref >= 0 ? build_type(u, ref, depth + 1) : NULL;
+            DW_Unit* tu = NULL;
+            int tidx = -1;
+            OS_Type* child = NULL;
+            if (die_glob_find(f, type_ref, &tu, &tidx))
+                child = build_type(tu, tidx, depth + 1);
             if (child) type_set_child(u, t, child);
         }
         break;
@@ -1140,8 +1201,11 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
                         if (is_art && !mname) continue;
                         mt = NULL;
                         if (have_mtype) {
-                            int ref = unit_die_by_off(u, mtype);
-                            OS_Type* child = ref >= 0 ? build_type(u, ref, depth + 1) : NULL;
+                            DW_Unit* tu = NULL;
+                            int tidx = -1;
+                            OS_Type* child = NULL;
+                            if (die_glob_find(f, mtype, &tu, &tidx))
+                                child = build_type(tu, tidx, depth + 1);
                             mt = shallow_clone(u, child, mname, (int64_t)moff,
                                                have_bsz ? (int)bsz : 0,
                                                have_boff ? (int)boff : 0,
@@ -1167,8 +1231,11 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
         OS_Type* elem = NULL;
         int have_count = 0;
         if (have_type) {
-            int ref = unit_die_by_off(u, type_ref);
-            elem = ref >= 0 ? build_type(u, ref, depth + 1) : NULL;
+            DW_Unit* tu = NULL;
+            int tidx = -1;
+            elem = NULL;
+            if (die_glob_find(f, type_ref, &tu, &tidx))
+                elem = build_type(tu, tidx, depth + 1);
         }
         for (i = 0; i < d->n_child; ++i) {
             int cidx = die_idx + 1 + i;
@@ -1293,13 +1360,14 @@ static void unit_add_variable(DW_Unit* u, DW_Die* d)
         else if (a->name == DW_AT_specification || a->name == DW_AT_abstract_origin) {
             if (!name) {
                 uint64_t ref = const_u64(a);
-                int ridx = unit_die_by_off(u, ref);
-                if (ridx >= 0) {
+                DW_Unit* tu = NULL;
+                int tidx = -1;
+                DW_Die* rd = die_glob_find(f, ref, &tu, &tidx);
+                if (rd) {
                     int j;
-                    DW_Die* rd = &u->dies[ridx];
                     for (j = 0; j < rd->nattrs; ++j)
                         if (rd->attrs[j].name == DW_AT_name)
-                            name = unit_str(u, &rd->attrs[j]);
+                            name = unit_str(tu, &rd->attrs[j]);
                 }
             }
         }
@@ -1311,8 +1379,11 @@ static void unit_add_variable(DW_Unit* u, DW_Die* d)
     for (i = 0; i < f->var_count; ++i) {
         if (f->vars[i].name && strcmp(f->vars[i].name, name) == 0) {
             if (f->vars[i].type == NULL && have_type) {
-                int ref = unit_die_by_off(u, type_ref);
-                f->vars[i].type = ref >= 0 ? build_type(u, ref, 0) : NULL;
+                DW_Unit* tu = NULL;
+                int tidx = -1;
+                f->vars[i].type = NULL;
+                if (die_glob_find(f, type_ref, &tu, &tidx))
+                    f->vars[i].type = build_type(tu, tidx, 0);
                 f->vars[i].has_debug = 1;
             }
             return;
@@ -1331,8 +1402,11 @@ static void unit_add_variable(DW_Unit* u, DW_Die* d)
     v->name = os_strdup(f, name);
     v->address = addr;
     if (have_type) {
-        int ref = unit_die_by_off(u, type_ref);
-        v->type = ref >= 0 ? build_type(u, ref, 0) : NULL;
+        DW_Unit* tu = NULL;
+        int tidx = -1;
+        v->type = NULL;
+        if (die_glob_find(f, type_ref, &tu, &tidx))
+            v->type = build_type(tu, tidx, 0);
     }
     if (v->type && v->type->size)
         v->symbol_size = v->type->size;
@@ -1343,32 +1417,88 @@ static void unit_add_variable(DW_Unit* u, DW_Die* d)
 static void parse_dwarf(OS_ElfFile* f)
 {
     uint64_t off = 0;
+    int ui, i;
     while (off + 4 <= f->dbg_info_size) {
         DW_Unit u;
         uint64_t len;
-        int i;
         if (parse_unit(f, off, &u) != 0) {
+            /* skip malformed unit, keep parsing the rest */
+            for (i = 0; i < u.ndies; i++) free(u.dies[i].attrs);
             free(u.dies);
             free(u.die_offs);
             free(u.die_index);
             free(u.type_map);
-            break;
+        } else {
+            if (f->n_units == f->cap_units) {
+                int nc = f->cap_units ? f->cap_units * 2 : 32;
+                DW_Unit* nu = (DW_Unit*)realloc(f->units, (size_t)nc * sizeof(DW_Unit));
+                if (!nu) break;
+                f->units = nu;
+                f->cap_units = nc;
+            }
+            f->units[f->n_units++] = u;
         }
-        for (i = 0; i < u.ndies; ++i) {
-            DW_Die* d = &u.dies[i];
-            if (d->tag == DW_TAG_variable) unit_add_variable(&u, d);
-        }
-        for (i = 0; i < u.ndies; ++i) {
-            free(u.dies[i].attrs);
-        }
-        free(u.dies);
-        free(u.die_offs);
-        free(u.die_index);
-        free(u.type_map);
         len = rd_u32(f->dbg_info + off, f->le);
         if (len == 0 || len == 0xffffffff) break;
         off += 4 + len;
     }
+
+    /* global DIE index (dies appended in increasing absolute offset order) */
+    for (ui = 0; ui < f->n_units; ui++) {
+        DW_Unit* u = &f->units[ui];
+        for (i = 0; i < u->ndies; i++) {
+            if (f->die_glob_count == f->die_glob_cap) {
+                int nc = f->die_glob_cap ? f->die_glob_cap * 2 : 4096;
+                uint64_t* no = (uint64_t*)realloc(f->die_glob_off,
+                                                  (size_t)nc * sizeof(uint64_t));
+                int* nu2 = (int*)realloc(f->die_glob_unit, (size_t)nc * sizeof(int));
+                int* ni = (int*)realloc(f->die_glob_idx, (size_t)nc * sizeof(int));
+                if (!no || !nu2 || !ni) {
+                    if (no) f->die_glob_off = no;
+                    if (nu2) f->die_glob_unit = nu2;
+                    if (ni) f->die_glob_idx = ni;
+                    goto done;
+                }
+                f->die_glob_off = no;
+                f->die_glob_unit = nu2;
+                f->die_glob_idx = ni;
+                f->die_glob_cap = nc;
+            }
+            f->die_glob_off[f->die_glob_count] = u->dies[i].off;
+            f->die_glob_unit[f->die_glob_count] = ui;
+            f->die_glob_idx[f->die_glob_count] = i;
+            f->die_glob_count++;
+        }
+    }
+
+    /* collect global variables */
+    for (ui = 0; ui < f->n_units; ui++) {
+        DW_Unit* u = &f->units[ui];
+        for (i = 0; i < u->ndies; i++) {
+            if (u->dies[i].tag == DW_TAG_variable)
+                unit_add_variable(u, &u->dies[i]);
+        }
+    }
+
+done:
+    for (ui = 0; ui < f->n_units; ui++) {
+        DW_Unit* u = &f->units[ui];
+        for (i = 0; i < u->ndies; i++) free(u->dies[i].attrs);
+        free(u->dies);
+        free(u->die_offs);
+        free(u->die_index);
+        free(u->type_map);
+    }
+    free(f->units);
+    free(f->die_glob_off);
+    free(f->die_glob_unit);
+    free(f->die_glob_idx);
+    f->units = NULL;
+    f->die_glob_off = NULL;
+    f->die_glob_unit = NULL;
+    f->die_glob_idx = NULL;
+    f->n_units = f->cap_units = 0;
+    f->die_glob_count = f->die_glob_cap = 0;
 }
 
 /* ------------------------ symbol fallback ------------------------- */

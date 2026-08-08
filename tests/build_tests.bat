@@ -21,6 +21,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\dump_elf.c ^
+    code\src\elf.c code\src\vartree.c code\src\util.c ^
+    /Fe:tests\bin\dump_elf.exe /link user32.lib
+if errorlevel 1 (
+  echo [ERROR] dump_elf build failed
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I code\src tests\enc_smoke.c ^
+    code\src\elf.c code\src\vartree.c code\src\util.c ^
+    /Fe:tests\bin\enc_smoke.exe /link user32.lib
+if errorlevel 1 (
+  echo [ERROR] enc_smoke build failed
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I code\src tests\replay_smoke.c code\src\datalog.c ^
     /Fe:tests\bin\replay_smoke.exe /link user32.lib
 if errorlevel 1 (
@@ -46,6 +62,13 @@ cl /nologo /W2 /utf-8 /I code\src module\scope\tests\scope_smoke.c ^
     /Fe:tests\bin\scope_smoke.exe /link user32.lib
 if errorlevel 1 (
   echo [ERROR] scope_smoke build failed
+  exit /b 1
+)
+
+echo Running enc smoke...
+tests\bin\enc_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] enc_smoke FAILED
   exit /b 1
 )
 

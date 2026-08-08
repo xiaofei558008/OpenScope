@@ -37,6 +37,11 @@
   - 打开文件对话框本已支持 `*.elf;*.axf;*.out`，`os_elf_open` 按魔数判定；新增 `tests/elf_sample.out`（ELF32 ARM + DWARF4，含全局 int、全局结构体 cfg_t{a,b}、无调试符号变量）端到端验证。
   - 修复 elf.c 真 bug：ELF 节头 `sh_link`（指向 .strtab）误读偏移 32（实为 sh_size），ELF32 应为 24、ELF64 应为 40 —— 此前会导致符号表字符串表解析错误，DWARF 缺失时变量兜底失效。
   - 新增 `tests/elf_smoke.c`（.out 全局变量/结构体展开/符号兜底/魔数拒绝，全部 PASS）+ `tests/gen_elf_out.py`，接入 build_tests.bat 自动回归。
+- **checkpoint-8（2026-08-08）**：真实 IAR 多编译单元 .out（tests/enc.out）全量解析 + 结构体原子展开。
+  - 修复 4 个 DWARF 解析 bug：DWARF5 form 常量错位（0x20 实为 ref_sig8、implicit_const=0x21/loclistx=0x22/rnglistx=0x23）；ref1/2/4/8/ref_udata 未加 CU 相对基址；DW_FORM_ref_addr 属性值被丢弃；类型引用只在本单元查找。
+  - 解析器重构：全部 DWARF 单元先入池，建立全局 DIE 偏移索引，跨单元类型引用（ref_addr/ref4）可解析；坏单元跳过继续。
+  - 实测 enc.out：296 个 CU 全部解析，16 个全局变量全部带 DWARF 类型；结构体/联合体/数组展开为 285 个原子叶子（0 残留 struct/union、0 零尺寸），如 MT6835.AbsEnc.AngleBit、ta_enc.index_tx、modbus_rtu_slave.addr、ADC_Temper.MCU_Temper；char 数组保留为整块叶子。
+  - 新增 `tests/enc_smoke.c`（真实 .out 回归，全部 PASS）+ `tests/dump_elf.c`（ELF 转储工具）；`python build.py --quiet` 0 error/0 warning，全部冒烟通过。
 
 ## 待办（BMAD 规划产出后更新）
 
@@ -51,6 +56,11 @@
 - [x] Epic 4：scope 窗口模块（Story 4.1~4.3，交互实测待用户环境）
 - [x] J-Link 硬件实测：RAM 8KB 读写 + Flash 64KB 读取（checkpoint-6）
 - [x] .out 文件解析验证 + ELF sh_link 修复（checkpoint-7）
+- [x] 真实 enc.out 全量解析 + 结构体原子展开（checkpoint-8）
+
+## 新增需求（request.md 第 8 条，待办）
+
+- [ ] 工程开发完成后打包成 .exe 安装包并添加版本号，便于发布（用户 2026-08-08 加入 request.md）
 
 ## 总结
 
