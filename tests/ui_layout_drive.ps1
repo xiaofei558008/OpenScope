@@ -112,7 +112,12 @@ $p2 = Start-App @($Elf)
 $main2 = Wait-Main $p2
 Check ($main2 -ne [IntPtr]::Zero) "B: 主窗口创建"
 $tab2 = Find-ChildByClass $main2 "SysTabControl32"
-$n2 = [OsLayUi]::SendMessage($tab2, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
+$n2 = 0
+for ($i = 0; $i -lt 40; $i++) {
+    $n2 = [OsLayUi]::SendMessage($tab2, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
+    if ($n2 -eq 3) { break }
+    Start-Sleep -Milliseconds 150
+}
 Check ($n2 -eq 3) "B: 恢复 3 个窗口 Tab（实际 $n2）"
 Start-Sleep -Milliseconds 800
 $added2 = 0
@@ -128,7 +133,12 @@ Copy-Item -LiteralPath $autoLayout -Destination $shareLayout -Force
 $p3 = Start-App @($Elf, "--layout-load=$shareLayout")
 $main3 = Wait-Main $p3
 $tab3 = Find-ChildByClass $main3 "SysTabControl32"
-$n3 = [OsLayUi]::SendMessage($tab3, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
+$n3 = 0
+for ($i = 0; $i -lt 40; $i++) {
+    $n3 = [OsLayUi]::SendMessage($tab3, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
+    if ($n3 -eq 3) { break }
+    Start-Sleep -Milliseconds 150
+}
 Check ($n3 -eq 3) "C: --layout-load 导入 3 窗口（实际 $n3）"
 if (-not $p3.HasExited) { Stop-Process -Id $p3.Id -Force }
 

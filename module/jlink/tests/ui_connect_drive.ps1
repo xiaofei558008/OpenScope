@@ -83,13 +83,12 @@ try {
     Check ($main -ne [IntPtr]::Zero) "主窗口创建"
     Start-Sleep -Milliseconds 800
 
-    # 校验主界面连接配置控件
-    $dev = Find-ChildById $main 2101
+    # 校验主界面连接配置控件（无 MCU 型号输入框）
     $iface = Find-ChildById $main 2102
     $speed = Find-ChildById $main 2103
     $emu = Find-ChildById $main 2104
     $refresh = Find-ChildById $main 2105
-    Check ($dev -ne [IntPtr]::Zero -and $iface -ne [IntPtr]::Zero -and
+    Check ($iface -ne [IntPtr]::Zero -and
            $speed -ne [IntPtr]::Zero -and $emu -ne [IntPtr]::Zero -and
            $refresh -ne [IntPtr]::Zero) "主界面连接配置控件齐全"
 
@@ -104,9 +103,8 @@ try {
         Check ($emuCount2 -ge 1) "刷新后设备列表仍正常（$emuCount2 项）"
     }
 
-    # 输入 MCU 型号并点连接（不弹配置对话框）
-    [OsCfgUi]::SetWindowText($dev, $Device) | Out-Null
-    Write-Output "device set: $Device"
+    # 点连接（设备型号自动，不弹配置对话框）
+    Write-Output "connect clicked (device auto)"
     [OsCfgUi]::SendMessage($main, 0x111, [IntPtr]2002, [IntPtr]0) | Out-Null  # IDC_BTN_CONNECT
 
     $connected = $false

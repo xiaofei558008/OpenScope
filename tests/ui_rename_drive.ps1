@@ -77,6 +77,7 @@ try {
         Start-Sleep -Milliseconds 200
     }
     Check ($main -ne [IntPtr]::Zero) "主窗口创建"
+    Start-Sleep -Milliseconds 1200  # 等初始化（含 J-Link 扫描）完成
     [OsRnUi]::SendMessage($main, 0x111, [IntPtr]2012, [IntPtr]0) | Out-Null  # 波形窗口
     Start-Sleep -Milliseconds 500
     $tab = Find-ChildByClass $main "SysTabControl32"

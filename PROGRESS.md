@@ -82,6 +82,11 @@
   - `module/jlink/tests/ui_connect_drive.ps1` 重写为主界面直连回归：校验控件齐全、设备列表自动扫描+刷新、输入 STM32L432KB 直连成功、无配置对话框、断开成功；支持 `-ExePath` 跑安装版。
   - 回归：连接测试开发版+安装版 ALL PASS；ui_windows_drive/ui_layout_drive/ui_rename_drive 全部 ALL PASS；构建 0 error/0 warning。
   - 版本 1.4.0：重新打包 `dist/OpenScope-Setup-1.4.0.exe`（10.3MB），安装版验证版本 1.4.0.0 + 主界面直连功能。
+- **checkpoint-15（2026-08-09）**：删除 MCU 型号输入框，全部按键合并为菜单栏正下方一行工具栏（1.4.1）。
+  - 移除主界面 MCU 型号 EDIT 与标签；连接时使用通用默认设备 `Cortex-M4`（J-Link 按内核自动识别；空设备会令旧版 J-Link DLL 在 Connect 时崩溃，已实测 0xC0000005）。
+  - 工具栏单行化：打开ELF/连接/断开/开始采集/停止采集/记录/停止记录/离线回放/停止回放/关于 + 接口(SWD/JTAG)/速度/ J-Link 设备/刷新 全部排列在菜单栏正下方一行，布局统一按文字宽度自适应。
+  - 回归：连接测试（开发版+安装版）ALL PASS；ui_windows_drive/ui_layout_drive/ui_rename_drive 全部 ALL PASS（layout C 阶段与 rename 增加轮询/等待，消除连续运行竞态）；构建 0 error/0 warning。
+  - 版本 1.4.1：重新打包 `dist/OpenScope-Setup-1.4.1.exe`（10.3MB），安装版验证版本 1.4.1.0 + 主界面直连。
 
 ## 待办（BMAD 规划产出后更新）
 

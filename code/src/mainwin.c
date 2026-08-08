@@ -41,16 +41,11 @@
 #define IDD_RN_OK          2602
 #define IDD_RN_CANCEL      2603
 
-/* 连接配置行（直接放主界面，不弹对话框） */
-#define IDC_CFG_DEVICE   2101
+/* 连接配置控件（直接放主界面工具栏，不弹对话框） */
 #define IDC_CFG_IFACE    2102
 #define IDC_CFG_SPEED    2103
 #define IDC_CFG_EMU      2104
 #define IDC_CFG_REFRESH  2105
-#define IDC_CFG_LBL_DEV  2091
-#define IDC_CFG_LBL_IF   2092
-#define IDC_CFG_LBL_SPD  2093
-#define IDC_CFG_LBL_EMU  2094
 
 #define IDD_PICK_OK      2401
 #define IDD_PICK_CANCEL  2402
@@ -89,6 +84,15 @@ static HMENU g_menu;
 static HMENU g_menu_win;
 static ModWinMenuItem g_modwin_menu[64];
 static int g_modwin_menu_count;
+
+/* 工具栏按钮（菜单栏正下方一行） */
+static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
+    { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
+    { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
+    { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
+    { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
+    { IDC_BTN_REPLAYSTOP, L"停止回放" }, { IDC_BTN_ABOUT, L"关于" },
+};
 
 /* ---------- 工具 ---------- */
 
@@ -315,59 +319,61 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 static void layout(void)
 {
     RECT rc;
-    int bw, bh = 34, cfg_h = 30, sw, logh, right_h, right_w;
+    int bw, bh = 34, sw, logh, right_h, right_w;
     int parts[4];
     GetClientRect(g_app.hMain, &rc);
     bw = rc.right;
     sw = g_app.tree_w;
     logh = g_app.log_h;
-    right_h = rc.bottom - bh - cfg_h - logh - 22;
+    right_h = rc.bottom - bh - logh - 22;
     right_w = bw - sw - 5;
-    /* 连接配置行：MCU型号 / 接口 / 速度 / J-Link设备 / 刷新 */
+    /* 工具栏一行（菜单栏正下方）：全部按钮 + 接口/速度/J-Link设备/刷新 */
     {
-        static const struct { int id; int x; int w; } cfg[] = {
-            { IDC_CFG_LBL_DEV, 6, 58 }, { IDC_CFG_DEVICE, 68, 142 },
-            { IDC_CFG_LBL_IF, 214, 34 }, { IDC_CFG_IFACE, 250, 62 },
-            { IDC_CFG_LBL_SPD, 318, 52 }, { IDC_CFG_SPEED, 372, 92 },
-            { IDC_CFG_LBL_EMU, 470, 42 }, { IDC_CFG_EMU, 514, 280 },
-            { IDC_CFG_REFRESH, 800, 56 },
+        static const struct { int id; int fixed_w; int combo; } items[] = {
+            { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
+            { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
+            { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
+            { IDC_BTN_ABOUT, 0, 0 },
+            { IDC_CFG_IFACE, 62, 1 }, { IDC_CFG_SPEED, 92, 1 },
+            { IDC_CFG_EMU, 260, 1 }, { IDC_CFG_REFRESH, 48, 0 },
         };
-        int i;
-        for (i = 0; i < (int)(sizeof(cfg) / sizeof(cfg[0])); i++) {
-            HWND c = GetDlgItem(g_app.hMain, cfg[i].id);
-            if (c) MoveWindow(c, cfg[i].x, bh + 4, cfg[i].w, 22, TRUE);
+        int i, x = 6;
+        for (i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
+            HWND c = GetDlgItem(g_app.hMain, items[i].id);
+            if (!c) continue;
+            if (items[i].combo) {
+                MoveWindow(c, x, 5, items[i].fixed_w, 120, TRUE);
+                x += items[i].fixed_w + 6;
+            } else if (items[i].fixed_w) {
+                MoveWindow(c, x, 5, items[i].fixed_w, 24, TRUE);
+                x += items[i].fixed_w + 6;
+            } else {
+                const wchar_t* text = NULL;
+                int k;
+                SIZE sz;
+                HDC hdc = GetDC(c ? c : g_app.hMain);
+                SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+                for (k = 0; k < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); k++) {
+                    if (g_tool_btns[k].id == items[i].id) { text = g_tool_btns[k].text; break; }
+                }
+                GetTextExtentPoint32W(hdc, text ? text : L"??",
+                                      text ? (int)wcslen(text) : 2, &sz);
+                ReleaseDC(c ? c : g_app.hMain, hdc);
+                MoveWindow(c, x, 5, sz.cx + 18, 24, TRUE);
+                x += sz.cx + 24;
+            }
         }
     }
-    MoveWindow(g_app.hSplitV, sw, bh + cfg_h, 5, right_h, TRUE);
-    MoveWindow(g_app.hTree, 0, bh + cfg_h, sw, right_h, TRUE);
-    MoveWindow(g_app.hRight, sw + 5, bh + cfg_h, right_w - 5, right_h, TRUE);
+    MoveWindow(g_app.hSplitV, sw, bh, 5, right_h, TRUE);
+    MoveWindow(g_app.hTree, 0, bh, sw, right_h, TRUE);
+    MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
-    MoveWindow(g_app.hLog, 0, bh + cfg_h + right_h, bw, logh, TRUE);
+    MoveWindow(g_app.hLog, 0, bh + right_h, bw, logh, TRUE);
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
     SendMessageW(g_app.hStatus, SB_SETPARTS, 4, (LPARAM)parts);
     os_mainwin_tile();
-    {
-        static const struct { int id; const wchar_t* text; } btns[] = {
-            { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
-            { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
-            { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
-            { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
-            { IDC_BTN_REPLAYSTOP, L"停止回放" }, { IDC_BTN_ABOUT, L"关于" },
-        };
-        int i, x = 6;
-        for (i = 0; i < (int)(sizeof(btns) / sizeof(btns[0])); i++) {
-            HWND b = GetDlgItem(g_app.hMain, btns[i].id);
-            SIZE sz;
-            HDC hdc = GetDC(b ? b : g_app.hMain);
-            SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-            GetTextExtentPoint32W(hdc, btns[i].text, (int)wcslen(btns[i].text), &sz);
-            ReleaseDC(b ? b : g_app.hMain, hdc);
-            if (b) MoveWindow(b, x, 5, sz.cx + 18, 24, TRUE);
-            x += sz.cx + 24;
-        }
-    }
 }
 
 /* ---------- 分割条 ---------- */
@@ -500,7 +506,6 @@ static void cmd_connect(void)
     int rc, c = 0;
     OS_DriverInfo info;
     OS_ConnectCfg cfg;
-    wchar_t wdev[128];
     LRESULT ifi, spi, emu;
     static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
     if (!g_app.driver || !g_app.driver->command) {
@@ -515,10 +520,10 @@ static void cmd_connect(void)
     spi = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_SPEED), CB_GETCURSEL, 0, 0);
     if (spi < 0 || spi >= (LRESULT)(sizeof(speeds) / sizeof(speeds[0]))) spi = 0;
     cfg.speed_khz = speeds[spi];
-    GetDlgItemTextW(g_app.hMain, IDC_CFG_DEVICE, wdev, 128);
-    WideCharToMultiByte(CP_UTF8, 0, wdev, -1, cfg.device, sizeof(cfg.device), NULL, NULL);
     emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
+    /* MCU 型号输入框已移除：使用通用默认设备（J-Link 按内核自动识别；空设备会令旧版 DLL 崩溃） */
+    _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
     if (rc != OS_ERR_OK) {
         set_status(0, L"连接失败");
@@ -1261,57 +1266,32 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 {
     switch (msg) {
     case WM_CREATE: {
-        static const struct { int id; const wchar_t* text; } btns[] = {
-            { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
-            { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
-            { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
-            { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
-            { IDC_BTN_REPLAYSTOP, L"停止回放" }, { IDC_BTN_ABOUT, L"关于" },
-        };
         HMENU mFile, mAcq, mLog, mHelp;
         int i;
         g_app.hMain = hwnd;
         g_app.hBtnBar = hwnd;
-        for (i = 0; i < (int)(sizeof(btns) / sizeof(btns[0])); i++) {
-            HWND b = CreateWindowW(L"BUTTON", btns[i].text,
+        for (i = 0; i < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); i++) {
+            HWND b = CreateWindowW(L"BUTTON", g_tool_btns[i].text,
                                    WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                   6 + i * 84, 5, 80, 24, hwnd, (HMENU)(INT_PTR)btns[i].id,
+                                   6 + i * 84, 5, 80, 24, hwnd, (HMENU)(INT_PTR)g_tool_btns[i].id,
                                    g_app.hInst, NULL);
             SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
-        /* 连接配置行（直接放主界面，不再弹配置对话框） */
+        /* 连接配置控件（接口/速度/J-Link设备/刷新，随工具栏一行布局） */
         {
-            static const struct { int id; const wchar_t* text; int x; int w; } ctl[] = {
-                { IDC_CFG_LBL_DEV, L"MCU型号", 6, 58 },
-                { IDC_CFG_DEVICE, L"STM32F407VG", 68, 142 },
-                { IDC_CFG_LBL_IF, L"接口", 214, 34 },
-                { IDC_CFG_IFACE, L"", 250, 62 },
-                { IDC_CFG_LBL_SPD, L"速度kHz", 318, 52 },
-                { IDC_CFG_SPEED, L"", 372, 92 },
-                { IDC_CFG_LBL_EMU, L"J-Link", 470, 42 },
-                { IDC_CFG_EMU, L"", 514, 280 },
-                { IDC_CFG_REFRESH, L"刷新", 800, 56 },
-            };
-            int i;
-            for (i = 0; i < (int)(sizeof(ctl) / sizeof(ctl[0])); i++) {
-                const wchar_t* cls = L"STATIC";
-                DWORD style = SS_LEFT;
-                int hh = 22;
-                HWND c;
-                if (ctl[i].id == IDC_CFG_DEVICE) {
-                    cls = L"EDIT"; style = WS_BORDER | ES_AUTOHSCROLL;
-                } else if (ctl[i].id == IDC_CFG_IFACE || ctl[i].id == IDC_CFG_SPEED ||
-                           ctl[i].id == IDC_CFG_EMU) {
-                    cls = L"COMBOBOX"; style = CBS_DROPDOWNLIST | WS_TABSTOP; hh = 120;
-                } else if (ctl[i].id == IDC_CFG_REFRESH) {
-                    cls = L"BUTTON"; style = BS_PUSHBUTTON;
-                }
-                c = CreateWindowW(cls, ctl[i].text,
-                                  WS_CHILD | WS_VISIBLE | style,
-                                  ctl[i].x, 38, ctl[i].w, hh, hwnd,
-                                  (HMENU)(INT_PTR)ctl[i].id, g_app.hInst, NULL);
-                if (c) SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-            }
+            HWND c;
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
+                              650, 5, 62, 120, hwnd, (HMENU)IDC_CFG_IFACE, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
+                              716, 5, 92, 120, hwnd, (HMENU)IDC_CFG_SPEED, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
+                              812, 5, 260, 120, hwnd, (HMENU)IDC_CFG_EMU, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            c = CreateWindowW(L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              1078, 5, 48, 24, hwnd, (HMENU)IDC_CFG_REFRESH, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
         g_app.hTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                       WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
@@ -1483,7 +1463,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.4.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.4.1\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:
