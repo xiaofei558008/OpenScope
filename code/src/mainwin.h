@@ -13,5 +13,9 @@ void os_mainwin_register(void);
 void os_mainwin_rebuild_window_menu(void);
 void os_mainwin_update_buttons(void);
 int os_mainwin_open_elf(const wchar_t* path);
+int os_mainwin_active_tab(void);
+void os_mainwin_select_tab(int idx);
+void os_mainwin_refresh_layout(void);
+HWND os_win_create_by_type(const char* type, const wchar_t* title);
 
 #endif

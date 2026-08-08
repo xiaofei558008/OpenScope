@@ -8,5 +8,6 @@ HWND os_chart_create(HWND parent, int x, int y, int w, int h, const wchar_t* tit
 void os_chart_push(HWND hwnd, const OS_Sample* s);
 void os_chart_add_var(HWND hwnd, int leaf_id);
 int os_chart_is(HWND hwnd);
+int os_chart_var_name(HWND hwnd, int idx, char* out, int cap);
 
 #endif

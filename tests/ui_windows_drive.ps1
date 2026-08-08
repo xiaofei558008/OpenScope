@@ -95,7 +95,7 @@ if ($existing.Count -gt 0) {
     exit 3
 }
 
-$proc = Start-Process -FilePath $exe -ArgumentList @($Elf, "--select-leaf=$LeafName") -PassThru
+$proc = Start-Process -FilePath $exe -ArgumentList @($Elf, "--select-leaf=$LeafName", "--no-layout") -PassThru
 Write-Output "started pid=$($proc.Id)"
 try {
     $main = [IntPtr]::Zero

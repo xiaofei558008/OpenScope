@@ -6,6 +6,7 @@
 #include "datasrv.h"
 #include "datalog.h"
 #include "module_mgr.h"
+#include "layout.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <string.h>
@@ -21,6 +22,8 @@
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
 #define IDM_EXIT         2011
+#define IDM_LAYOUT_SAVE  2021
+#define IDM_LAYOUT_LOAD  2022
 #define IDM_WIN_CHART    2012
 #define IDM_WIN_NUM      2013
 #define IDM_WIN_MODULE_BASE 2200
@@ -176,6 +179,9 @@ static void refresh_status(void)
 
 static int g_cur_tab = -1; /* 当前激活窗口在 g_app.wins 中的下标 */
 
+static void layout(void);
+static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, const wchar_t* title);
+
 static void layout_tab_pages(void)
 {
     RECT rc, pr;
@@ -223,6 +229,54 @@ static void rebuild_tabs(void)
 void os_mainwin_tile(void)
 {
     rebuild_tabs();
+}
+
+int os_mainwin_active_tab(void)
+{
+    return g_cur_tab;
+}
+
+void os_mainwin_select_tab(int idx)
+{
+    if (idx < 0 || idx >= g_app.win_count) return;
+    g_cur_tab = idx;
+    SendMessageW(g_app.hTab, TCM_SETCURSEL, idx, 0);
+    show_tab(idx);
+}
+
+void os_mainwin_refresh_layout(void)
+{
+    layout();
+}
+
+HWND os_win_create_by_type(const char* type, const wchar_t* title)
+{
+    HWND h;
+    if (strcmp(type, "chart") == 0) {
+        h = os_chart_create(g_app.hRight, 0, 0, 200, 150, title);
+        if (h) add_win_item(h, 0, NULL, NULL, title);
+        return h;
+    }
+    if (strcmp(type, "num") == 0) {
+        h = os_num_create(g_app.hRight, 0, 0, 200, 150, title);
+        if (h) add_win_item(h, 0, NULL, NULL, title);
+        return h;
+    }
+    {
+        int i;
+        for (i = 0; i < g_modwin_menu_count; i++) {
+            ModWinMenuItem* it = &g_modwin_menu[i];
+            if (it->mod && it->wt && strcmp(it->wt->type, type) == 0) {
+                char title8[256];
+                os_wide_to_utf8_buf(title, title8, sizeof(title8));
+                h = it->mod->create_window(it->ctx, it->wt->type, g_app.hRight,
+                                           0, 0, 200, 150, title8);
+                if (h) add_win_item(h, 1, it->mod, it->ctx, title);
+                return h;
+            }
+        }
+    }
+    return NULL;
 }
 
 /* 右侧面板：转发子控件（Tab）通知到主窗口 */
@@ -337,6 +391,7 @@ static int load_elf_path(const wchar_t* path)
     g_app.elf_mtime = os_file_mtime_ms(path);
     os_vartree_build();
     os_vartree_fill_tree(g_app.hTree);
+    os_layout_apply_pending(); /* 布局恢复时未解析的变量，ELF 就绪后补挂 */
     /* 缺失变量提示 */
     if (os_vartree_missing_count() > 0) {
         wchar_t list[1800] = L"";
@@ -1057,6 +1112,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         g_menu_win = CreateMenu();
         mHelp = CreateMenu();
         AppendMenuW(mFile, MF_STRING, IDC_BTN_OPEN, L"打开 ELF 文件...\tCtrl+O");
+        AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_SAVE, L"保存布局为...");
+        AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_LOAD, L"加载布局...");
         AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mFile, MF_STRING, IDM_EXIT, L"退出\tAlt+F4");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_CONNECT, L"连接...\tF5");
@@ -1087,6 +1144,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     }
     case WM_SIZE:
         layout();
+        return 0;
+    case WM_CLOSE:
+        os_layout_save_auto(); /* 关闭时保存布局，便于下次恢复 */
+        DestroyWindow(hwnd);
         return 0;
     case WM_OS_SPLIT:
         if ((int)wParam > 120 && (int)wParam < 900) g_app.tree_w = (int)wParam;
@@ -1173,12 +1234,39 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.1.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.2.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:
             DestroyWindow(hwnd);
             break;
+        case IDM_LAYOUT_SAVE: {
+            OPENFILENAMEW ofn;
+            wchar_t file[MAX_PATH] = L"layout.ini";
+            memset(&ofn, 0, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"布局文件\0*.ini;*.layout\0所有文件\0*.*\0";
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.lpstrDefExt = L"ini";
+            ofn.Flags = OFN_OVERWRITEPROMPT;
+            if (GetSaveFileNameW(&ofn)) os_layout_save_to(file);
+            break;
+        }
+        case IDM_LAYOUT_LOAD: {
+            OPENFILENAMEW ofn;
+            wchar_t file[MAX_PATH] = L"";
+            memset(&ofn, 0, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = hwnd;
+            ofn.lpstrFilter = L"布局文件\0*.ini;*.layout\0所有文件\0*.*\0";
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            if (GetOpenFileNameW(&ofn)) os_layout_load_from(file);
+            break;
+        }
         case IDM_WIN_CHART: cmd_add_window(1); break;
         case IDM_WIN_NUM: cmd_add_window(0); break;
         case IDM_TREE_ALL: tree_select_all(1); break;

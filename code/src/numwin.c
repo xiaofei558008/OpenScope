@@ -85,6 +85,17 @@ int os_num_is(HWND hwnd)
     return nw ? 1 : 0;
 }
 
+int os_num_var_name(HWND hwnd, int idx, char* out, int cap)
+{
+    OS_NumWin* nw = num_from_hwnd(hwnd);
+    const OS_Leaf* L;
+    if (!nw || idx < 0 || idx >= nw->count || !out || cap <= 0) return 0;
+    L = os_vartree_leaf(nw->leaf_ids[idx]);
+    if (!L) return 0;
+    _snprintf(out, cap, "%s", L->name);
+    return 1;
+}
+
 static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     OS_NumWin* nw = num_from_hwnd(hwnd);

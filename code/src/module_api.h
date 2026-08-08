@@ -11,7 +11,7 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define OS_API_VERSION 2
+#define OS_API_VERSION 3
 
 /* 模块能力标志 */
 #define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写） */
@@ -158,6 +158,8 @@ typedef struct OS_Module {
      * leaf_id 为框架叶变量编号，返回 OS_ERR_OK 成功。可留空
      * （只有 api_version >= 2 的模块才会被调用）。 */
     int  (*win_add_var)(void* ctx, HWND hwnd, int leaf_id);
+    /* v3：枚举窗口内变量名（布局保存用）；idx 从 0 起，越界返回 0，成功写 name 返回 1。 */
+    int  (*win_enum_var)(void* ctx, HWND hwnd, int idx, char* name_out, int cap);
 } OS_Module;
 
 #ifdef OPENSCOPE_MODULE_BUILD

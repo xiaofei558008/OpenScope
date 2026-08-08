@@ -61,6 +61,14 @@
   - 测试：`tests/ui_windows_drive.ps1` 全量 UI 回归（ELF 加载→选叶→建 3 窗口→Tab 数量/切换/关闭→三类窗口添加变量→无闪退），开发版+安装版 ALL PASS；J-Link 对话框回归 PASS；构建 0 error/0 warning。
   - 测试夹具：用户删除 tests/enc.out 并新增自己的 `linix_stm32l031_v1.2.out`（18 全局变量/511 原子叶，真实 IAR），`enc_smoke.c` 改用它做真实文件回归（通用断言+新文件地址断言），enc.out 从版本库移除。
   - 版本 1.1.0：重新打包 `dist/OpenScope-Setup-1.1.0.exe`，安装版验证版本与全部 UI 功能。
+- **checkpoint-12（2026-08-08）**：布局保存/恢复/导入导出（request.md 新增需求 1/2，1.2.0）。
+  - 新增 `code/src/layout.c/h`：自定义 UTF-8 文本布局格式（主窗口位置/大小、tree_w/log_h、活动 Tab、每个窗口的 type/title/变量名列表，变量用 `|` 分隔）；关闭时自动保存到 `%LOCALAPPDATA%\OpenScope\layout.ini`（exe 目录写不进时回退），启动时自动恢复。
+  - 菜单“文件→保存布局为…/加载布局…”导出/导入布局文件便于分享；命令行新增 `--layout-load=<文件>` / `--layout-save=<文件>` / `--no-layout`。
+  - 恢复流程：先建窗口（波形/数值/scope.bar，`os_win_create_by_type`），变量按名解析；无 ELF 时挂起（pending），加载 ELF 后 `os_layout_apply_pending()` 自动补挂。
+  - 模块 API v3：新增 `win_enum_var`（枚举窗口变量名，scope 实现，jlink 置空）；chartwin/numwin 增加 `os_chart_var_name/os_num_var_name`。
+  - 修复 2 个自引入 bug：`LayoutData` 约 1.3MB 放主线程栈导致 0xC00000FD 栈溢出（改堆分配）；`[win]` 无 `=` 导致 parse_key 置空 key、窗口解析为 0（先按原始行比较）；命令行参数先截尾部空格再匹配（`--no-layout ` 被误当 ELF 路径）。
+  - 回归：`tests/ui_layout_drive.ps1`（A 建窗口+变量→关闭自动保存；B 重启自动恢复+ELF 后补挂；C `--layout-load` 导入）开发版+安装版 ALL PASS；`ui_windows_drive.ps1` 加 `--no-layout` 隔离后 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.2.0：重新打包 `dist/OpenScope-Setup-1.2.0.exe`（10.3MB），安装版验证版本 1.2.0.0 + 布局全套功能。
 
 ## 待办（BMAD 规划产出后更新）
 

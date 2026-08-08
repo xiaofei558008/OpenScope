@@ -856,6 +856,22 @@ static int mod_win_add_var(void* ctx, HWND hwnd, int leaf_id)
     return OS_ERR_FAIL;
 }
 
+static int mod_win_enum_var(void* ctx, HWND hwnd, int idx, char* name_out, int cap)
+{
+    ScopeMod* m = (ScopeMod*)ctx;
+    int i;
+    if (!m || !hwnd || !name_out || cap <= 0) return 0;
+    for (i = 0; i < m->nwins; i++) {
+        ScopeWin* w = m->wins[i];
+        if (w && w->hwnd == hwnd) {
+            if (idx < 0 || idx >= w->nseries) return 0;
+            _snprintf(name_out, cap, "%s", w->series[idx].name);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static const OS_WindowType g_window_types[] = {
     { "scope.bar", "示波器窗口" },
     { NULL, NULL }
@@ -865,7 +881,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_WINDOW,
     "scope",
-    "1.1.0",
+    "1.2.0",
     "示波器窗口模块：实时曲线、变量模糊搜索、数值写回",
     g_window_types,
     mod_init,
@@ -875,7 +891,8 @@ static const OS_Module g_module = {
     mod_destroy_window,
     mod_on_samples,
     mod_on_reload,
-    mod_win_add_var
+    mod_win_add_var,
+    mod_win_enum_var
 };
 
 const OS_Module* os_module_get(void)

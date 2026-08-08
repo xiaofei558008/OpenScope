@@ -407,7 +407,7 @@ static const OS_Module g_module = {
     mod_init,
     mod_deinit,
     mod_command,
-    NULL, NULL, NULL, NULL, NULL
+    NULL, NULL, NULL, NULL, NULL, NULL
 };
 
 const OS_Module* os_module_get(void)

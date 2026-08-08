@@ -4,6 +4,7 @@
 #include "mainwin.h"
 #include "module_mgr.h"
 #include "vartree.h"
+#include "layout.h"
 #include "util.h"
 #include <string.h>
 #include <commctrl.h>
@@ -103,6 +104,32 @@ static void init_fw(void)
     g_app.fw.leaf_find = os_fw_leaf_find;
 }
 
+/* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */
+static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
+                          wchar_t** layout_load, wchar_t** layout_save, int* no_layout)
+{
+    wchar_t* tok = cmd;
+    int first = 1;
+    *elf = NULL;
+    *select_leaf = NULL;
+    *layout_load = NULL;
+    *layout_save = NULL;
+    *no_layout = 0;
+    while (tok && *tok) {
+        wchar_t* sp;
+        while (*tok == L' ') tok++;
+        if (!*tok) break;
+        sp = wcschr(tok, L' ');
+        if (sp) *sp = 0; /* 先截断尾部空格再匹配，避免 "--no-layout " 匹配失败 */
+        if (wcsncmp(tok, L"--select-leaf=", 14) == 0) *select_leaf = tok + 14;
+        else if (wcsncmp(tok, L"--layout-load=", 14) == 0) *layout_load = tok + 14;
+        else if (wcsncmp(tok, L"--layout-save=", 14) == 0) *layout_save = tok + 14;
+        else if (wcscmp(tok, L"--no-layout") == 0) *no_layout = 1;
+        else if (first) { *elf = tok; first = 0; }
+        tok = sp ? sp + 1 : NULL;
+    }
+}
+
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow)
 {
     INITCOMMONCONTROLSEX icc;
@@ -117,7 +144,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.1.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.2.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -136,28 +163,19 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_mainwin_rebuild_window_menu();
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
-    if (lpCmdLine && lpCmdLine[0]) {
-        /* 用法: OpenScope.exe <elf路径> [--select-leaf=<完整叶名>] */
-        wchar_t* elf = lpCmdLine;
-        wchar_t* sp = wcschr(elf, L' ');
-        if (sp) *sp = 0;
-        os_mainwin_open_elf(elf);
-        if (sp) {
-            wchar_t* tok = sp + 1;
-            while (tok && *tok) {
-                while (*tok == L' ') tok++;
-                if (wcsncmp(tok, L"--select-leaf=", 14) == 0) {
-                    wchar_t* v = tok + 14;
-                    wchar_t* e = wcschr(v, L' ');
-                    if (e) *e = 0;
-                    os_log(OS_LOG_INFO, "命令行选中叶变量: %ls (rc=%d)",
-                           v, os_vartree_select_leaf(g_app.hTree, v));
-                    break;
-                }
-                tok = wcschr(tok, L' ');
-                if (tok) tok++;
-            }
+    {
+        wchar_t* elf = NULL, *sel = NULL, *llo = NULL, *lsv = NULL;
+        int no_layout = 0;
+        parse_cmdline(lpCmdLine, &elf, &sel, &llo, &lsv, &no_layout);
+        if (!no_layout) {
+            if (llo) os_layout_load_from(llo);
+            else os_layout_restore_auto(); /* 恢复上次调试界面布局 */
         }
+        if (elf) os_mainwin_open_elf(elf);
+        if (sel)
+            os_log(OS_LOG_INFO, "命令行选中叶变量: %ls (rc=%d)",
+                   sel, os_vartree_select_leaf(g_app.hTree, sel));
+        if (!no_layout && lsv) os_layout_save_to(lsv);
     }
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);

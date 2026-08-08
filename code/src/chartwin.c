@@ -91,6 +91,17 @@ int os_chart_is(HWND hwnd)
     return cw ? 1 : 0;
 }
 
+int os_chart_var_name(HWND hwnd, int idx, char* out, int cap)
+{
+    OS_ChartWin* cw = cw_from_hwnd(hwnd);
+    const OS_Leaf* L;
+    if (!cw || idx < 0 || idx >= cw->series_count || !out || cap <= 0) return 0;
+    L = os_vartree_leaf(cw->series[idx].leaf_id);
+    if (!L) return 0;
+    _snprintf(out, cap, "%s", L->name);
+    return 1;
+}
+
 static void fmt_time(double sec, wchar_t* out, int outlen)
 {
     if (sec >= 60.0) _snwprintf(out, outlen, L"%dm%02ds", (int)(sec / 60.0), (int)sec % 60);
