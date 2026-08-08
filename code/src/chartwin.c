@@ -161,7 +161,6 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         for (i = 0; i <= 4; i++) {
             double v = ymax - (ymax - ymin) * i / 4.0;
             int y = plot.top + (plot.bottom - plot.top) * i / 4;
-            RECT r;
             _snprintf(txt, 64, "%.3g", v);
             os_utf8_to_wide_buf(txt, wtxt, 128);
             r.left = 2; r.top = y - 8; r.right = plot.left - 2; r.bottom = y + 8;

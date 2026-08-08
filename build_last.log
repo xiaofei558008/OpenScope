@@ -1,10 +1,46 @@
 适用于 .NET Framework MSBuild 版本 18.8.2+ce25c0108
 
+  chartwin.c
+  datalog.c
+  datasrv.c
+  main.c
+  mainwin.c
+  numwin.c
   jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
-  module_mgr.c
   OpenScope.vcxproj -> D:\OpenScope\bin\Release\OpenScope.exe
 
 Build OK.
   Framework : bin\Release\OpenScope.exe
   Modules   : dll\jlink.dll dll\scope.dll
   J-Link DLL: dll\JLink_x64.dll
+
+replay_smoke.c
+datalog.c
+正在生成代码...
+jlink_smoke.c
+Running replay smoke...
+PASS replay_start rejects missing file
+PASS acq_state stays stopped after failed start
+PASS replay_start opens CSV
+PASS acq_state becomes REPLAY
+PASS tick1 pushes 2 samples
+PASS tick1 values correct
+PASS tick1 timestamps/ids correct
+PASS tick2 pushes 2 samples
+PASS tick2 values correct
+PASS tick3 pushes 2 samples
+PASS tick4 pushes 2 samples (quoted)
+PASS tick4 quoted values correct
+PASS replay auto-stops at EOF
+PASS acq_state returns to STOPPED after EOF
+PASS tick after EOF is no-op
+ALL PASS
+Running jlink smoke...
+module: jlink v0.1.0 cap=0x1
+init rc=0
+get_info rc=0 dll=96600 hw=40000 fw=0 emu=未连接 connected=0
+scan rc=0 count=1
+  dev[0] sn=174504925 name=J-Link PRO
+is_connected rc=0 value=0
+PASS
+Tests OK.

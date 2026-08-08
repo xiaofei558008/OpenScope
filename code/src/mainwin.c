@@ -1000,10 +1000,12 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 HWND h;
                 wchar_t title[128];
                 if (it->mod && it->mod->create_window) {
+                    char title8[128];
                     os_utf8_to_wide_buf(it->wt->display_name ? it->wt->display_name : it->wt->type,
                                         title, 128);
+                    os_wide_to_utf8_buf(title, title8, 128);
                     h = it->mod->create_window(it->ctx, it->wt->type, g_app.hRight,
-                                               0, 0, 200, 150, title);
+                                               0, 0, 200, 150, title8);
                     if (h) add_win_item(h, 1, it->mod, it->ctx, title);
                 }
             }

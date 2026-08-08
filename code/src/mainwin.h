@@ -9,5 +9,7 @@ int os_dlg_pick_var(HWND owner, int* out_leaf_id);
 int os_dlg_edit_value(HWND owner, int leaf_id);
 
 LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+void os_mainwin_register(void);
+void os_mainwin_rebuild_window_menu(void);
 
 #endif

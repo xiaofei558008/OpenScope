@@ -17,3 +17,5 @@ __pycache__/
 dll/*.pdb
 dll/*.exp
 dll/*.lib
+tests/bin/
+tests/replay_sample.csv

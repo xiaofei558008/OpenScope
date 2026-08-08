@@ -15,4 +15,10 @@ echo Build OK.
 echo   Framework : bin\Release\OpenScope.exe
 echo   Modules   : dll\jlink.dll dll\scope.dll
 echo   J-Link DLL: dll\JLink_x64.dll
+echo.
+call tests\build_tests.bat
+if errorlevel 1 (
+  echo [ERROR] Tests failed
+  exit /b 1
+)
 exit /b 0

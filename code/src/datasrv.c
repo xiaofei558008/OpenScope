@@ -155,7 +155,7 @@ void os_ds_drain(void)
 
 int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
 {
-    OS_Leaf* L;
+    const OS_Leaf* L;
     uint8_t raw[64];
     int n = 0;
     OS_MemReq wr;
@@ -191,7 +191,7 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
         memcpy(&storage, cur, L->size < 8 ? L->size : 8);
         v = 0;
         memcpy(&v, raw, 8);
-        mask = ((1ULL << L->bit_size) - 1) << L->bit_offset;
+        mask = ((L->bit_size >= 64) ? ~0ULL : ((1ULL << L->bit_size) - 1)) << L->bit_offset;
         storage = (storage & ~mask) | (v & mask);
         memcpy(raw, &storage, L->size < 8 ? L->size : 8);
         n = (int)L->size;

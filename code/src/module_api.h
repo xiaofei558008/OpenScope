@@ -41,7 +41,7 @@ enum {
     OS_CMD_IS_CONNECTED = 4, /* out: int* (1/0) */
     OS_CMD_SCAN         = 5, /* in: OS_ScanReq*，枚举仿真器 */
     OS_CMD_READ_MEM     = 6, /* in: OS_MemReq*，返回字节数或负错误码 */
-    OS_CMD_WRITE_MEM    = 7, /* in: OS_MemReq* */
+    OS_CMD_WRITE_MEM    = 7, /* in: OS_MemReq*, return 0=OK or negative error */
     OS_CMD_GET_INFO     = 8, /* out: OS_DriverInfo* */
     OS_CMD_HALT         = 9,
     OS_CMD_GO           = 10,

@@ -44,10 +44,10 @@ development_status:
   2-4-mcu-memory-read-write-and-timestamp-samples: done
   epic-2-retrospective: optional
 
-  epic-3: backlog
-  3-1-acquisition-start-stop-and-poll-integration: backlog
-  3-2-csv-log-and-save-as: backlog
-  3-3-offline-replay: backlog
+  epic-3: done
+  3-1-acquisition-start-stop-and-poll-integration: done
+  3-2-csv-log-and-save-as: done
+  3-3-offline-replay: done
   epic-3-retrospective: optional
 
   epic-4: backlog

@@ -1,5 +1,6 @@
 #include "app.h"
 #include "datalog.h"
+#include "datasrv.h"
 #include "vartree.h"
 #include <stdlib.h>
 #include <string.h>
@@ -72,15 +73,23 @@ void os_datalog_append(void)
 {
     int i;
     char iso[64];
+    int64_t ts = 0;
     if (!g_app.log_csv) return;
+    for (i = 0; i < g_app.leaf_count; i++) {
+        if (g_app.leaves[i].watched && g_app.leaves[i].sample.size) {
+            ts = g_app.leaves[i].sample.ts_us;
+            break;
+        }
+    }
+    os_time_iso(ts, iso, sizeof(iso));
+    fprintf(g_app.log_csv, "%lld,%s", (long long)ts, iso);
     for (i = 0; i < g_app.leaf_count; i++) {
         OS_Leaf* L = &g_app.leaves[i];
         if (!L->watched) continue;
-        os_time_iso(L->sample.ts_us, iso, sizeof(iso));
-        fprintf(g_app.log_csv, "%lld,%s,", (long long)L->sample.ts_us, iso);
-        csv_write_field(g_app.log_csv, L->sample.text);
-        fputc('\n', g_app.log_csv);
+        fputc(',', g_app.log_csv);
+        csv_write_field(g_app.log_csv, L->sample.size ? L->sample.text : "");
     }
+    fputc('\n', g_app.log_csv);
     fflush(g_app.log_csv);
 }
 
@@ -212,6 +221,7 @@ void os_replay_tick(void)
     }
     for (;;) {
         char line[8192];
+        char splitbuf[8192];
         int nf;
         int64_t ts;
         int64_t expected;
@@ -226,7 +236,10 @@ void os_replay_tick(void)
             _snprintf(r->pending, sizeof(r->pending), "%s", line);
         }
         trim_crlf(r->pending);
-        nf = split_csv(r->pending, fields, 512);
+        /* split_csv mutates its input (commas -> NUL), so split a copy and
+         * keep r->pending intact for re-parsing on later ticks. */
+        _snprintf(splitbuf, sizeof(splitbuf), "%s", r->pending);
+        nf = split_csv(splitbuf, fields, 512);
         r->has_pending = 0;
         ts = r->ts_col >= 0 && r->ts_col < nf ? _strtoi64(fields[r->ts_col], NULL, 10) : 0;
         if (!r->base_ts) r->base_ts = ts;

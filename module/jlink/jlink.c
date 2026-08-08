@@ -292,7 +292,7 @@ static int mod_write(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     r = a->write_mem((uint32_t)req->address, req->size, (const uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
-    return r >= 0 ? r : OS_ERR_TIMEOUT;
+    return r >= 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
 
 static int mod_command(void* ctx, int cmd, void* in, void* out)
