@@ -1,0 +1,28 @@
+应用开发：
+这是一个功能类似Vector VX1000通过仿真口读写内存变量采集和标定MCU 实现和 CANape 软件的功能类似的软件工程开发；
+整个项目用C语言开发，保证执行速度和最小系统资源占用；
+框架为：
+软件的UI界面开发可以选择用VisualStudio
+主程序运行起来，通过动态的加载.dll 文件实现各种功能扩展；
+后续如果需要开发新的功能，可以直接开发.dll 文件即可实现功能扩展；
+
+
+软件功能需要实现：
+1、UI界面实现，最好用Microsoft visual studio 原生支持的UI工具实现；
+2、UI界面实现.elf 文件选择（需要动态监控/加载，一旦用户重新编译后，软件能立即感知，并弹窗提示用户elf更新，刷新全部当前全局变量地址，找不到的变量弹窗提示用户是否忽略），变量解析，需要能将全局变量、结构体展开，结合变量的数据类型，获取变量的绝对地址；
+3、UI界面需要有连接、断开连接、数据采集等按键，方便用户采集、log数据、离线回放数据，数据可以另存为文件（类似CANape .mf4格式数据，或者csv 格式数据）；
+4、UI界面支持用户添加新窗口（波形/数值等类型窗口，可以通过C语言编译成单独dll 模块实现），窗口里支持用户添加变量（需要根据加载的elf文件支持快速模糊搜索），绘制变量的实时曲线或者用户修改变量值；
+5、模块化开发，一个功能一个.dll 实现，这样搭建框架后，后续扩展新功能更方便，新功能单元测试也更容易实现；
+6、编译器在：C:\Program Files\Microsoft Visual Studio\18\Community
+7、code 文件夹用于开发整个软件的框架，里面包含main.c；module 文件夹用于编写新增功能的模块，编译后产生.dll 文件，拷贝到dll 文件夹，方便给主框架调用；
+
+具体实现一个业务模块：
+1、扫描usb 外设，找到Jlink 相关的外设，如果没有找到，弹窗用户没有发现Jlink设备，UI界面可以支持用户选择仿真口类型：SWD/JTAG，以及时钟速度；实现掉用 dll 文件夹下的JLink_x64.dll，用户连接MCU后，读写MCU 内部的变量，数据需要添加读取时刻的时间戳，方便绘图和后处理；
+2、参考链接：
+https://www.segger.com/products/debug-probes/j-link/tools/j-link-sdk/
+https://github.com/shadowthreed/JLink_API
+https://cloud.tencent.com/developer/article/2232891
+
+3、Jlink驱动安装目录：C:\Program Files\SEGGER\JLink_V966
+
+
