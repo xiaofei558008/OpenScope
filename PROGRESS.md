@@ -42,6 +42,11 @@
   - 解析器重构：全部 DWARF 单元先入池，建立全局 DIE 偏移索引，跨单元类型引用（ref_addr/ref4）可解析；坏单元跳过继续。
   - 实测 enc.out：296 个 CU 全部解析，16 个全局变量全部带 DWARF 类型；结构体/联合体/数组展开为 285 个原子叶子（0 残留 struct/union、0 零尺寸），如 MT6835.AbsEnc.AngleBit、ta_enc.index_tx、modbus_rtu_slave.addr、ADC_Temper.MCU_Temper；char 数组保留为整块叶子。
   - 新增 `tests/enc_smoke.c`（真实 .out 回归，全部 PASS）+ `tests/dump_elf.c`（ELF 转储工具）；`python build.py --quiet` 0 error/0 warning，全部冒烟通过。
+- **checkpoint-9（2026-08-08）**：request.md 第 8 条完成 —— .exe 安装包 + 版本号。
+  - 版本化：新增 `code/src/version.rc`（1.0.0.0）并接入 vcxproj；OpenScope.exe 版本信息确认生效；模块版本升 1.0.0；About 对话框 v1.0.0；`module_mgr.c` 安装布局优先 `exe\dll\`（回退开发布局 `..\..\dll`）。
+  - 打包：Inno Setup 6.7.3 静默安装到 `tools\innosetup`（gitignore，不入库）；新增 `packaging/openscope.iss` + `packaging/make_setup.py`（版本号以 version.rc 为唯一来源并校验一致）+ `packaging/make_icon.py`（assets/openscope.ico）。
+  - 产物：`dist/OpenScope-Setup-1.0.0.exe`（10.3 MB，x64，安装到 Program Files\OpenScope，含 exe + dll\ 三模块 + 开始菜单/桌面快捷方式）。
+  - 验证全通过：安装包版本信息 1.0.0.0；静默安装布局正确；安装后 exe 版本 1.0.0.0 且启动冒烟 OK；卸载器静默卸载成功、目录清理干净。
 
 ## 待办（BMAD 规划产出后更新）
 
@@ -58,13 +63,14 @@
 - [x] .out 文件解析验证 + ELF sh_link 修复（checkpoint-7）
 - [x] 真实 enc.out 全量解析 + 结构体原子展开（checkpoint-8）
 
-## 新增需求（request.md 第 8 条，待办）
+## 新增需求（request.md 第 8 条，已完成）
 
-- [ ] 工程开发完成后打包成 .exe 安装包并添加版本号，便于发布（用户 2026-08-08 加入 request.md）
+- [x] 工程开发完成后打包成 .exe 安装包并添加版本号，便于发布（用户 2026-08-08 加入 request.md；checkpoint-9 完成）
 
 ## 总结
 
 - 4 个 Epic / 13 个 Story 全部完成：框架可构建可启动、J-Link 驱动模块（扫描/连接/读写）、采集/CSV/回放、scope 示波器窗口模块。
 - 构建与回归：`python build.py --quiet` 0 error/0 warning，自动运行 replay_smoke + jlink_smoke + scope_smoke 全部 PASS。
+- 打包发布：`dist/OpenScope-Setup-1.0.0.exe` 安装包（版本号 1.0.0.0），安装/卸载/启动均已验证。
 - 依赖真实硬件的验收项（连接 MCU、实时采集曲线、写值回读）留待用户环境实测。
 - 硬件实测已覆盖：连接、RAM 读写、Flash 读取；实时采集曲线/写值交互仍可在应用 UI 中实测。

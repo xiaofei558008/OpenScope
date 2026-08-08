@@ -969,7 +969,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v0.1\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.0.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:

@@ -5,11 +5,17 @@
 static void dll_dir(wchar_t* out, int outlen)
 {
     wchar_t exe[MAX_PATH];
+    wchar_t test[MAX_PATH];
     wchar_t* slash;
     GetModuleFileNameW(NULL, exe, MAX_PATH);
     slash = wcsrchr(exe, L'\\');
     if (slash) *slash = 0;
-    _snwprintf(out, outlen, L"%s\\..\\..\\dll", exe);
+    /* 安装布局：exe 同目录下 dll\；开发布局：bin\Release\..\..\dll */
+    _snwprintf(test, outlen, L"%s\\dll", exe);
+    if (GetFileAttributesW(test) != INVALID_FILE_ATTRIBUTES)
+        _snwprintf(out, outlen, L"%s", test);
+    else
+        _snwprintf(out, outlen, L"%s\\..\\..\\dll", exe);
 }
 
 static int name_has_jlink(const char* name)

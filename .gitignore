@@ -19,3 +19,8 @@ dll/*.exp
 dll/*.lib
 tests/bin/
 tests/replay_sample.csv
+
+# packaging / toolchain (local only)
+tools/
+dist/
+_tmp_*.exe
