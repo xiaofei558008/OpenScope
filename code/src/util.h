@@ -34,7 +34,7 @@ double os_decode_value(const uint8_t* raw, int size, OS_TypeKind kind, int is_si
 
 /* 格式化：out 输出文本；out_val 返回数值解释（可 NULL） */
 void os_format_raw(char* out, int outlen, const uint8_t* raw, int size,
-                   OS_TypeKind kind, int is_signed, int is_bitfield, int bit_offset, int bit_size,
+                   OS_TypeKind kind, int is_signed, int is_ptr, int is_bitfield, int bit_offset, int bit_size,
                    double* out_val, const OS_EnumVal* enums, int enum_count);
 
 /* 文本解析为字节（小端）。max_size 为输出缓冲上限；*out_size 返回实际字节数。

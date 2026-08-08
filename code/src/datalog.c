@@ -191,7 +191,7 @@ static void emit_row(OS_Replay* r, char** fields, int nf, int64_t ts)
         batch[n].address = L->address;
         memcpy(batch[n].raw, raw, sz < 8 ? sz : 8);
         batch[n].size = sz;
-        os_format_raw(batch[n].text, sizeof(batch[n].text), raw, sz, L->kind, L->is_signed,
+        os_format_raw(batch[n].text, sizeof(batch[n].text), raw, sz, L->kind, L->is_signed, L->is_ptr,
                       L->is_bitfield, L->bit_offset, L->bit_size, &batch[n].value,
                       L->enums, L->enum_count);
         n++;

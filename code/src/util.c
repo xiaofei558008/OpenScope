@@ -146,7 +146,7 @@ double os_decode_value(const uint8_t* raw, int size, OS_TypeKind kind, int is_si
 }
 
 void os_format_raw(char* out, int outlen, const uint8_t* raw, int size,
-                   OS_TypeKind kind, int is_signed, int is_bitfield, int bit_offset, int bit_size,
+                   OS_TypeKind kind, int is_signed, int is_ptr, int is_bitfield, int bit_offset, int bit_size,
                    double* out_val, const OS_EnumVal* enums, int enum_count)
 {
     int ok = 1;

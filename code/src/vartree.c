@@ -1,5 +1,6 @@
 #include "app.h"
 #include "vartree.h"
+#include <commctrl.h>
 #include <string.h>
 
 static char g_missing[64][256];

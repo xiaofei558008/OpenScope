@@ -2,6 +2,7 @@
 #include "numwin.h"
 #include "mainwin.h"
 #include "vartree.h"
+#include <commctrl.h>
 #include <string.h>
 
 #define OS_MAGIC_NUM 0x4E554D31u /* 'NUM1' */
@@ -219,8 +220,8 @@ void os_num_register(void)
 
 HWND os_num_create(HWND parent, int x, int y, int w, int h, const wchar_t* title)
 {
-    HWND h = CreateWindowW(g_num_class, title ? title : L"数值窗口",
-                           WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-                           x, y, w, h, parent, NULL, g_app.hInst, NULL);
-    return h;
+    HWND hw = CreateWindowW(g_num_class, title ? title : L"数值窗口",
+                            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
+                            x, y, w, h, parent, NULL, g_app.hInst, NULL);
+    return hw;
 }

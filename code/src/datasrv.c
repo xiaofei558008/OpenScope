@@ -53,7 +53,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
             s->address = L->address;
             memcpy(s->raw, buf, sz < 8 ? sz : 8);
             s->size = sz;
-            os_format_raw(s->text, sizeof(s->text), buf, sz, L->kind, L->is_signed,
+            os_format_raw(s->text, sizeof(s->text), buf, sz, L->kind, L->is_signed, L->is_ptr,
                           L->is_bitfield, L->bit_offset, L->bit_size, &s->value,
                           L->enums, L->enum_count);
         }
@@ -230,7 +230,7 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
         if (r == n) {
             memcpy(s.raw, rb, n < 8 ? n : 8);
             s.size = n;
-            os_format_raw(s.text, sizeof(s.text), rb, n, L->kind, L->is_signed,
+            os_format_raw(s.text, sizeof(s.text), rb, n, L->kind, L->is_signed, L->is_ptr,
                           L->is_bitfield, L->bit_offset, L->bit_size, &s.value,
                           L->enums, L->enum_count);
         } else {

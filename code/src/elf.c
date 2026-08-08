@@ -370,6 +370,7 @@ static int elf_parse_sections(OS_ElfFile* f, char* errbuf, int errbuf_len)
 #define DW_FORM_line_strp    0x1f
 #define DW_FORM_implicit_const 0x21
 #define DW_FORM_loclistx     0x22
+#define DW_FORM_rnglistx     0x23
 #define DW_FORM_strx1        0x25
 #define DW_FORM_strx2        0x26
 #define DW_FORM_strx3        0x27
@@ -430,6 +431,7 @@ typedef struct DW_Unit {
     uint64_t start;       /* first DIE offset */
     uint64_t end;
     uint16_t version;
+    uint8_t  unit_type;   /* DWARF5: DW_UT_* */
     uint8_t  addr_size;
     uint64_t abbrev_off;  /* section offset */
     uint64_t str_offsets_base;

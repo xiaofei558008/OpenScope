@@ -66,7 +66,7 @@ typedef struct OS_ScanReq {
 } OS_ScanReq;
 
 typedef struct OS_ConnectCfg {
-    int  interface;           /* OS_IF_SWD / OS_IF_JTAG */
+    int  iface;               /* OS_IF_SWD / OS_IF_JTAG（勿用 interface：Windows SDK 宏） */
     int  speed_khz;           /* 0 = 自动 */
     char device[128];         /* 目标器件型号，空 = 默认 */
     int  probe_index;         /* -1 = 自动 */
