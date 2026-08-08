@@ -21,6 +21,10 @@
 #define WM_OS_SPLIT       (WM_APP + 3)
 #define WM_OS_REPLAY_TICK (WM_APP + 4)
 #define WM_OS_WIN_CLOSED  (WM_APP + 5)
+#define WM_OS_CHART_FITALL (WM_APP + 6) /* 停止采集：波形窗口整体展示全部波形 */
+#define WM_OS_CHART_LIVE  (WM_APP + 7)  /* 开始采集：波形窗口回到跟随最新 */
+
+#define IDI_APP 1 /* 应用图标资源（version.rc） */
 
 typedef enum {
     OS_ACQ_STOPPED = 0,
@@ -93,6 +97,7 @@ typedef struct OS_App {
     wchar_t log_path[MAX_PATH];
     wchar_t shot_path[MAX_PATH]; /* --shot=<路径>：窗口创建后自动截图调试 */
     wchar_t rename_tab[MAX_PATH]; /* --rename-tab=<名>：首个窗口创建后自动重命名（测试钩子） */
+    wchar_t replay_path[MAX_PATH]; /* --replay=<csv>：启动后自动离线回放（测试钩子） */
 
     struct OS_Replay* replay;
 

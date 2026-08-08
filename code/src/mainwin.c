@@ -42,10 +42,20 @@
 #define IDD_RN_CANCEL      2603
 
 /* 连接配置控件（直接放主界面工具栏，不弹对话框） */
+#define IDC_CFG_DEVICE   2101
 #define IDC_CFG_IFACE    2102
 #define IDC_CFG_SPEED    2103
 #define IDC_CFG_EMU      2104
 #define IDC_CFG_REFRESH  2105
+
+/* MCU 型号预置列表（J-Link "Device=" 名称；默认 Cortex-M4，避免空设备令旧版 DLL 崩溃） */
+static const wchar_t* g_devices[] = {
+    L"Cortex-M4", L"Cortex-M3", L"Cortex-M0", L"Cortex-A5",
+    L"STM32L432KB", L"STM32F103C8", L"STM32F407VG", L"STM32F429ZI",
+    L"STM32G431KB", L"nRF52832_xxAA", L"NRF5340_XXAA", L"RP2040_M0"
+};
+
+static int g_emu_count = -1; /* 最近一次 J-Link 扫描到的设备数（-1=未扫描） */
 
 #define IDD_PICK_OK      2401
 #define IDD_PICK_CANCEL  2402
@@ -334,8 +344,8 @@ static void layout(void)
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
             { IDC_BTN_ABOUT, 0, 0 },
-            { IDC_CFG_IFACE, 62, 1 }, { IDC_CFG_SPEED, 92, 1 },
-            { IDC_CFG_EMU, 260, 1 }, { IDC_CFG_REFRESH, 48, 0 },
+            { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 }, { IDC_CFG_SPEED, 92, 1 },
+            { IDC_CFG_EMU, 240, 1 }, { IDC_CFG_REFRESH, 48, 0 },
         };
         int i, x = 6;
         for (i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
@@ -506,11 +516,18 @@ static void cmd_connect(void)
     int rc, c = 0;
     OS_DriverInfo info;
     OS_ConnectCfg cfg;
-    LRESULT ifi, spi, emu;
+    LRESULT ifi, spi, emu, dci;
     static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块（jlink.dll）");
         set_status(0, L"未加载驱动模块");
+        return;
+    }
+    /* 无仿真器：弹窗提示（需求：扫描不到 J-Link 设备时告知用户） */
+    if (g_emu_count <= 0) {
+        MessageBoxW(g_app.hMain,
+                    L"没有发现 JLink 设备，请确认仿真器已插入 USB 并点击「刷新」。",
+                    L"J-Link", MB_OK | MB_ICONWARNING);
         return;
     }
     /* 直接读取界面配置，不再弹配置对话框 */
@@ -522,8 +539,15 @@ static void cmd_connect(void)
     cfg.speed_khz = speeds[spi];
     emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
-    /* MCU 型号输入框已移除：使用通用默认设备（J-Link 按内核自动识别；空设备会令旧版 DLL 崩溃） */
-    _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
+    /* MCU 型号：从界面下拉读取（预置列表，默认 Cortex-M4；空设备会令旧版 DLL 崩溃） */
+    dci = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
+    if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
+        char dev8[128];
+        os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
+        _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
+    } else {
+        _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
+    }
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
     if (rc != OS_ERR_OK) {
         set_status(0, L"连接失败");
@@ -553,21 +577,22 @@ static void cmd_disconnect(void)
     os_mainwin_update_buttons();
 }
 
-/* 扫描 J-Link 设备并填充主界面下拉（不弹窗，结果进日志/下拉） */
-static void cfg_fill_emus(void)
+/* 扫描 J-Link 设备并填充主界面下拉（返回设备数；不弹窗，结果进日志/下拉） */
+static int cfg_fill_emus(void)
 {
     OS_DeviceInfo items[16];
     OS_ScanReq req;
     HWND h;
     int i, n;
-    if (!g_app.driver || !g_app.driver->command) return;
+    if (!g_app.driver || !g_app.driver->command) return -1;
     memset(&req, 0, sizeof(req));
     req.items = items;
     req.capacity = 16;
     g_app.driver->command(g_app.driver_ctx, OS_CMD_SCAN, &req, NULL);
     n = req.count;
+    g_emu_count = n;
     h = GetDlgItem(g_app.hMain, IDC_CFG_EMU);
-    if (!h) return;
+    if (!h) return n;
     SendMessageW(h, CB_RESETCONTENT, 0, 0);
     for (i = 0; i < n && i < 16; i++) {
         wchar_t line[256];
@@ -581,15 +606,22 @@ static void cfg_fill_emus(void)
         SendMessageW(h, CB_SETCURSEL, 0, 0);
     }
     os_log(OS_LOG_INFO, "J-Link 设备扫描: %d 个", n);
+    return n;
 }
 
-/* 主界面连接配置初始化：接口/速度下拉 + 扫描设备列表（模块加载后调用） */
+/* 主界面连接配置初始化：MCU型号/接口/速度下拉 + 扫描设备列表（模块加载后调用） */
 void os_mainwin_cfg_init(void)
 {
     HWND h;
     const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
     static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
     int i;
+    h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
+    if (h) {
+        for (i = 0; i < (int)(sizeof(g_devices) / sizeof(g_devices[0])); i++)
+            SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)g_devices[i]);
+        SendMessageW(h, CB_SETCURSEL, 0, 0); /* 默认 Cortex-M4 */
+    }
     h = GetDlgItem(g_app.hMain, IDC_CFG_IFACE);
     if (h) {
         for (i = 0; i < 2; i++) SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)ifaces[i]);
@@ -608,6 +640,17 @@ void os_mainwin_cfg_init(void)
     cfg_fill_emus();
 }
 
+/* 向所有原生波形窗口广播视图消息（FITALL=整体展示，LIVE=跟随最新） */
+static void chart_broadcast(UINT msg)
+{
+    int i;
+    for (i = 0; i < g_app.win_count; i++) {
+        HWND w = g_app.wins[i].hwnd;
+        if (w && !g_app.wins[i].is_module && os_chart_is(w))
+            PostMessage(w, msg, 0, 0);
+    }
+}
+
 static void cmd_start_acq(void)
 {
     if (!g_app.connected) {
@@ -615,6 +658,7 @@ static void cmd_start_acq(void)
         return;
     }
     if (os_ds_start() == 0) {
+        chart_broadcast(WM_OS_CHART_LIVE); /* 开始采集：波形回到跟随最新 */
         refresh_status();
         os_mainwin_update_buttons();
     }
@@ -623,6 +667,7 @@ static void cmd_start_acq(void)
 static void cmd_stop_acq(void)
 {
     os_ds_stop();
+    chart_broadcast(WM_OS_CHART_FITALL); /* 停止记录后波形整体展示到整个区域 */
     refresh_status();
     os_mainwin_update_buttons();
 }
@@ -1277,9 +1322,12 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                    g_app.hInst, NULL);
             SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
-        /* 连接配置控件（接口/速度/J-Link设备/刷新，随工具栏一行布局） */
+        /* 连接配置控件（MCU型号/接口/速度/J-Link设备/刷新，随工具栏一行布局） */
         {
             HWND c;
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
+                              584, 5, 140, 200, hwnd, (HMENU)IDC_CFG_DEVICE, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
                               650, 5, 62, 120, hwnd, (HMENU)IDC_CFG_IFACE, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
@@ -1455,7 +1503,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_OPEN: cmd_open_elf(); break;
         case IDC_BTN_CONNECT: cmd_connect(); break;
         case IDC_BTN_DISCON: cmd_disconnect(); break;
-        case IDC_CFG_REFRESH: cfg_fill_emus(); break;
+        case IDC_CFG_REFRESH:
+            if (cfg_fill_emus() <= 0)
+                MessageBoxW(hwnd, L"没有发现 JLink 设备，请确认仿真器已插入 USB 并点击「刷新」。",
+                            L"J-Link", MB_OK | MB_ICONWARNING);
+            break;
         case IDC_BTN_START: cmd_start_acq(); break;
         case IDC_BTN_STOP: cmd_stop_acq(); break;
         case IDC_BTN_LOGSTART: cmd_log_start(); break;
@@ -1463,8 +1515,13 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.4.1\n\nMCU 变量采集与标定工具（类 CANape）\n"
-                              L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
+            MessageBoxW(hwnd,
+                        L"OpenScope v1.5.0\n\n"
+                        L"MCU 变量采集与标定工具（类 CANape）\n"
+                        L"C + Win32 + 动态模块架构\n\n"
+                        L"晶圆上的生物技术开发和提供支持\n"
+                        L"网址: www.opendebugger.com",
+                        L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:
             DestroyWindow(hwnd);
@@ -1562,12 +1619,18 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 void os_mainwin_register(void)
 {
     WNDCLASSW wc;
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = os_mainwin_proc;
-    wc.hInstance = g_app.hInst;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = g_main_class;
-    RegisterClassW(&wc);
+    {
+        WNDCLASSEXW wcx;
+        memset(&wcx, 0, sizeof(wcx));
+        wcx.cbSize = sizeof(wcx);
+        wcx.lpfnWndProc = os_mainwin_proc;
+        wcx.hInstance = g_app.hInst;
+        wcx.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wcx.hIcon = LoadIconW(g_app.hInst, MAKEINTRESOURCEW(IDI_APP));
+        wcx.hIconSm = LoadIconW(g_app.hInst, MAKEINTRESOURCEW(IDI_APP));
+        wcx.lpszClassName = g_main_class;
+        RegisterClassExW(&wcx);
+    }
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = split_proc;
     wc.hInstance = g_app.hInst;

@@ -4,6 +4,7 @@
 #include "mainwin.h"
 #include "module_mgr.h"
 #include "vartree.h"
+#include "datalog.h"
 #include "layout.h"
 #include "util.h"
 #include <string.h>
@@ -129,6 +130,8 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
                                                              MAX_PATH, L"%s", tok + 7);
         else if (wcsncmp(tok, L"--rename-tab=", 13) == 0) _snwprintf(g_app.rename_tab,
                                                                      MAX_PATH, L"%s", tok + 13);
+        else if (wcsncmp(tok, L"--replay=", 9) == 0) _snwprintf(g_app.replay_path,
+                                                                MAX_PATH, L"%s", tok + 9);
         else if (first) { *elf = tok; first = 0; }
         tok = sp ? sp + 1 : NULL;
     }
@@ -148,7 +151,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.4.1)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.5.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -180,6 +183,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         if (sel)
             os_log(OS_LOG_INFO, "命令行选中叶变量: %ls (rc=%d)",
                    sel, os_vartree_select_leaf(g_app.hTree, sel));
+        if (g_app.replay_path[0] && os_replay_start(g_app.replay_path) == 0)
+            SetTimer(hMain, 2, 10, NULL); /* 测试钩子：--replay 自动开始离线回放 */
         if (!no_layout && lsv) os_layout_save_to(lsv);
     }
     while (GetMessage(&msg, NULL, 0, 0)) {

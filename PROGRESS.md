@@ -87,6 +87,15 @@
   - 工具栏单行化：打开ELF/连接/断开/开始采集/停止采集/记录/停止记录/离线回放/停止回放/关于 + 接口(SWD/JTAG)/速度/ J-Link 设备/刷新 全部排列在菜单栏正下方一行，布局统一按文字宽度自适应。
   - 回归：连接测试（开发版+安装版）ALL PASS；ui_windows_drive/ui_layout_drive/ui_rename_drive 全部 ALL PASS（layout C 阶段与 rename 增加轮询/等待，消除连续运行竞态）；构建 0 error/0 warning。
   - 版本 1.4.1：重新打包 `dist/OpenScope-Setup-1.4.1.exe`（10.3MB），安装版验证版本 1.4.1.0 + 主界面直连。
+- **checkpoint-16（2026-08-09）**：补齐 request.md 新增特性 4/5/6/7 全部缺口 + M1 完善（1.5.0）。
+  - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
+  - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
+  - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
+  - N7 波形视图：滚轮缩放 X 轴（围绕鼠标、最小 1ms、夹紧到全量范围）+ Ctrl+滚轮缩放 Y 轴；F 键全局显示（view_all）；Ctrl+B 多坐标轴（每路独立 Y 值域）；菜单新增“整体展示/多坐标轴/缩放复位”；停止采集广播 `WM_OS_CHART_FITALL`（整体展示+暂停），开始采集广播 `WM_OS_CHART_LIVE`（跟随最新）。
+  - 修复新建波形窗口 X 缩放失效 bug：`calloc` 后 `view_all=0/fit_x=0/vx0=vx1=0` 使 X 时间窗为空、滚轮 X 缩放静默返回；初始化为 `fit_x=1/fit_y=1`（跟随最新）后 X 缩放正常。
+  - M1 完善：无 J-Link 设备时连接弹窗提示“没有发现 JLink 设备...”（与需求一致）；jlink/scope 模块版本同步 1.5.0。
+  - 测试：新增 `tests/ui_chartview_drive.ps1` + `tests/chart_replay.csv`（`--replay` 测试钩子回放 fsin 正弦数据驱动波形，无需真实 MCU）覆盖 N5/N7 全部交互；ui_chartview/ui_windows/ui_layout/ui_rename 四个回归开发版+安装版全部 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.5.0：重新打包 `dist/OpenScope-Setup-1.5.0.exe`（10.3MB），安装版验证版本 1.5.0.0 + N4~N7/M1 全套功能。
 
 ## 待办（BMAD 规划产出后更新）
 
@@ -106,6 +115,15 @@
 ## 新增需求（request.md 第 8 条，已完成）
 
 - [x] 工程开发完成后打包成 .exe 安装包并添加版本号，便于发布（用户 2026-08-08 加入 request.md；checkpoint-9 完成）
+
+## 新增特性（request.md 新增特性 1~7，全部完成）
+
+- [x] 1/2 布局保存/恢复 + 布局文件导出导入（checkpoint-12）
+- [x] 3 tab 多窗口 + 重命名（checkpoint-11/13）
+- [x] 4 应用图标（checkpoint-16）
+- [x] 5 连接配置嵌入主界面 + MCU 型号选择（checkpoint-14/15/16）
+- [x] 6 关于框写明“晶圆上的生物技术开发和提供支持”+版本号+www.opendebugger.com（checkpoint-16）
+- [x] 7 波形滚轮缩放 X/Y、停止后整体展示、Ctrl+B 多坐标轴、F 全局显示（checkpoint-16）
 
 ## 总结
 

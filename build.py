@@ -24,8 +24,9 @@ def clean_env():
 def main():
     quiet = "--quiet" in sys.argv[1:]
     root = os.path.dirname(os.path.abspath(__file__))
+    build_bat = os.path.join(root, "build.bat")
     r = subprocess.run(
-        "cmd /c build.bat",
+        ["cmd", "/c", build_bat],
         env=clean_env(),
         cwd=root,
         capture_output=True,
