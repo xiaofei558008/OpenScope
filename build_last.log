@@ -1,17 +1,54 @@
 适用于 .NET Framework MSBuild 版本 18.8.2+ce25c0108
 
-  OpenScope.vcxproj -> D:\OpenScope\bin\Release\OpenScope.exe
-  jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
+  elf.c
   scope.vcxproj -> D:\OpenScope\dll\scope.dll
+  jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
+  OpenScope.vcxproj -> D:\OpenScope\bin\Release\OpenScope.exe
 
 Build OK.
   Framework : bin\Release\OpenScope.exe
   Modules   : dll\jlink.dll dll\scope.dll
   J-Link DLL: dll\JLink_x64.dll
 
+wrote tests/elf_sample.out (647 bytes)
+elf_smoke.c
+elf.c
+vartree.c
+util.c
+正在生成代码...
 replay_smoke.c
 datalog.c
 正在生成代码...
+Running elf smoke...
+PASS .out non-ELF rejected by magic check
+PASS error message says not an ELF
+PASS os_elf_open loads .out (ELF)
+PASS machine is EM_ARM
+PASS ELF32
+PASS g_counter present
+PASS g_counter address 0x20000000
+PASS g_counter has debug type
+PASS g_counter type int
+PASS g_counter size 4
+PASS g_cfg present
+PASS g_cfg address 0x20000010
+PASS g_cfg type struct
+PASS g_cfg size 8
+PASS struct has 2 members
+PASS member a named a
+PASS member a offset 0
+PASS member b named b
+PASS member b offset 4
+PASS g_raw from symtab fallback
+PASS g_raw address 0x20000020
+PASS g_raw has no debug type
+PASS g_raw symbol size 4
+PASS vartree leaves >= 4
+PASS leaf g_counter
+PASS leaf g_cfg.a @0x20000010
+PASS leaf g_cfg.b @0x20000014
+PASS leaf g_raw
+ALL PASS
 jlink_smoke.c
 scope_smoke.c
 Running replay smoke...

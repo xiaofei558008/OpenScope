@@ -7,10 +7,31 @@ if errorlevel 1 (
 )
 if not exist tests\bin mkdir tests\bin
 
+python tests\gen_elf_out.py
+if errorlevel 1 (
+  echo [ERROR] gen_elf_out failed
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I code\src tests\elf_smoke.c ^
+    code\src\elf.c code\src\vartree.c code\src\util.c ^
+    /Fe:tests\bin\elf_smoke.exe /link user32.lib
+if errorlevel 1 (
+  echo [ERROR] elf_smoke build failed
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I code\src tests\replay_smoke.c code\src\datalog.c ^
     /Fe:tests\bin\replay_smoke.exe /link user32.lib
 if errorlevel 1 (
   echo [ERROR] replay_smoke build failed
+  exit /b 1
+)
+
+echo Running elf smoke...
+tests\bin\elf_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] elf_smoke FAILED
   exit /b 1
 )
 

@@ -33,6 +33,10 @@
     - 连接：成功，固件 "J-Link Pro V4 compiled Sep 22 2022 15:00:37"，CPUID=0x410CC601（Cortex-M4）。
     - RAM 0x20000000：0x20000000–0x20001FFF（8KB）写/读/回读校验通过；0x20002000–0x20003FFF 写入不驻留/总线错误 —— **该单元实际 RAM 为 8KB，非声称的 16KB**。
     - Flash 0x08000000：64KB 全部可读，向量表有效（SP=0x20000798、Reset=0x08002F05），已烧录固件。
+- **checkpoint-7（2026-08-08）**：支持 .out 文件解析（ELF 同格式）+ 修复 ELF 符号表解析 bug。
+  - 打开文件对话框本已支持 `*.elf;*.axf;*.out`，`os_elf_open` 按魔数判定；新增 `tests/elf_sample.out`（ELF32 ARM + DWARF4，含全局 int、全局结构体 cfg_t{a,b}、无调试符号变量）端到端验证。
+  - 修复 elf.c 真 bug：ELF 节头 `sh_link`（指向 .strtab）误读偏移 32（实为 sh_size），ELF32 应为 24、ELF64 应为 40 —— 此前会导致符号表字符串表解析错误，DWARF 缺失时变量兜底失效。
+  - 新增 `tests/elf_smoke.c`（.out 全局变量/结构体展开/符号兜底/魔数拒绝，全部 PASS）+ `tests/gen_elf_out.py`，接入 build_tests.bat 自动回归。
 
 ## 待办（BMAD 规划产出后更新）
 
@@ -46,6 +50,7 @@
 - [x] Epic 3：采集/记录/回放（Story 3.1~3.3，硬件实测待用户环境）
 - [x] Epic 4：scope 窗口模块（Story 4.1~4.3，交互实测待用户环境）
 - [x] J-Link 硬件实测：RAM 8KB 读写 + Flash 64KB 读取（checkpoint-6）
+- [x] .out 文件解析验证 + ELF sh_link 修复（checkpoint-7）
 
 ## 总结
 

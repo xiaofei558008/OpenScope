@@ -273,7 +273,9 @@ static int elf_parse_sections(OS_ElfFile* f, char* errbuf, int errbuf_len)
         sh = f->shdr + (uint64_t)idx * f->shentsize;
         f->sym_entsize = f->is64 ? rd_u64(sh + 56, f->le) : rd_u32(sh + 36, f->le);
         if (!f->sym_entsize) f->sym_entsize = f->is64 ? 24 : 16;
-        f->strtab = elf_section(f, rd_u32(sh + 32, f->le), &f->strtab_size);
+        f->strtab = elf_section(f, f->is64 ? rd_u32(sh + 40, f->le)
+                                           : rd_u32(sh + 24, f->le),
+                                &f->strtab_size);
     }
     elf_find_section(f, ".debug_info", &f->dbg_info_size, NULL);
     f->dbg_info = elf_find_section(f, ".debug_info", &f->dbg_info_size, NULL);
