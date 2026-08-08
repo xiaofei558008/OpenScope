@@ -322,6 +322,9 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         EndPaint(hwnd, &ps);
         return 0;
     }
+    case WM_PRINT:
+        if (cw) chart_draw(cw, (HDC)wParam);
+        return 0;
     case WM_ERASEBKGND:
         return 1;
     case WM_LBUTTONDOWN: {

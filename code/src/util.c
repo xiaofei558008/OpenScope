@@ -69,6 +69,59 @@ void os_log_file_write_raw(const char* line)
     LeaveCriticalSection(&g_log_cs);
 }
 
+void os_save_window_bmp(HWND hwnd, const wchar_t* path)
+{
+    RECT rc;
+    HDC wdc, mem;
+    HBITMAP bmp, old;
+    BITMAPINFO bmi;
+    BITMAPFILEHEADER bfh;
+    void* bits;
+    FILE* f;
+    int i, stride;
+    if (!hwnd || !IsWindow(hwnd) || !path) return;
+    GetClientRect(hwnd, &rc);
+    if (rc.right <= 0 || rc.bottom <= 0) return;
+    /* 先强制同步重绘，再抓取窗口内容 */
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW);
+    wdc = GetDC(hwnd);
+    mem = CreateCompatibleDC(wdc);
+    bmp = CreateCompatibleBitmap(wdc, rc.right, rc.bottom);
+    if (!bmp) { ReleaseDC(hwnd, wdc); return; }
+    old = (HBITMAP)SelectObject(mem, bmp);
+    /* 用 WM_PRINT 抓取窗口自身的绘制输出（非交互会话也能拿到真实绘制内容） */
+    SendMessageW(hwnd, WM_PRINT, (WPARAM)mem, PRF_CLIENT | PRF_ERASEBKGND | PRF_NONCLIENT);
+    SelectObject(mem, old);
+    memset(&bmi, 0, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bmi.bmiHeader.biWidth = rc.right;
+    bmi.bmiHeader.biHeight = -rc.bottom;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    stride = ((rc.right * 4 + 3) / 4) * 4;
+    bits = malloc((size_t)stride * rc.bottom);
+    if (bits) {
+        GetDIBits(mem, bmp, 0, rc.bottom, bits, &bmi, DIB_RGB_COLORS);
+        f = _wfopen(path, L"wb");
+        if (f) {
+            memset(&bfh, 0, sizeof(bfh));
+            bfh.bfType = 0x4D42;
+            bfh.bfOffBits = sizeof(bfh) + sizeof(BITMAPINFOHEADER);
+            bfh.bfSize = bfh.bfOffBits + (DWORD)stride * rc.bottom;
+            fwrite(&bfh, 1, sizeof(bfh), f);
+            fwrite(&bmi.bmiHeader, 1, sizeof(BITMAPINFOHEADER), f);
+            fwrite(bits, 1, (size_t)stride * rc.bottom, f);
+            fclose(f);
+        }
+        free(bits);
+    }
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(hwnd, wdc);
+    (void)i;
+}
+
 void os_log(int level, const char* fmt, ...)
 {
     char buf[1024];

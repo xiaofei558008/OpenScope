@@ -125,6 +125,10 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
         else if (wcsncmp(tok, L"--layout-load=", 14) == 0) *layout_load = tok + 14;
         else if (wcsncmp(tok, L"--layout-save=", 14) == 0) *layout_save = tok + 14;
         else if (wcscmp(tok, L"--no-layout") == 0) *no_layout = 1;
+        else if (wcsncmp(tok, L"--shot=", 7) == 0) _snwprintf(g_app.shot_path,
+                                                             MAX_PATH, L"%s", tok + 7);
+        else if (wcsncmp(tok, L"--rename-tab=", 13) == 0) _snwprintf(g_app.rename_tab,
+                                                                     MAX_PATH, L"%s", tok + 13);
         else if (first) { *elf = tok; first = 0; }
         tok = sp ? sp + 1 : NULL;
     }
@@ -144,7 +148,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.2.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.3.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;

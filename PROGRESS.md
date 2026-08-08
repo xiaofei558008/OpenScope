@@ -69,6 +69,13 @@
   - 修复 2 个自引入 bug：`LayoutData` 约 1.3MB 放主线程栈导致 0xC00000FD 栈溢出（改堆分配）；`[win]` 无 `=` 导致 parse_key 置空 key、窗口解析为 0（先按原始行比较）；命令行参数先截尾部空格再匹配（`--no-layout ` 被误当 ELF 路径）。
   - 回归：`tests/ui_layout_drive.ps1`（A 建窗口+变量→关闭自动保存；B 重启自动恢复+ELF 后补挂；C `--layout-load` 导入）开发版+安装版 ALL PASS；`ui_windows_drive.ps1` 加 `--no-layout` 隔离后 ALL PASS；构建 0 error/0 warning。
   - 版本 1.2.0：重新打包 `dist/OpenScope-Setup-1.2.0.exe`（10.3MB），安装版验证版本 1.2.0.0 + 布局全套功能。
+- **checkpoint-13（2026-08-09）**：修复波形窗口空白（页面窗口移入 Tab 控件）+ Tab 重命名（1.3.0）。
+  - 波形空白根因：页面窗口此前是 Tab 控件的兄弟窗口，真实桌面上被 Tab 控件覆盖/遮挡导致“全空白”。改用标准 Tab 页模式：波形/数值/示波器窗口直接作为 SysTabControl32 的子窗口，位置由 TCM_ADJUSTRECT 计算，永远绘制在 Tab 之上；用应用内 `--shot=<路径>` 钩子（WM_PRINT 抓取）验证 chart_draw/scope_render 输出正常（深色绘图区+坐标轴）。
+  - 顺带支持 WM_PRINT：chartwin/scope 增加 WM_PRINT 渲染（截图/PrintWindow 可正确抓取），util.c 新增 `os_save_window_bmp`（GDI 保存 BMP，需 gdi32.lib）。
+  - Tab 重命名：双击标签或右键菜单“重命名标签”→ OSDlgRename 对话框 → 更新窗口标题与标签文本（`tab_set_title`）；新增 `--rename-tab=<名>` 测试钩子。
+  - 修复日志 bug：`os_log` 窄字符 vsnprintf 的 `%ls` 遇中文按 C locale 转换失败输出空行（布局已正确保存但日志为空）——重命名日志先转 UTF-8 再 `%s` 输出。
+  - 回归：`tests/ui_rename_drive.ps1`（父窗口=Tab、钩子重命名、对话框 OK、布局保存）开发版+安装版 ALL PASS；`ui_windows_drive`/`ui_layout_drive`/`ui_connect_drive` 全部 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.3.0：重新打包 `dist/OpenScope-Setup-1.3.0.exe`（10.3MB），安装版验证版本 1.3.0.0 + 重命名功能。
 
 ## 待办（BMAD 规划产出后更新）
 

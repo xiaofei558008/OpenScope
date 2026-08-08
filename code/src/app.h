@@ -91,6 +91,8 @@ typedef struct OS_App {
 
     FILE* log_csv;
     wchar_t log_path[MAX_PATH];
+    wchar_t shot_path[MAX_PATH]; /* --shot=<路径>：窗口创建后自动截图调试 */
+    wchar_t rename_tab[MAX_PATH]; /* --rename-tab=<名>：首个窗口创建后自动重命名（测试钩子） */
 
     struct OS_Replay* replay;
 

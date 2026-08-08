@@ -36,6 +36,10 @@
 #define IDM_TREE_ADD_NUM   2306
 #define IDM_TREE_ADD_SCOPE 2307
 #define IDM_TAB_CLOSE      2501
+#define IDM_TAB_RENAME     2502
+#define IDD_RN_EDIT        2601
+#define IDD_RN_OK          2602
+#define IDD_RN_CANCEL      2603
 
 #define IDD_PICK_OK      2401
 #define IDD_PICK_CANCEL  2402
@@ -56,6 +60,11 @@ typedef struct EditState {
     int* result;
     wchar_t* text_out;
 } EditState;
+
+typedef struct RenameState {
+    wchar_t* out;
+    int cap;
+} RenameState;
 
 typedef struct ModWinMenuItem {
     OS_Module* mod;
@@ -181,6 +190,7 @@ static int g_cur_tab = -1; /* 当前激活窗口在 g_app.wins 中的下标 */
 
 static void layout(void);
 static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, const wchar_t* title);
+static void tab_set_title(int idx, const wchar_t* name);
 
 static void layout_tab_pages(void)
 {
@@ -253,12 +263,12 @@ HWND os_win_create_by_type(const char* type, const wchar_t* title)
 {
     HWND h;
     if (strcmp(type, "chart") == 0) {
-        h = os_chart_create(g_app.hRight, 0, 0, 200, 150, title);
+        h = os_chart_create(g_app.hTab, 0, 0, 200, 150, title);
         if (h) add_win_item(h, 0, NULL, NULL, title);
         return h;
     }
     if (strcmp(type, "num") == 0) {
-        h = os_num_create(g_app.hRight, 0, 0, 200, 150, title);
+        h = os_num_create(g_app.hTab, 0, 0, 200, 150, title);
         if (h) add_win_item(h, 0, NULL, NULL, title);
         return h;
     }
@@ -269,7 +279,7 @@ HWND os_win_create_by_type(const char* type, const wchar_t* title)
             if (it->mod && it->wt && strcmp(it->wt->type, type) == 0) {
                 char title8[256];
                 os_wide_to_utf8_buf(title, title8, sizeof(title8));
-                h = it->mod->create_window(it->ctx, it->wt->type, g_app.hRight,
+                h = it->mod->create_window(it->ctx, it->wt->type, g_app.hTab,
                                            0, 0, 200, 150, title8);
                 if (h) add_win_item(h, 1, it->mod, it->ctx, title);
                 return h;
@@ -593,6 +603,14 @@ static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, co
     _snwprintf(wi->title, 128, L"%s", title ? title : L"");
     g_cur_tab = g_app.win_count - 1;
     os_mainwin_tile();
+    if (g_app.rename_tab[0] && g_app.win_count == 1)
+        tab_set_title(0, g_app.rename_tab); /* 测试钩子：首个窗口创建后重命名 */
+    if (g_app.shot_path[0]) {
+        wchar_t p[MAX_PATH];
+        _snwprintf(p, MAX_PATH, L"%s.%d.bmp", g_app.shot_path, g_app.win_count);
+        os_log(OS_LOG_INFO, "截图: %ls", p);
+        os_save_window_bmp(hwnd, p);
+    }
 }
 
 static void cmd_add_window(int native_chart)
@@ -602,10 +620,10 @@ static void cmd_add_window(int native_chart)
     static int chart_no = 1, num_no = 1;
     if (native_chart) {
         _snwprintf(title, 128, L"波形窗口 %d", chart_no++);
-        h = os_chart_create(g_app.hRight, 0, 0, 200, 150, title);
+        h = os_chart_create(g_app.hTab, 0, 0, 200, 150, title);
     } else {
         _snwprintf(title, 128, L"数值窗口 %d", num_no++);
-        h = os_num_create(g_app.hRight, 0, 0, 200, 150, title);
+        h = os_num_create(g_app.hTab, 0, 0, 200, 150, title);
     }
     if (h) add_win_item(h, 0, NULL, NULL, title);
 }
@@ -998,7 +1016,7 @@ static void tree_add_to_scope(void)
                     wchar_t title[128];
                     os_utf8_to_wide_buf(it->wt->display_name, title, 128);
                     os_wide_to_utf8_buf(title, title8, 128);
-                    w = it->mod->create_window(it->ctx, it->wt->type, g_app.hRight,
+                    w = it->mod->create_window(it->ctx, it->wt->type, g_app.hTab,
                                                0, 0, 200, 150, title8);
                     if (w) {
                         add_win_item(w, 1, it->mod, it->ctx, title);
@@ -1031,9 +1049,108 @@ static void tab_context_menu(void)
     SendMessageW(g_app.hTab, TCM_SETCURSEL, hit, 0);
     show_tab(hit);
     m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, IDM_TAB_RENAME, L"重命名标签");
     AppendMenuW(m, MF_STRING, IDM_TAB_CLOSE, L"关闭窗口");
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
     DestroyMenu(m);
+}
+
+/* ---------- Tab 重命名 ---------- */
+
+static LRESULT CALLBACK rename_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_CREATE: {
+        CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+        RenameState* st = cs ? (RenameState*)cs->lpCreateParams : NULL;
+        if (!st) return -1;
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)st);
+        CreateWindowW(L"STATIC", L"标签名称:", WS_CHILD | WS_VISIBLE,
+                      12, 12, 90, 22, dlg, NULL, g_app.hInst, NULL);
+        CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                      100, 10, 280, 24, dlg, (HMENU)IDD_RN_EDIT, g_app.hInst, NULL);
+        CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
+                      220, 46, 70, 26, dlg, (HMENU)IDD_RN_OK, g_app.hInst, NULL);
+        CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE,
+                      300, 46, 70, 26, dlg, (HMENU)IDD_RN_CANCEL, g_app.hInst, NULL);
+        return 0;
+    }
+    case WM_SETFOCUS:
+        SetFocus(GetDlgItem(dlg, IDD_RN_EDIT));
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDD_RN_OK: {
+            RenameState* st = (RenameState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+            if (st && st->out)
+                GetWindowTextW(GetDlgItem(dlg, IDD_RN_EDIT), st->out, st->cap);
+            DestroyWindow(dlg);
+            return 0;
+        }
+        case IDD_RN_CANCEL:
+            DestroyWindow(dlg);
+            return 0;
+        }
+        return 0;
+    case WM_DESTROY: {
+        return 0;
+    }
+    }
+    return DefWindowProcW(dlg, msg, wParam, lParam);
+}
+
+static void tab_set_title(int idx, const wchar_t* name)
+{
+    TCITEMW ti;
+    char name8[300];
+    if (idx < 0 || idx >= g_app.win_count || !name || !name[0]) return;
+    _snwprintf(g_app.wins[idx].title, 128, L"%s", name);
+    memset(&ti, 0, sizeof(ti));
+    ti.mask = TCIF_TEXT;
+    ti.pszText = g_app.wins[idx].title;
+    SendMessageW(g_app.hTab, TCM_SETITEM, idx, (LPARAM)&ti);
+    os_wide_to_utf8_buf(name, name8, sizeof(name8));
+    os_log(OS_LOG_INFO, "标签已重命名: %s", name8);
+}
+
+static void tab_rename(int idx)
+{
+    HWND dlg;
+    RenameState* st;
+    wchar_t text[160];
+    if (idx < 0 || idx >= g_app.win_count) return;
+    st = (RenameState*)calloc(1, sizeof(RenameState));
+    if (!st) return;
+    st->out = text;
+    st->cap = 160;
+    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgRename", L"重命名标签",
+                          WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                          CW_USEDEFAULT, CW_USEDEFAULT, 410, 110,
+                          g_app.hMain, NULL, g_app.hInst, st);
+    if (!dlg) { free(st); return; }
+    SetWindowTextW(GetDlgItem(dlg, IDD_RN_EDIT), g_app.wins[idx].title);
+    run_modal(dlg, g_app.hMain);
+    free(st);
+    if (text[0]) {
+        tab_set_title(idx, text);
+    }
+}
+
+static void tab_rename_hit(void)
+{
+    POINT pt;
+    int i;
+    GetCursorPos(&pt);
+    for (i = 0; i < g_app.win_count; i++) {
+        RECT r;
+        if (SendMessageW(g_app.hTab, TCM_GETITEMRECT, i, (LPARAM)&r)) {
+            MapWindowPoints(g_app.hTab, NULL, (LPPOINT)&r, 2);
+            if (PtInRect(&r, pt)) {
+                tab_rename(i);
+                return;
+            }
+        }
+    }
 }
 
 static void tree_select_all(int on)
@@ -1199,6 +1316,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 tab_context_menu();
                 return 0;
             }
+            if (h->code == NM_DBLCLK) {
+                tab_rename_hit();
+                return 0;
+            }
         }
         if (h && h->hwndFrom == g_app.hTree) {
             if (h->code == NM_RCLICK) {
@@ -1234,7 +1355,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.2.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.3.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:
@@ -1280,6 +1401,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 PostMessage(hwnd, WM_OS_WIN_CLOSED,
                             (WPARAM)g_app.wins[g_cur_tab].hwnd, 0);
             break;
+        case IDM_TAB_RENAME:
+            tab_rename(g_cur_tab);
+            break;
         case IDM_TREE_WRITE: {
             HTREEITEM h = TreeView_GetSelection(g_app.hTree);
             if (h) {
@@ -1304,7 +1428,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     os_utf8_to_wide_buf(it->wt->display_name ? it->wt->display_name : it->wt->type,
                                         title, 128);
                     os_wide_to_utf8_buf(title, title8, 128);
-                    h = it->mod->create_window(it->ctx, it->wt->type, g_app.hRight,
+                h = it->mod->create_window(it->ctx, it->wt->type, g_app.hTab,
                                                0, 0, 200, 150, title8);
                     if (h) add_win_item(h, 1, it->mod, it->ctx, title);
                 }
@@ -1360,5 +1484,11 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSDlgEdit";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = rename_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = L"OSDlgRename";
     RegisterClassW(&wc);
 }

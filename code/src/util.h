@@ -25,6 +25,8 @@ void os_log_file_auto_open(void);
 void os_log_file_open(const wchar_t* path);
 /* 崩溃处理器用：不经过 UI 回调，直接写日志文件（同步刷新） */
 void os_log_file_write_raw(const char* line);
+/* 把窗口客户区保存为 32bpp BMP（调试/截图用） */
+void os_save_window_bmp(HWND hwnd, const wchar_t* path);
 
 /* UTF-8 <-> UTF-16 转换 */
 wchar_t* os_utf8_to_wide(const char* s);

@@ -130,10 +130,9 @@ static void resolve_ids(ScopeWin* w)
 
 /* ---------------- paint ---------------- */
 
-static void scope_paint(ScopeWin* w)
+static void scope_render(ScopeWin* w, HDC hdc)
 {
-    PAINTSTRUCT ps;
-    HDC hdc, mem;
+    HDC mem;
     HBITMAP bmp, oldbmp;
     RECT rc;
     HBRUSH bg = CreateSolidBrush(RGB(18, 20, 26));
@@ -142,7 +141,6 @@ static void scope_paint(ScopeWin* w)
     double ymin = 0, ymax = 1;
     RECT plot;
 
-    hdc = BeginPaint(w->hwnd, &ps);
     GetClientRect(w->hwnd, &rc);
     mem = CreateCompatibleDC(hdc);
     bmp = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
@@ -347,6 +345,13 @@ static void scope_paint(ScopeWin* w)
     DeleteDC(mem);
     DeleteObject(bg);
     DeleteObject(gridpen);
+}
+
+static void scope_paint(ScopeWin* w)
+{
+    PAINTSTRUCT ps;
+    HDC hdc = BeginPaint(w->hwnd, &ps);
+    scope_render(w, hdc);
     EndPaint(w->hwnd, &ps);
 }
 
@@ -576,6 +581,9 @@ static LRESULT CALLBACK scope_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         if (w) scope_paint(w);
         return 0;
     }
+    case WM_PRINT:
+        if (w) scope_render(w, (HDC)wParam);
+        return 0;
     case WM_ERASEBKGND:
         return 1;
     case WM_LBUTTONDOWN:
@@ -881,7 +889,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_WINDOW,
     "scope",
-    "1.2.0",
+    "1.3.0",
     "示波器窗口模块：实时曲线、变量模糊搜索、数值写回",
     g_window_types,
     mod_init,
