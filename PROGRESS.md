@@ -25,6 +25,14 @@
   - 功能：添加变量模糊搜索对话框（fw->leaf_find）、系列管理（添加/图例选择/删除）、实时曲线绘制（双缓冲、Y 自动缩放、written 标记）、数值写回（fw->write_leaf）。
   - 全量构建 0 error/0 warning；scope_smoke 冒烟 ALL PASS；端到端验证：启动应用后发送“示波器窗口”菜单命令成功创建 OSScopeWin 子窗口。
   - Story 4.1~4.3 完成；实时曲线/写值交互待用户环境实测。
+- **checkpoint-6（2026-08-08）**：J-Link 真实目标读写实测（STM32L432K8U6，SWD @4MHz）。
+  - 修复模块连接序列（对照 pylink 实证）：ExecCommand 签名 2 参→3 参（缺 BufferSize）；接口选择改用 `JLINKARM_TIF_Select`；器件设置改为 `Device = <name>`（`SetDevice`/`SelectInterface` 在该 DLL 均为 Unknown command）。
+  - 修复 `JLINKARM_GetFirmwareString(char*, int)` 签名（原按无参绑定导致挂死）；修复 `ReadMem` 成功返回 0（非字节数）/`WriteMem` 返回写入字节数的语义。
+  - 新增 `module/jlink/tests/target_smoke.c` 硬件测试 + `tests/build_target_test.bat`，并保留 probe_connect/probe_devinfo/probe_map2/probe_emu 诊断脚本。
+  - 实测结果（ALL PASS）：
+    - 连接：成功，固件 "J-Link Pro V4 compiled Sep 22 2022 15:00:37"，CPUID=0x410CC601（Cortex-M4）。
+    - RAM 0x20000000：0x20000000–0x20001FFF（8KB）写/读/回读校验通过；0x20002000–0x20003FFF 写入不驻留/总线错误 —— **该单元实际 RAM 为 8KB，非声称的 16KB**。
+    - Flash 0x08000000：64KB 全部可读，向量表有效（SP=0x20000798、Reset=0x08002F05），已烧录固件。
 
 ## 待办（BMAD 规划产出后更新）
 
@@ -37,9 +45,11 @@
 - [x] Epic 2：J-Link 驱动模块（Story 2.1~2.4，硬件实测待用户环境）
 - [x] Epic 3：采集/记录/回放（Story 3.1~3.3，硬件实测待用户环境）
 - [x] Epic 4：scope 窗口模块（Story 4.1~4.3，交互实测待用户环境）
+- [x] J-Link 硬件实测：RAM 8KB 读写 + Flash 64KB 读取（checkpoint-6）
 
 ## 总结
 
 - 4 个 Epic / 13 个 Story 全部完成：框架可构建可启动、J-Link 驱动模块（扫描/连接/读写）、采集/CSV/回放、scope 示波器窗口模块。
 - 构建与回归：`python build.py --quiet` 0 error/0 warning，自动运行 replay_smoke + jlink_smoke + scope_smoke 全部 PASS。
 - 依赖真实硬件的验收项（连接 MCU、实时采集曲线、写值回读）留待用户环境实测。
+- 硬件实测已覆盖：连接、RAM 读写、Flash 读取；实时采集曲线/写值交互仍可在应用 UI 中实测。

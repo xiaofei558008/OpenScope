@@ -1,9 +1,7 @@
 适用于 .NET Framework MSBuild 版本 18.8.2+ce25c0108
 
   OpenScope.vcxproj -> D:\OpenScope\bin\Release\OpenScope.exe
-  scope.c
   jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
-    正在创建库 ..\..\dll\scope.lib 和对象 ..\..\dll\scope.exp
   scope.vcxproj -> D:\OpenScope\dll\scope.dll
 
 Build OK.

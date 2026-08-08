@@ -33,7 +33,7 @@ so that 采集和标定真正可用。
 ## Dev Notes
 
 - 读取返回值 >=0 视为成功字节数；JLINKARM_ReadMem/WriteMem 失败返回负值映射为 OS_ERR_TIMEOUT。
-- 真实读写依赖硬件连接（Epic 3 的采集闭环以本模块为驱动源），本机无目标板，按 API 语义实现并保持与框架采集线程契约一致。
+- **实测（2026-08-08，STM32L432K8U6）**：`JLINKARM_ReadMem` 成功返回 0（非字节数）、`JLINKARM_WriteMem` 返回写入字节数，已按此修正 mod_read/mod_write 契约。RAM 0x20000000 起 8KB 写/读/回读校验通过（0x20002000 起总线错误，实际 RAM 为 8KB）；Flash 0x08000000 起 64KB 读取通过。
 
 ### File List
 

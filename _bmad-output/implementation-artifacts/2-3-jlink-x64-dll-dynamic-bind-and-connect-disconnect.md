@@ -34,7 +34,7 @@ so that MCU 内存可被访问。
 ## Dev Notes
 
 - 本机 J-Link PRO 已接入 USB：`JLINKARM_EMU_GetList` 返回 1 台设备，DLL v96600、HW v40000。
-- 真实连接（Connect 到 MCU）依赖目标板与设备型号，需用户环境实测；模块已按 SWD/JTAG + 速度 + 设备型号 + 选择仿真器实现完整路径。
+- **实测（2026-08-08，STM32L432K8U6）**：SWD @4MHz 连接成功。修复 4 个真实问题：ExecCommand 需 3 参（缺 BufferSize）；接口选择必须用 `JLINKARM_TIF_Select`；器件设置用 `Device = <name>`（`SetDevice`/`SelectInterface` 在本 DLL 返回 Unknown command）；`JLINKARM_GetFirmwareString(char*,int)` 按无参绑定会挂死。
 
 ### File List
 

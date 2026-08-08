@@ -18,9 +18,10 @@ typedef struct OS_JLinkApi {
     int  (*open)(void* pParam);
     void (*close)(void);
     int  (*is_connected)(void);
-    int  (*exec_cmd)(const char* cmd, char* result);
+    int  (*exec_cmd)(const char* cmd, char* result, int result_size);
     /* 连接/控制 */
     int  (*connect)(void);
+    int  (*tif_select)(int tif);
     int  (*halt)(void);
     int  (*go)(void);
     int  (*reset)(void);
@@ -31,7 +32,7 @@ typedef struct OS_JLinkApi {
     /* 信息 */
     int  (*get_dll_version)(void);
     int  (*get_hw_version)(void);
-    char* (*get_fw_string)(void);
+    void (*get_fw_string)(char* buf, int bufsize);
     int  (*get_emu_caps)(void);
     /* 仿真器枚举 */
     uint32_t (*emu_get_num_devices)(void);

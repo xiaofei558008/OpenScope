@@ -103,6 +103,7 @@ int os_jlink_bind(OS_JLinkApi* api, char* err, int err_len)
     BIND(is_connected, "IsConnected");
     BIND(exec_cmd, "ExecCommand");
     BIND(connect, "Connect");
+    BIND(tif_select, "TIF_Select");
     BIND(halt, "Halt");
     BIND(go, "Go");
     BIND(reset, "Reset");
@@ -118,7 +119,7 @@ int os_jlink_bind(OS_JLinkApi* api, char* err, int err_len)
     BIND(emu_select_by_usbsn, "EMU_SelectByUSBSN");
 #undef BIND
     /* 可选导出 */
-    api->get_fw_string = (char* (*)(void))GetProcAddress(h, "JLINKARM_GetFirmwareString");
+    api->get_fw_string = (void (*)(char*, int))GetProcAddress(h, "JLINKARM_GetFirmwareString");
     return OS_ERR_OK;
 }
 
@@ -147,33 +148,23 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
         if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Open 失败");
         return OS_ERR_FAIL;
     }
-    /* 选择仿真器（按序号，若有） */
     if (cfg->serial[0]) {
         unsigned long sn = strtoul(cfg->serial, NULL, 10);
-        if (a->emu_select_by_usbsn((uint32_t)sn) != 0) {
-            _snprintf(cmd, sizeof(cmd), "SelectEmuBySN = %s", cfg->serial);
-            a->exec_cmd(cmd, res);
-        }
+        if (a->emu_select_by_usbsn) a->emu_select_by_usbsn((uint32_t)sn);
     } else if (cfg->probe_index >= 0) {
-        if (a->emu_select_by_index(cfg->probe_index) != 0) {
-            _snprintf(cmd, sizeof(cmd), "SelectEmuByIndex = %d", cfg->probe_index);
-            a->exec_cmd(cmd, res);
-        }
+        if (a->emu_select_by_index) a->emu_select_by_index(cfg->probe_index);
     }
-    /* 接口 */
-    _snprintf(cmd, sizeof(cmd), "SelectInterface = %s", cfg->iface == OS_IF_JTAG ? "JTAG" : "SWD");
-    a->exec_cmd(cmd, res);
-    /* 目标器件 */
+    if (a->tif_select) a->tif_select(cfg->iface == OS_IF_JTAG ? 0 : 1);
     if (cfg->device[0]) {
-        _snprintf(cmd, sizeof(cmd), "SetDevice = %s", cfg->device);
-        a->exec_cmd(cmd, res);
+        _snprintf(cmd, sizeof(cmd), "Device = %s", cfg->device);
+        a->exec_cmd(cmd, res, sizeof(res));
     }
     /* 时钟速度 */
     if (cfg->speed_khz > 0) {
         a->set_speed(cfg->speed_khz);
     }
-    /* 连接 */
-    rc = a->connect();
+    rc = a->is_connected();
+    if (!rc) rc = a->connect();
     if (rc != 0) {
         if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Connect 失败 (rc=%d)，请检查目标板/电源/接线", rc);
         a->close();
@@ -187,19 +178,17 @@ static void jlink_refresh_info(void)
 {
     OS_JLinkApi* a = &g_ctx.api;
     OS_DriverInfo* d = &g_ctx.info;
-    char tmp[64];
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
     _snprintf(d->version, sizeof(d->version), "%s", "0.1.0");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
-        const char* s = a->get_fw_string();
-        if (s) {
-            _snprintf(tmp, sizeof(tmp), "%s", s);
-            _snprintf(d->emulator, sizeof(d->emulator), "%s", tmp);
-            d->fw_version = atoi(tmp);
-        }
+        char fwbuf[128];
+        memset(fwbuf, 0, sizeof(fwbuf));
+        a->get_fw_string(fwbuf, sizeof(fwbuf));
+        _snprintf(d->emulator, sizeof(d->emulator), "%s", fwbuf);
+        d->fw_version = atoi(fwbuf);
     } else {
         _snprintf(d->emulator, sizeof(d->emulator), "%s", "未连接");
     }
@@ -280,7 +269,8 @@ static int mod_read(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
-    return r >= 0 ? r : OS_ERR_TIMEOUT;
+    /* JLINKARM_ReadMem 成功返回 0（数据已写入缓冲区），失败返回负值 */
+    return r >= 0 ? (int)req->size : OS_ERR_TIMEOUT;
 }
 
 static int mod_write(OS_MemReq* req)
@@ -292,7 +282,8 @@ static int mod_write(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     r = a->write_mem((uint32_t)req->address, req->size, (const uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
-    return r >= 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
+    /* JLINKARM_WriteMem 成功返回写入字节数，须与请求大小一致 */
+    return r == (int)req->size ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
 
 static int mod_command(void* ctx, int cmd, void* in, void* out)
