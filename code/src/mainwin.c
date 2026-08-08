@@ -108,13 +108,12 @@ void os_mainwin_append_log(int level, const wchar_t* line)
 void os_fw_log(int level, const char* fmt, ...)
 {
     char buf[1024];
-    wchar_t w[1024];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    os_utf8_to_wide_buf(buf, w, 1024);
-    os_mainwin_append_log(level, w);
+    /* 模块日志统一走 os_log：文件 + UI 双通道 */
+    os_log(level, "%s", buf);
 }
 
 void os_fw_post(UINT msg, WPARAM w, LPARAM l)
@@ -969,7 +968,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.0.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.0.1\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:

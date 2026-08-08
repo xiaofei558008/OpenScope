@@ -48,10 +48,13 @@ OS_ConnectCfg* os_jlink_cfg(void) { return &g_ctx.cfg; }
 int os_jlink_scan_devices(OS_DeviceInfo* items, int cap)
 {
     OS_ScanReq req;
+    int rc;
     req.items = items;
     req.capacity = cap;
     req.count = 0;
-    return mod_scan(&req);
+    rc = mod_scan(&req);
+    /* 成功时返回设备数（此前误返回 OS_ERR_OK=0，导致对话框永远“没有发现设备”） */
+    return rc == OS_ERR_OK ? req.count : rc;
 }
 
 int os_jlink_connect_now(char* err, int errlen)
@@ -63,6 +66,8 @@ int os_jlink_disconnect_now(void)
 {
     return mod_disconnect();
 }
+
+const OS_Framework* os_jlink_fw(void) { return g_fw; }
 
 /* ---------------- DLL 路径与绑定 ---------------- */
 
@@ -140,31 +145,57 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
     char res[256];
     int rc;
     if (errbuf && errlen > 0) errbuf[0] = 0;
+    if (g_fw) {
+        g_fw->log(OS_LOG_INFO,
+                  "J-Link 连接: device='%s' iface=%s speed_khz=%d probe_idx=%d serial='%s'",
+                  cfg->device[0] ? cfg->device : "(空)",
+                  cfg->iface == OS_IF_JTAG ? "JTAG" : "SWD",
+                  cfg->speed_khz, cfg->probe_index,
+                  cfg->serial[0] ? cfg->serial : "(空)");
+    }
     if (!a->h) {
         if (errbuf) _snprintf(errbuf, errlen, "JLink_x64.dll 未加载");
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接: JLink_x64.dll 未加载");
         return OS_ERR_FAIL;
     }
-    if (a->open(NULL) != 0) {
-        if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Open 失败");
+    rc = a->open(NULL);
+    if (rc != 0) {
+        if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Open 失败 (rc=%d)", rc);
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接: JLINKARM_Open 失败 rc=%d", rc);
         return OS_ERR_FAIL;
     }
     if (cfg->serial[0]) {
         unsigned long sn = strtoul(cfg->serial, NULL, 10);
-        if (a->emu_select_by_usbsn) a->emu_select_by_usbsn((uint32_t)sn);
+        if (a->emu_select_by_usbsn) {
+            rc = a->emu_select_by_usbsn((uint32_t)sn);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByUSBSN(%lu) rc=%d", sn, rc);
+        }
     } else if (cfg->probe_index >= 0) {
-        if (a->emu_select_by_index) a->emu_select_by_index(cfg->probe_index);
+        if (a->emu_select_by_index) {
+            rc = a->emu_select_by_index(cfg->probe_index);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByIndex(%d) rc=%d",
+                                cfg->probe_index, rc);
+        }
     }
-    if (a->tif_select) a->tif_select(cfg->iface == OS_IF_JTAG ? 0 : 1);
+    if (a->tif_select) {
+        rc = a->tif_select(cfg->iface == OS_IF_JTAG ? 0 : 1);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: TIF_Select(%s) rc=%d",
+                            cfg->iface == OS_IF_JTAG ? "JTAG" : "SWD", rc);
+    }
     if (cfg->device[0]) {
         _snprintf(cmd, sizeof(cmd), "Device = %s", cfg->device);
-        a->exec_cmd(cmd, res, sizeof(res));
+        memset(res, 0, sizeof(res));
+        rc = a->exec_cmd(cmd, res, sizeof(res));
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: '%s' rc=%d -> %s", cmd, rc, res[0] ? res : "(空)");
     }
     /* 时钟速度 */
     if (cfg->speed_khz > 0) {
-        a->set_speed(cfg->speed_khz);
+        rc = a->set_speed(cfg->speed_khz);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: SetSpeed(%d) rc=%d", cfg->speed_khz, rc);
     }
     rc = a->is_connected();
     if (!rc) rc = a->connect();
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: Connect rc=%d", rc);
     if (rc != 0) {
         if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Connect 失败 (rc=%d)，请检查目标板/电源/接线", rc);
         a->close();
@@ -180,7 +211,7 @@ static void jlink_refresh_info(void)
     OS_DriverInfo* d = &g_ctx.info;
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
-    _snprintf(d->version, sizeof(d->version), "%s", "1.0.0");
+    _snprintf(d->version, sizeof(d->version), "%s", "1.0.1");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
@@ -237,8 +268,18 @@ static int mod_scan(OS_ScanReq* req)
 static int mod_connect_ex(char* err, int errlen)
 {
     char ebuf[256];
+    int rc;
     if (g_ctx.connected) return OS_ERR_OK; /* 已在对话框内连接 */
-    int rc = jlink_do_connect(&g_ctx.cfg, ebuf, sizeof(ebuf));
+    rc = jlink_do_connect(&g_ctx.cfg, ebuf, sizeof(ebuf));
+    if (rc != OS_ERR_OK && g_ctx.cfg.probe_index >= 0) {
+        /* EMU_SelectByIndex 在部分旧固件上返回 -1，去掉显式选择后自动重试一次 */
+        OS_ConnectCfg saved = g_ctx.cfg;
+        g_ctx.cfg.probe_index = -1;
+        g_ctx.cfg.serial[0] = 0;
+        if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 连接: 显式选择仿真器失败，改用自动选择重试");
+        rc = jlink_do_connect(&g_ctx.cfg, ebuf, sizeof(ebuf));
+        if (rc != OS_ERR_OK) g_ctx.cfg = saved;
+    }
     if (rc == OS_ERR_OK) {
         jlink_refresh_info();
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已连接: %s", g_ctx.info.emulator);
@@ -360,7 +401,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "jlink",
-    "1.0.0",
+    "1.0.1",
     "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
     NULL,
     mod_init,

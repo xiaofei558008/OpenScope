@@ -4,12 +4,59 @@
 #include "mainwin.h"
 #include "module_mgr.h"
 #include "vartree.h"
+#include "util.h"
 #include <string.h>
 #include <commctrl.h>
 
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 OS_App g_app;
+
+/* 崩溃处理器：异常后把代码与栈写入 openscope.log 再终止，避免闪退无痕 */
+typedef USHORT(WINAPI* os_capture_stack_fn)(ULONG, ULONG, PVOID*, PULONG);
+
+static void crash_write(const char* fmt, ...)
+{
+    char line[1024];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    os_log_file_write_raw(line);
+}
+
+static LONG WINAPI os_crash_filter(EXCEPTION_POINTERS* ep)
+{
+    char ts[40];
+    HMODULE hk = GetModuleHandleA("kernel32.dll");
+    os_capture_stack_fn cap = hk ? (os_capture_stack_fn)GetProcAddress(hk, "CaptureStackBackTrace") : NULL;
+    os_time_iso(os_time_us(), ts, sizeof(ts));
+    crash_write("%s [FATAL] unhandled exception code=0x%08X at 0x%p",
+                ts, ep ? ep->ExceptionRecord->ExceptionCode : 0,
+                ep ? ep->ExceptionRecord->ExceptionAddress : NULL);
+    if (cap) {
+        PVOID frames[32];
+        USHORT n = cap(0, 32, frames, NULL);
+        USHORT i;
+        for (i = 0; i < n; i++) {
+            HMODULE hmod = NULL;
+            char mod[260] = "?";
+            DWORD64 off = 0;
+            if (frames[i] &&
+                GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                   (LPCSTR)frames[i], &hmod) && hmod) {
+                GetModuleFileNameA(hmod, mod, sizeof(mod));
+                off = (DWORD64)((BYTE*)frames[i] - (BYTE*)hmod);
+            }
+            crash_write("%s [FATAL]   #%02u 0x%p  %s+0x%llX",
+                        ts, (unsigned)i, frames[i], mod, (unsigned long long)off);
+        }
+    }
+    MessageBoxW(NULL, L"OpenScope 发生未处理异常，详细信息已写入日志文件 openscope.log。",
+                L"OpenScope 崩溃", MB_OK | MB_ICONERROR);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
 
 static void init_fw(void)
 {
@@ -39,6 +86,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_app.log_h = 170;
     g_app.poll_interval_ms = 20;
     InitializeCriticalSection(&g_app.ring_cs);
+    os_log_file_auto_open();
+    SetUnhandledExceptionFilter(os_crash_filter);
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.0.1)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -53,6 +103,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     if (!hMain) return 1;
     os_log_set(os_mainwin_append_log);
     os_modmgr_load();
+    os_mainwin_update_buttons(); /* 模块加载后启用“连接”按钮 */
     os_mainwin_rebuild_window_menu();
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);

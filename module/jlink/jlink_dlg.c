@@ -24,6 +24,8 @@
 #define DLG_W 430
 #define DLG_H 330
 
+static const int g_speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
+
 typedef struct DlgData {
     int probe_index;
     int iface;
@@ -83,14 +85,21 @@ static void dlg_set_status(HWND dlg, const wchar_t* text)
     if (h) SetWindowTextW(h, text);
 }
 
+#define DLG_LOG(lvl, ...) do { \
+        const OS_Framework* _fw = os_jlink_fw(); \
+        if (_fw && _fw->log) _fw->log(lvl, __VA_ARGS__); \
+    } while (0)
+
 static void dlg_scan(HWND dlg)
 {
     OS_DeviceInfo items[16];
     HWND list;
     int n, i;
     list = GetDlgItem(dlg, IDC_LIST);
+    DLG_LOG(OS_LOG_DEBUG, "对话框扫描: dlg=0x%p list=0x%p", (void*)dlg, (void*)list);
     SendMessageW(list, LB_RESETCONTENT, 0, 0);
     n = os_jlink_scan_devices(items, 16);
+    DLG_LOG(OS_LOG_DEBUG, "对话框扫描: os_jlink_scan_devices -> %d", n);
     if (n < 0) {
         dlg_set_status(dlg, L"扫描失败：JLink_x64.dll 未加载");
         return;
@@ -107,6 +116,7 @@ static void dlg_scan(HWND dlg)
                    items[i].name, items[i].serial);
         SendMessageW(list, LB_ADDSTRING, 0, (LPARAM)line);
     }
+    DLG_LOG(OS_LOG_DEBUG, "对话框扫描: 列表加入 %d 项", n);
     SendMessageW(list, LB_SETCURSEL, 0, 0);
     {
         wchar_t st[128];
@@ -126,9 +136,16 @@ static void dlg_connect(HWND dlg, DlgData* d)
     d->probe_index = (sel == LB_ERR) ? -1 : (int)sel;
     d->iface = (int)SendMessageW(GetDlgItem(dlg, IDC_IFACE), CB_GETCURSEL, 0, 0);
     if (d->iface != OS_IF_JTAG) d->iface = OS_IF_SWD;
-    d->speed_khz = (int)SendMessageW(GetDlgItem(dlg, IDC_SPEED), CB_GETCURSEL, 0, 0);
+    {
+        /* 下拉框存的是索引，须映射回真实 kHz 值 */
+        LRESULT sidx = SendMessageW(GetDlgItem(dlg, IDC_SPEED), CB_GETCURSEL, 0, 0);
+        if (sidx < 0 || sidx >= (LRESULT)(sizeof(g_speeds) / sizeof(g_speeds[0]))) sidx = 0;
+        d->speed_khz = g_speeds[sidx];
+    }
     GetDlgItemTextW(dlg, IDC_DEVICE, wbuf, 256);
     os_w2u(wbuf, d->device, sizeof(d->device));
+    DLG_LOG(OS_LOG_DEBUG, "对话框连接: sel=%d iface=%d speed=%d device='%s'",
+            (int)sel, d->iface, d->speed_khz, d->device);
 
     cfg->iface = d->iface;
     cfg->speed_khz = d->speed_khz;
@@ -152,7 +169,6 @@ static void dlg_init(HWND dlg)
     HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     HWND h;
     const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
-    const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
     int i;
     OS_ConnectCfg* cfg = os_jlink_cfg();
 
@@ -167,8 +183,8 @@ static void dlg_init(HWND dlg)
                  CBS_DROPDOWNLIST | WS_TABSTOP);
     for (i = 0; i < 7; i++) {
         wchar_t buf[32];
-        if (speeds[i] == 0) _snwprintf(buf, 32, L"0 (自动)");
-        else _snwprintf(buf, 32, L"%d", speeds[i]);
+        if (g_speeds[i] == 0) _snwprintf(buf, 32, L"0 (自动)");
+        else _snwprintf(buf, 32, L"%d", g_speeds[i]);
         SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)buf);
     }
     SendMessageW(h, CB_SETCURSEL, 5, 0); /* 默认 4000 */

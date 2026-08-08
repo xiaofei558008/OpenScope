@@ -19,6 +19,7 @@ dll/*.exp
 dll/*.lib
 tests/bin/
 tests/replay_sample.csv
+tests/data.csv
 
 # packaging / toolchain (local only)
 tools/

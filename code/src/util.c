@@ -1,4 +1,5 @@
 #include "util.h"
+#include "module_api.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -6,17 +7,88 @@
 #include <time.h>
 
 static void (*g_log_fn)(int level, const wchar_t* line);
+static FILE* g_log_file;
+static CRITICAL_SECTION g_log_cs;
+static int g_log_cs_ok;
 
 void os_log_set(void (*fn)(int level, const wchar_t* line)) { g_log_fn = fn; }
+
+void os_log_file_open(const wchar_t* path)
+{
+    long pos;
+    if (g_log_file) {
+        fclose(g_log_file);
+        g_log_file = NULL;
+    }
+    if (!path || !path[0]) return;
+    g_log_file = _wfopen(path, L"ab");
+    if (!g_log_file) return;
+    fseek(g_log_file, 0, SEEK_END);
+    pos = ftell(g_log_file);
+    if (pos == 0) fputs("\xEF\xBB\xBF", g_log_file);
+    fflush(g_log_file);
+}
+
+void os_log_file_auto_open(void)
+{
+    wchar_t path[MAX_PATH];
+    wchar_t exe[MAX_PATH];
+    wchar_t* slash;
+    FILE* f;
+    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    if (n && (slash = wcsrchr(exe, L'\\'))) {
+        *slash = 0;
+        _snwprintf(path, MAX_PATH, L"%s\\openscope.log", exe);
+        f = _wfopen(path, L"ab");
+        if (f) {
+            fclose(f);
+            os_log_file_open(path);
+            return;
+        }
+    }
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", exe, MAX_PATH) > 0) {
+        _snwprintf(path, MAX_PATH, L"%s\\OpenScope", exe);
+        CreateDirectoryW(path, NULL);
+        _snwprintf(path, MAX_PATH, L"%s\\OpenScope\\openscope.log", exe);
+        os_log_file_open(path);
+    }
+}
+
+void os_log_file_write_raw(const char* line)
+{
+    if (!g_log_cs_ok) {
+        InitializeCriticalSection(&g_log_cs);
+        g_log_cs_ok = 1;
+    }
+    EnterCriticalSection(&g_log_cs);
+    if (g_log_file && line) {
+        fputs(line, g_log_file);
+        fputc('\n', g_log_file);
+        fflush(g_log_file);
+    }
+    LeaveCriticalSection(&g_log_cs);
+}
 
 void os_log(int level, const char* fmt, ...)
 {
     char buf[1024];
     wchar_t wbuf[1024];
+    char line[1152];
+    char ts[40];
+    const char* lv = "INFO";
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
+    os_time_iso(os_time_us(), ts, sizeof(ts));
+    switch (level) {
+    case OS_LOG_WARN: lv = "WARN"; break;
+    case OS_LOG_ERROR: lv = "ERROR"; break;
+    case OS_LOG_DEBUG: lv = "DEBUG"; break;
+    default: break;
+    }
+    _snprintf(line, sizeof(line), "%s [%s] %s", ts, lv, buf);
+    os_log_file_write_raw(line);
     os_utf8_to_wide_buf(buf, wbuf, 1024);
     OutputDebugStringW(wbuf);
     OutputDebugStringW(L"\n");

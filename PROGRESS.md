@@ -47,6 +47,12 @@
   - 打包：Inno Setup 6.7.3 静默安装到 `tools\innosetup`（gitignore，不入库）；新增 `packaging/openscope.iss` + `packaging/make_setup.py`（版本号以 version.rc 为唯一来源并校验一致）+ `packaging/make_icon.py`（assets/openscope.ico）。
   - 产物：`dist/OpenScope-Setup-1.0.0.exe`（10.3 MB，x64，安装到 Program Files\OpenScope，含 exe + dll\ 三模块 + 开始菜单/桌面快捷方式）。
   - 验证全通过：安装包版本信息 1.0.0.0；静默安装布局正确；安装后 exe 版本 1.0.0.0 且启动冒烟 OK；卸载器静默卸载成功、目录清理干净。
+- **checkpoint-10（2026-08-08）**：修复 J-Link 对话框“没有发现设备/选择 STM32L432KB 闪退”，新增文件日志 + 崩溃处理器（1.0.1 修复版）。
+  - 日志：此前只有内存 UI 日志，闪退即丢。新增 `openscope.log` 文件日志（exe 目录，写不进去回退 `%LOCALAPPDATA%\OpenScope`），时间戳+级别+同步刷新；`SetUnhandledExceptionFilter` 崩溃处理器记录异常码/地址/栈（模块+偏移）后弹窗终止。
+  - 根因（UI 驱动 + 日志复现定位）：`os_jlink_scan_devices` 误返回 `mod_scan` 错误码 `OS_ERR_OK(0)` 而非设备数 → 对话框永远走“没有发现 JLink 设备”分支（但模块日志显示“发现 1 个设备”），列表为空、状态错乱，与该用户报告完全吻合；修复为成功时返回 `req.count`。
+  - 顺带修复：速度下拉框传的是索引而非 kHz（默认 4000 实际下发 5）；模块加载后“连接”按钮未重新启用（一直禁用）；`EMU_SelectByIndex` 在旧固件返回 -1 导致偶发 `Connect rc=-257`，增加去掉显式选择自动重试一次。
+  - 验证：新增 `module/jlink/tests/ui_connect_drive.ps1`（真实 UI 驱动：打开对话框→输入器件名→刷新 5 次→连接→观察进程/弹窗）。开发版与安装版均验证：连续扫描一致（发现 1 个、列表 1 项、状态正确），STM32L432KB 连接 rc=0 成功，无 FATAL、无闪退。
+  - 版本升 1.0.1：version.rc/About/模块/安装包同步，重新打包 `dist/OpenScope-Setup-1.0.1.exe`，静默安装验证版本 1.0.1.0 + 连接流程通过。
 
 ## 待办（BMAD 规划产出后更新）
 

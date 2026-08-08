@@ -72,5 +72,7 @@ OS_ConnectCfg* os_jlink_cfg(void);
 int  os_jlink_scan_devices(OS_DeviceInfo* items, int cap);
 int  os_jlink_connect_now(char* err, int errlen);
 int  os_jlink_disconnect_now(void);
+/* 框架回调（对话框用于日志） */
+const OS_Framework* os_jlink_fw(void);
 
 #endif
