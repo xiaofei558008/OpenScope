@@ -50,8 +50,8 @@ development_status:
   3-3-offline-replay: done
   epic-3-retrospective: optional
 
-  epic-4: backlog
-  4-1-scope-dll-window-module-skeleton: backlog
-  4-2-variable-fuzzy-search-and-series-management: backlog
-  4-3-realtime-curve-and-value-writeback: backlog
+  epic-4: done
+  4-1-scope-dll-window-module-skeleton: done
+  4-2-variable-fuzzy-search-and-series-management: done
+  4-3-realtime-curve-and-value-writeback: done
   epic-4-retrospective: optional

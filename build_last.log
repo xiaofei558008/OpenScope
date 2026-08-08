@@ -1,13 +1,10 @@
 适用于 .NET Framework MSBuild 版本 18.8.2+ce25c0108
 
-  chartwin.c
-  datalog.c
-  datasrv.c
-  main.c
-  mainwin.c
-  numwin.c
-  jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
   OpenScope.vcxproj -> D:\OpenScope\bin\Release\OpenScope.exe
+  scope.c
+  jlink.vcxproj -> D:\OpenScope\dll\jlink.dll
+    正在创建库 ..\..\dll\scope.lib 和对象 ..\..\dll\scope.exp
+  scope.vcxproj -> D:\OpenScope\dll\scope.dll
 
 Build OK.
   Framework : bin\Release\OpenScope.exe
@@ -18,6 +15,7 @@ replay_smoke.c
 datalog.c
 正在生成代码...
 jlink_smoke.c
+scope_smoke.c
 Running replay smoke...
 PASS replay_start rejects missing file
 PASS acq_state stays stopped after failed start
@@ -43,4 +41,15 @@ scan rc=0 count=1
   dev[0] sn=174504925 name=J-Link PRO
 is_connected rc=0 value=0
 PASS
+Running scope smoke...
+PASS module api version
+PASS capabilities include OS_CAP_WINDOW
+PASS module name is scope
+PASS window type scope.bar advertised
+PASS init returns OK
+PASS parent window created
+PASS create_window returns HWND
+PASS unknown window type rejected
+PASS on_samples/on_reload no-crash
+ALL PASS
 Tests OK.

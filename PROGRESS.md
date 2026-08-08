@@ -20,6 +20,11 @@
   - 清理 6 个编译警告，恢复 0 error/0 warning。
   - 新增 tests/replay_smoke.c（14 项断言 ALL PASS）+ tests/build_tests.bat，接入 build.bat 每次构建自动回归（replay_smoke + jlink_smoke 均 PASS）。
   - Story 3.1~3.3 完成；真实采集/记录依赖硬件，待用户环境实测。
+- **checkpoint-5（2026-08-08）**：Epic 4 完成（scope.dll 窗口模块）。
+  - 新建 module/scope（scope.c + scope.vcxproj）：窗口类型 `scope.bar`（示波器窗口），capabilities=OS_CAP_WINDOW。
+  - 功能：添加变量模糊搜索对话框（fw->leaf_find）、系列管理（添加/图例选择/删除）、实时曲线绘制（双缓冲、Y 自动缩放、written 标记）、数值写回（fw->write_leaf）。
+  - 全量构建 0 error/0 warning；scope_smoke 冒烟 ALL PASS；端到端验证：启动应用后发送“示波器窗口”菜单命令成功创建 OSScopeWin 子窗口。
+  - Story 4.1~4.3 完成；实时曲线/写值交互待用户环境实测。
 
 ## 待办（BMAD 规划产出后更新）
 
@@ -31,4 +36,10 @@
 - [x] Epic 1：修复框架构建（Story 1.1/1.2/1.3）
 - [x] Epic 2：J-Link 驱动模块（Story 2.1~2.4，硬件实测待用户环境）
 - [x] Epic 3：采集/记录/回放（Story 3.1~3.3，硬件实测待用户环境）
-- [ ] Epic 4：scope 窗口模块
+- [x] Epic 4：scope 窗口模块（Story 4.1~4.3，交互实测待用户环境）
+
+## 总结
+
+- 4 个 Epic / 13 个 Story 全部完成：框架可构建可启动、J-Link 驱动模块（扫描/连接/读写）、采集/CSV/回放、scope 示波器窗口模块。
+- 构建与回归：`python build.py --quiet` 0 error/0 warning，自动运行 replay_smoke + jlink_smoke + scope_smoke 全部 PASS。
+- 依赖真实硬件的验收项（连接 MCU、实时采集曲线、写值回读）留待用户环境实测。

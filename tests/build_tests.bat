@@ -21,6 +21,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src module\scope\tests\scope_smoke.c ^
+    /Fe:tests\bin\scope_smoke.exe /link user32.lib
+if errorlevel 1 (
+  echo [ERROR] scope_smoke build failed
+  exit /b 1
+)
+
 echo Running replay smoke...
 tests\bin\replay_smoke.exe
 if errorlevel 1 (
@@ -32,6 +39,13 @@ echo Running jlink smoke...
 tests\bin\jlink_smoke.exe
 if errorlevel 1 (
   echo [ERROR] jlink_smoke FAILED
+  exit /b 1
+)
+
+echo Running scope smoke...
+tests\bin\scope_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] scope_smoke FAILED
   exit /b 1
 )
 
