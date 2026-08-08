@@ -81,19 +81,37 @@ void os_chart_add_var(HWND hwnd, int leaf_id)
     cw->series[cw->series_count].leaf_id = leaf_id;
     cw->series[cw->series_count].color = g_pal[cw->series_count % 8];
     cw->series_count++;
+    os_log(OS_LOG_DEBUG, "波形窗口添加变量: id=%d", leaf_id);
     InvalidateRect(hwnd, NULL, TRUE);
+}
+
+int os_chart_is(HWND hwnd)
+{
+    OS_ChartWin* cw = cw_from_hwnd(hwnd);
+    return cw ? 1 : 0;
+}
+
+static void fmt_time(double sec, wchar_t* out, int outlen)
+{
+    if (sec >= 60.0) _snwprintf(out, outlen, L"%dm%02ds", (int)(sec / 60.0), (int)sec % 60);
+    else if (sec >= 1.0) _snwprintf(out, outlen, L"%.1fs", sec);
+    else if (sec >= 0.001) _snwprintf(out, outlen, L"%.0fms", sec * 1000.0);
+    else _snwprintf(out, outlen, L"0");
 }
 
 static void chart_draw(OS_ChartWin* cw, HDC hdc)
 {
     RECT rc, plot;
-    int th = 26, i, j;
+    int th = 26, lw = 56, xh = 18, i, j;
     double ymin = 1e300, ymax = -1e300;
     HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     wchar_t buf[320];
     GetClientRect(cw->hwnd, &rc);
     plot = rc;
     plot.top += th;
+    plot.left += lw;
+    plot.bottom -= xh;
+    plot.right -= 6;
     /* 标题栏 */
     {
         HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
@@ -138,7 +156,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         HPEN old = (HPEN)SelectObject(hdc, pen);
         int nx = 10, ny = 8;
         for (i = 1; i < nx; i++) {
-            int x = plot.left + plot.right * i / nx;
+            int x = plot.left + (plot.right - plot.left) * i / nx;
             MoveToEx(hdc, x, plot.top, NULL);
             LineTo(hdc, x, plot.bottom);
         }
@@ -167,6 +185,38 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
             DrawTextW(hdc, wtxt, -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         }
     }
+    /* 时间轴（底部） */
+    {
+        int64_t t0 = 0, t1 = 0;
+        int have_t = 0, nvis = 0;
+        RECT r;
+        for (i = 0; i < cw->series_count; i++) {
+            OS_Series* sr = &cw->series[i];
+            int start = sr->count > cw->npoints ? sr->count - cw->npoints : 0;
+            for (j = start; j < sr->count; j++) {
+                int idx = (sr->head - sr->count + j) % OS_CHART_HIST;
+                if (idx < 0) idx += OS_CHART_HIST;
+                nvis++;
+                if (sr->ts[idx] && sr->ts[idx] != -1) {
+                    if (!have_t) { t0 = t1 = sr->ts[idx]; have_t = 1; }
+                    if (sr->ts[idx] < t0) t0 = sr->ts[idx];
+                    if (sr->ts[idx] > t1) t1 = sr->ts[idx];
+                }
+            }
+        }
+        if (!have_t) { t0 = 0; t1 = (int64_t)nvis; }
+        SetTextColor(hdc, RGB(150, 150, 160));
+        for (i = 0; i <= 4; i++) {
+            int x = plot.left + (plot.right - plot.left) * i / 4;
+            double sec = have_t ? (double)(t1 - t0) / 1e6 * i / 4.0
+                                : (double)nvis * i / 4.0;
+            wchar_t wt[64];
+            fmt_time(sec, wt, 64);
+            r.left = x - 40; r.top = plot.bottom + 1;
+            r.right = x + 40; r.bottom = rc.bottom - 1;
+            DrawTextW(hdc, wt, -1, &r, DT_CENTER | DT_TOP | DT_SINGLELINE);
+        }
+    }
     /* 曲线 */
     for (i = 0; i < cw->series_count; i++) {
         OS_Series* sr = &cw->series[i];
@@ -191,6 +241,19 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         }
         SelectObject(hdc, old);
         DeleteObject(pen);
+    }
+    /* 无数据提示 */
+    {
+        int total = 0;
+        wchar_t wt[128];
+        RECT r;
+        for (i = 0; i < cw->series_count; i++) total += cw->series[i].count;
+        if (total == 0 && cw->series_count > 0) {
+            SetTextColor(hdc, RGB(130, 140, 155));
+            _snwprintf(wt, 128, L"等待采集数据…（请连接 MCU 并开始采集）");
+            r = plot;
+            DrawTextW(hdc, wt, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
     }
     /* 图例 */
     {
@@ -256,7 +319,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             RECT rc;
             GetClientRect(hwnd, &rc);
             if (x >= rc.right - 22 && (short)HIWORD(lParam) < 26) {
-                PostMessage(GetParent(hwnd), WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
+                PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
                 return 0;
             }
         }
@@ -302,7 +365,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             }
             break;
         case MENU_CHART_CLOSE:
-            PostMessage(GetParent(hwnd), WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
+            PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
             break;
         }
         return 0;

@@ -185,6 +185,56 @@ int os_vartree_find_by_name(const char* name)
     return -1;
 }
 
+static int tree_select_recursive(HWND tree, HTREEITEM h, const wchar_t* target)
+{
+    wchar_t wtext[420];
+    TVITEMW it;
+    HTREEITEM child;
+    memset(&it, 0, sizeof(it));
+    it.mask = TVIF_TEXT | TVIF_HANDLE;
+    it.hItem = h;
+    it.pszText = wtext;
+    it.cchTextMax = 420;
+    if (SendMessageW(tree, TVM_GETITEMW, 0, (LPARAM)&it) && wtext[0]) {
+        /* 前缀匹配：叶文本 = "名  @地址" 或 "名  @地址  [bit x:y]" */
+        if (wcsncmp(wtext, target, wcslen(target)) == 0 &&
+            (wtext[wcslen(target)] == 0 || wtext[wcslen(target)] == L' ')) {
+            SendMessageW(tree, TVM_SELECTITEM, TVGN_CARET, (LPARAM)h);
+            return 1;
+        }
+    }
+    child = (HTREEITEM)SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD, (LPARAM)h);
+    while (child) {
+        if (tree_select_recursive(tree, child, target)) return 1;
+        child = (HTREEITEM)SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)child);
+    }
+    return 0;
+}
+
+int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name)
+{
+    char name[512];
+    int id;
+    const OS_Leaf* L;
+    wchar_t target[600];
+    HTREEITEM h;
+    if (!hTree || !leaf_name || !leaf_name[0]) return -1;
+    os_wide_to_utf8_buf(leaf_name, name, sizeof(name));
+    id = os_vartree_find_by_name(name);
+    os_log(OS_LOG_DEBUG, "select_leaf: name='%s' find=%d", name, id);
+    if (id < 0) return -1;
+    L = &g_app.leaves[id];
+    _snwprintf(target, 600, L"%hs  @0x%llX", L->name, (unsigned long long)L->address);
+    os_log(OS_LOG_DEBUG, "select_leaf: target='%ls'", target);
+    h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+    os_log(OS_LOG_DEBUG, "select_leaf: root=%p", (void*)h);
+    while (h) {
+        if (tree_select_recursive(hTree, h, target)) return 0;
+        h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)h);
+    }
+    return -1;
+}
+
 int os_vartree_search(const char* needle, int max, int* out_ids)
 {
     int i, n = 0;
@@ -265,12 +315,15 @@ static void tree_add_type(HWND tree, HTREEITEM parent, const OS_Type* t, const c
             if (!c) continue;
             if (c->is_bitfield) {
                 char leafpath[300];
+                int bid;
                 _snprintf(leafpath, 300, "%s.%s", name, c->name ? c->name : "anon");
+                bid = os_vartree_find_by_name(leafpath);
                 os_utf8_to_wide_buf(leafpath, wname, 320);
                 _snwprintf(wfull, 420, L"%s  @0x%llX  [bit %u:%u]",
                            wname, (unsigned long long)(addr + (uint64_t)c->member_offset),
                            c->bit_size, c->bit_offset);
-                add_node(tree, h, wfull, (LPARAM)-1, 0, 0);
+                /* 位域也是可读写的叶变量：挂叶 id，右键可添加/写值 */
+                add_node(tree, h, wfull, (LPARAM)(bid >= 0 ? bid + 1 : -1), 0, 0);
             } else {
                 char child[300];
                 _snprintf(child, 300, "%s.%s", name, c->name ? c->name : "anon");

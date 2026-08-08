@@ -1,4 +1,4 @@
-# OpenScope 配置对话框 UI 驱动（复现用户操作序列）：
+﻿# OpenScope 配置对话框 UI 驱动（复现用户操作序列）：
 #   1. 启动 bin\Release\OpenScope.exe
 #   2. 主窗口点“连接”（IDC_BTN_CONNECT=2002）
 #   3. 对话框输入目标器件名（IDC_DEVICE=1003，默认 STM32L432KB）

@@ -11,7 +11,7 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define OS_API_VERSION 1
+#define OS_API_VERSION 2
 
 /* 模块能力标志 */
 #define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写） */
@@ -132,6 +132,9 @@ typedef struct OS_WindowType {
     const char* display_name; /* 显示名，如 "仪表窗口" */
 } OS_WindowType;
 
+/* 框架定义：窗口关闭请求（模块窗口向主窗口投递以关闭自身） */
+#define OS_WM_WIN_CLOSED (WM_APP + 5)
+
 /* 模块导出结构 */
 typedef struct OS_Module {
     int      api_version;
@@ -151,6 +154,10 @@ typedef struct OS_Module {
     /* ELF 重新加载并刷新叶变量表后由框架调用；模块应把窗口中记录的
      * 变量名重新解析为新 id（找不到的置为 -1）。可留空。 */
     void (*on_reload)(void* ctx);
+    /* v2：框架向指定窗口添加变量（树右键入口）；hwnd 为 create_window 返回的句柄，
+     * leaf_id 为框架叶变量编号，返回 OS_ERR_OK 成功。可留空
+     * （只有 api_version >= 2 的模块才会被调用）。 */
+    int  (*win_add_var)(void* ctx, HWND hwnd, int leaf_id);
 } OS_Module;
 
 #ifdef OPENSCOPE_MODULE_BUILD

@@ -12,5 +12,6 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 void os_mainwin_register(void);
 void os_mainwin_rebuild_window_menu(void);
 void os_mainwin_update_buttons(void);
+int os_mainwin_open_elf(const wchar_t* path);
 
 #endif

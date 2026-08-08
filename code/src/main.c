@@ -30,6 +30,10 @@ static LONG WINAPI os_crash_filter(EXCEPTION_POINTERS* ep)
     char ts[40];
     HMODULE hk = GetModuleHandleA("kernel32.dll");
     os_capture_stack_fn cap = hk ? (os_capture_stack_fn)GetProcAddress(hk, "CaptureStackBackTrace") : NULL;
+    if (!cap) {
+        HMODULE hb = GetModuleHandleA("KERNELBASE.dll");
+        if (hb) cap = (os_capture_stack_fn)GetProcAddress(hb, "CaptureStackBackTrace");
+    }
     os_time_iso(os_time_us(), ts, sizeof(ts));
     crash_write("%s [FATAL] unhandled exception code=0x%08X at 0x%p",
                 ts, ep ? ep->ExceptionRecord->ExceptionCode : 0,
@@ -51,6 +55,31 @@ static LONG WINAPI os_crash_filter(EXCEPTION_POINTERS* ep)
             }
             crash_write("%s [FATAL]   #%02u 0x%p  %s+0x%llX",
                         ts, (unsigned)i, frames[i], mod, (unsigned long long)off);
+        }
+    }
+    if (ep && ep->ContextRecord) {
+        /* 手动 RBP 帧链回溯（x64） */
+        DWORD64* frame = (DWORD64*)ep->ContextRecord->Rbp;
+        USHORT i;
+        for (i = 0; i < 24 && frame &&
+             (ULONG_PTR)frame > 0x10000 &&
+             (ULONG_PTR)frame < 0x7FFFFFFFFFFFULL; i++) {
+            DWORD64 ret = frame[1];
+            if (ret < 0x10000 || ret > 0x7FFFFFFFFFFFULL) break;
+            {
+                HMODULE hmod = NULL;
+                char mod[260] = "?";
+                DWORD64 off = 0;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       (LPCSTR)ret, &hmod) && hmod) {
+                    GetModuleFileNameA(hmod, mod, sizeof(mod));
+                    off = ret - (DWORD64)(BYTE*)hmod;
+                }
+                crash_write("%s [FATAL]   #%02u 0x%llX  %s+0x%llX",
+                            ts, (unsigned)i, ret, mod, (unsigned long long)off);
+            }
+            frame = (DWORD64*)*frame;
         }
     }
     MessageBoxW(NULL, L"OpenScope 发生未处理异常，详细信息已写入日志文件 openscope.log。",
@@ -88,7 +117,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.0.1)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.1.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -107,6 +136,29 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_mainwin_rebuild_window_menu();
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
+    if (lpCmdLine && lpCmdLine[0]) {
+        /* 用法: OpenScope.exe <elf路径> [--select-leaf=<完整叶名>] */
+        wchar_t* elf = lpCmdLine;
+        wchar_t* sp = wcschr(elf, L' ');
+        if (sp) *sp = 0;
+        os_mainwin_open_elf(elf);
+        if (sp) {
+            wchar_t* tok = sp + 1;
+            while (tok && *tok) {
+                while (*tok == L' ') tok++;
+                if (wcsncmp(tok, L"--select-leaf=", 14) == 0) {
+                    wchar_t* v = tok + 14;
+                    wchar_t* e = wcschr(v, L' ');
+                    if (e) *e = 0;
+                    os_log(OS_LOG_INFO, "命令行选中叶变量: %ls (rc=%d)",
+                           v, os_vartree_select_leaf(g_app.hTree, v));
+                    break;
+                }
+                tok = wcschr(tok, L' ');
+                if (tok) tok++;
+            }
+        }
+    }
     while (GetMessage(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);

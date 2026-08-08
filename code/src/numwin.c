@@ -76,6 +76,13 @@ void os_num_add_var(HWND hwnd, int leaf_id)
     ListView_SetItemText(nw->list, nw->count, 2, L"");
     nw->leaf_ids[nw->count] = leaf_id;
     nw->count++;
+    os_log(OS_LOG_DEBUG, "数值窗口添加变量: id=%d", leaf_id);
+}
+
+int os_num_is(HWND hwnd)
+{
+    OS_NumWin* nw = num_from_hwnd(hwnd);
+    return nw ? 1 : 0;
 }
 
 static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -147,7 +154,7 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         RECT rc;
         GetClientRect(hwnd, &rc);
         if (x >= rc.right - 22 && (short)HIWORD(lParam) < 24) {
-            PostMessage(GetParent(hwnd), WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
+                    PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
         }
         return 0;
     }
@@ -199,7 +206,7 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         }
         case MENU_NUM_CLOSE:
-            PostMessage(GetParent(hwnd), WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
+        PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
             break;
         }
         return 0;

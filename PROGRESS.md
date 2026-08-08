@@ -53,6 +53,14 @@
   - 顺带修复：速度下拉框传的是索引而非 kHz（默认 4000 实际下发 5）；模块加载后“连接”按钮未重新启用（一直禁用）；`EMU_SelectByIndex` 在旧固件返回 -1 导致偶发 `Connect rc=-257`，增加去掉显式选择自动重试一次。
   - 验证：新增 `module/jlink/tests/ui_connect_drive.ps1`（真实 UI 驱动：打开对话框→输入器件名→刷新 5 次→连接→观察进程/弹窗）。开发版与安装版均验证：连续扫描一致（发现 1 个、列表 1 项、状态正确），STM32L432KB 连接 rc=0 成功，无 FATAL、无闪退。
   - 版本升 1.0.1：version.rc/About/模块/安装包同步，重新打包 `dist/OpenScope-Setup-1.0.1.exe`，静默安装验证版本 1.0.1.0 + 连接流程通过。
+- **checkpoint-11（2026-08-08）**：窗口管理改 Tab 标签页 + 坐标轴 + 树右键添加变量 + 启动缺失 ELF 只警告（1.1.0）。
+  - Tab 标签页：右侧面板改为 Tab 容器（hTab，SysTabControl32），新增窗口=新增 Tab，不再分割面积；Tab 点击/方向键切换、右键菜单/×/模块窗口“关闭”按钮均可关闭；修复原关闭消息发到静态面板导致失效的 bug（`GetParent`→主窗口，模块经 `fw->post_msg`）。`OSRightPanel` 自定义类转发 Tab 的 WM_NOTIFY 到主窗口。
+  - 坐标轴：波形窗口（chartwin）与示波器窗口（scope.dll）都补上 Y 轴刻度槽（左 56px）+ 底部时间轴（按 ts 自动刻度）+ 无数据提示“等待采集数据…”；scope 增加时间戳存储与图例宽字符绘制（原 DrawTextA 中文乱码）。
+  - 树右键：新增“添加到波形窗口/数值窗口/示波器窗口”（优先当前激活窗口，否则已有，否则新建）；修复位域叶节点在树中 lParam=-1 导致右键置灰的 bug（现挂叶 id）；模块 API v2 新增 `win_add_var`，scope 实现。
+  - 启动 ELF：支持命令行 `OpenScope.exe <elf> [--select-leaf=名]`（自动化/快速打开）；加载失败不再弹窗，只在日志窗口 Warning。
+  - 测试：`tests/ui_windows_drive.ps1` 全量 UI 回归（ELF 加载→选叶→建 3 窗口→Tab 数量/切换/关闭→三类窗口添加变量→无闪退），开发版+安装版 ALL PASS；J-Link 对话框回归 PASS；构建 0 error/0 warning。
+  - 测试夹具：用户删除 tests/enc.out 并新增自己的 `linix_stm32l031_v1.2.out`（18 全局变量/511 原子叶，真实 IAR），`enc_smoke.c` 改用它做真实文件回归（通用断言+新文件地址断言），enc.out 从版本库移除。
+  - 版本 1.1.0：重新打包 `dist/OpenScope-Setup-1.1.0.exe`，安装版验证版本与全部 UI 功能。
 
 ## 待办（BMAD 规划产出后更新）
 

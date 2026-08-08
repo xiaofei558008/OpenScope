@@ -29,6 +29,10 @@
 #define IDM_TREE_NONE    2302
 #define IDM_TREE_WRITE   2303
 #define IDM_TREE_RELOAD  2304
+#define IDM_TREE_ADD_CHART 2305
+#define IDM_TREE_ADD_NUM   2306
+#define IDM_TREE_ADD_SCOPE 2307
+#define IDM_TAB_CLOSE      2501
 
 #define IDD_PICK_OK      2401
 #define IDD_PICK_CANCEL  2402
@@ -57,6 +61,7 @@ typedef struct ModWinMenuItem {
 } ModWinMenuItem;
 
 static const wchar_t* g_main_class = L"OpenScopeMain";
+static const wchar_t* g_right_class = L"OSRightPanel";
 static HMENU g_menu;
 static HMENU g_menu_win;
 static ModWinMenuItem g_modwin_menu[64];
@@ -167,29 +172,69 @@ static void refresh_status(void)
     set_status(3, w);
 }
 
-/* ---------- 布局 ---------- */
+/* ---------- 布局（Tab 标签页） ---------- */
+
+static int g_cur_tab = -1; /* 当前激活窗口在 g_app.wins 中的下标 */
+
+static void layout_tab_pages(void)
+{
+    RECT rc, pr;
+    int i;
+    if (!g_app.hTab || !IsWindow(g_app.hTab)) return;
+    GetClientRect(g_app.hTab, &rc);
+    pr = rc;
+    SendMessageW(g_app.hTab, TCM_ADJUSTRECT, FALSE, (LPARAM)&pr);
+    for (i = 0; i < g_app.win_count; i++) {
+        HWND w = g_app.wins[i].hwnd;
+        if (w && IsWindow(w))
+            MoveWindow(w, pr.left, pr.top, pr.right - pr.left, pr.bottom - pr.top, TRUE);
+    }
+}
+
+static void show_tab(int idx)
+{
+    int i;
+    for (i = 0; i < g_app.win_count; i++) {
+        HWND w = g_app.wins[i].hwnd;
+        if (w) ShowWindow(w, i == idx ? SW_SHOW : SW_HIDE);
+    }
+    layout_tab_pages();
+}
+
+static void rebuild_tabs(void)
+{
+    int i, cur = g_cur_tab;
+    if (!g_app.hTab || !IsWindow(g_app.hTab)) return;
+    SendMessageW(g_app.hTab, TCM_DELETEALLITEMS, 0, 0);
+    for (i = 0; i < g_app.win_count; i++) {
+        TCITEMW ti;
+        memset(&ti, 0, sizeof(ti));
+        ti.mask = TCIF_TEXT | TCIF_PARAM;
+        ti.pszText = g_app.wins[i].title;
+        ti.lParam = i;
+        SendMessageW(g_app.hTab, TCM_INSERTITEM, i, (LPARAM)&ti);
+    }
+    if (cur < 0 || cur >= g_app.win_count) cur = g_app.win_count ? 0 : -1;
+    g_cur_tab = cur;
+    if (cur >= 0) SendMessageW(g_app.hTab, TCM_SETCURSEL, cur, 0);
+    show_tab(cur);
+}
 
 void os_mainwin_tile(void)
 {
-    RECT rc;
-    int i, n, cols = 2, rows, cw, ch, x, y, m = 3, gap = 4;
-    if (!g_app.hRight) return;
-    GetClientRect(g_app.hRight, &rc);
-    n = 0;
-    for (i = 0; i < g_app.win_count; i++) if (g_app.wins[i].active && g_app.wins[i].hwnd) n++;
-    if (n == 0) return;
-    rows = (n + cols - 1) / cols;
-    cw = (rc.right - m * 2 - gap * (cols - 1)) / cols;
-    ch = (rc.bottom - m * 2 - gap * (rows - 1)) / rows;
-    i = 0;
-    for (int k = 0; k < g_app.win_count; k++) {
-        OS_WinItem* wi = &g_app.wins[k];
-        if (!wi->active || !wi->hwnd) continue;
-        x = m + (i % cols) * (cw + gap);
-        y = m + (i / cols) * (ch + gap);
-        MoveWindow(wi->hwnd, x, y, cw, ch, TRUE);
-        i++;
+    rebuild_tabs();
+}
+
+/* 右侧面板：转发子控件（Tab）通知到主窗口 */
+static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_NOTIFY) {
+        if (g_app.hMain) {
+            SendMessageW(g_app.hMain, WM_NOTIFY, wp, lp);
+            return 0;
+        }
     }
+    return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
 static void layout(void)
@@ -206,6 +251,8 @@ static void layout(void)
     MoveWindow(g_app.hSplitV, sw, bh, 5, right_h, TRUE);
     MoveWindow(g_app.hTree, 0, bh, sw, right_h, TRUE);
     MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
+    if (g_app.hTab && IsWindow(g_app.hTab))
+        MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
     MoveWindow(g_app.hLog, 0, bh + right_h, bw, logh, TRUE);
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
@@ -280,8 +327,8 @@ static int load_elf_path(const wchar_t* path)
     os_wide_to_utf8_buf(path, utf8, MAX_PATH);
     elf = os_elf_open(utf8, err, sizeof(err));
     if (!elf) {
-        os_utf8_to_wide_buf(err, wmsg, 2048);
-        MessageBoxW(g_app.hMain, wmsg, L"ELF 加载失败", MB_OK | MB_ICONERROR);
+        /* 不弹窗：只在下方日志窗口警告（用户删除/改名 ELF 后启动不再打扰） */
+        os_log(OS_LOG_WARN, "ELF 加载失败: %s", err);
         return -1;
     }
     if (g_app.elf) os_elf_close(g_app.elf);
@@ -320,6 +367,12 @@ int os_mainwin_reload_elf(void)
     return load_elf_path(g_app.elf_path);
 }
 
+int os_mainwin_open_elf(const wchar_t* path)
+{
+    if (!path || !path[0]) return -1;
+    return load_elf_path(path);
+}
+
 static void cmd_open_elf(void)
 {
     OPENFILENAMEW ofn;
@@ -331,7 +384,7 @@ static void cmd_open_elf(void)
     ofn.lpstrFile = file;
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-    if (GetOpenFileNameW(&ofn)) load_elf_path(file);
+    if (GetOpenFileNameW(&ofn)) os_mainwin_open_elf(file);
 }
 
 static void check_elf_mtime(void)
@@ -483,6 +536,7 @@ static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, co
     wi->mod_ctx = ctx;
     wi->active = 1;
     _snwprintf(wi->title, 128, L"%s", title ? title : L"");
+    g_cur_tab = g_app.win_count - 1;
     os_mainwin_tile();
 }
 
@@ -791,8 +845,138 @@ static void tree_context_menu(HWND hwnd, LPARAM lParam)
     AppendMenuW(m, MF_STRING, IDM_TREE_NONE, L"清除全部观测");
     AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_WRITE, L"写入值...");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_CHART, L"添加到波形窗口");
+    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_NUM, L"添加到数值窗口");
+    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_SCOPE, L"添加到示波器窗口");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TREE_RELOAD, L"重新加载 ELF");
     GetCursorPos(&pt);
+    TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    DestroyMenu(m);
+}
+
+static int tree_selected_leaf_id(void)
+{
+    HTREEITEM h = TreeView_GetSelection(g_app.hTree);
+    if (h) {
+        TVITEMW item;
+        memset(&item, 0, sizeof(item));
+        item.mask = TVIF_PARAM;
+        item.hItem = h;
+        if (TreeView_GetItem(g_app.hTree, &item) && item.lParam > 0)
+            return (int)(item.lParam - 1);
+    }
+    return -1;
+}
+
+static HWND active_win_hwnd(void)
+{
+    if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count)
+        return g_app.wins[g_cur_tab].hwnd;
+    return NULL;
+}
+
+/* 添加到原生波形/数值窗口：优先当前激活窗口，否则已有同类型窗口，否则新建 */
+static void tree_add_to_native(int chart)
+{
+    int id = tree_selected_leaf_id();
+    HWND w;
+    int i;
+    if (id < 0) return;
+    w = active_win_hwnd();
+    if (!w || g_app.wins[g_cur_tab].is_module ||
+        (chart ? !os_chart_is(w) : !os_num_is(w))) {
+        w = NULL;
+        for (i = 0; i < g_app.win_count; i++) {
+            OS_WinItem* wi = &g_app.wins[i];
+            if (wi->is_module || !wi->hwnd) continue;
+            if (chart ? os_chart_is(wi->hwnd) : os_num_is(wi->hwnd)) { w = wi->hwnd; break; }
+        }
+        if (!w) {
+            cmd_add_window(chart ? 1 : 0);
+            if (g_app.win_count > 0) w = g_app.wins[g_app.win_count - 1].hwnd;
+        }
+    }
+    if (w) {
+        if (chart) os_chart_add_var(w, id);
+        else os_num_add_var(w, id);
+    }
+}
+
+static int module_has_type(const OS_Module* m, const char* type)
+{
+    const OS_WindowType* wt = m->window_types;
+    while (wt && wt->type) {
+        if (strcmp(wt->type, type) == 0) return 1;
+        wt++;
+    }
+    return 0;
+}
+
+/* 添加到示波器（scope.bar）窗口：优先当前激活窗口，否则已有，否则新建 */
+static void tree_add_to_scope(void)
+{
+    int id = tree_selected_leaf_id();
+    OS_Module* m = NULL;
+    void* ctx = NULL;
+    HWND w = NULL;
+    int i;
+    if (id < 0) return;
+    if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
+        OS_WinItem* wi = &g_app.wins[g_cur_tab];
+        if (wi->is_module && wi->mod && module_has_type(wi->mod, "scope.bar")) {
+            m = wi->mod; ctx = wi->mod_ctx; w = wi->hwnd;
+        }
+    }
+    if (!m) {
+        for (i = 0; i < g_app.win_count && !m; i++) {
+            OS_WinItem* wi = &g_app.wins[i];
+            if (wi->is_module && wi->mod && module_has_type(wi->mod, "scope.bar")) {
+                m = wi->mod; ctx = wi->mod_ctx; w = wi->hwnd;
+            }
+        }
+        if (!m) {
+            for (i = 0; i < g_modwin_menu_count; i++) {
+                ModWinMenuItem* it = &g_modwin_menu[i];
+                if (it->mod && it->wt && strcmp(it->wt->type, "scope.bar") == 0) {
+                    char title8[128];
+                    wchar_t title[128];
+                    os_utf8_to_wide_buf(it->wt->display_name, title, 128);
+                    os_wide_to_utf8_buf(title, title8, 128);
+                    w = it->mod->create_window(it->ctx, it->wt->type, g_app.hRight,
+                                               0, 0, 200, 150, title8);
+                    if (w) {
+                        add_win_item(w, 1, it->mod, it->ctx, title);
+                        m = it->mod; ctx = it->ctx;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    if (m && m->api_version >= 2 && m->win_add_var && w)
+        m->win_add_var(ctx, w, id);
+}
+
+static void tab_context_menu(void)
+{
+    POINT pt;
+    int i, hit = -1;
+    HMENU m;
+    GetCursorPos(&pt);
+    for (i = 0; i < g_app.win_count; i++) {
+        RECT r;
+        if (SendMessageW(g_app.hTab, TCM_GETITEMRECT, i, (LPARAM)&r)) {
+            MapWindowPoints(g_app.hTab, NULL, (LPPOINT)&r, 2);
+            if (PtInRect(&r, pt)) { hit = i; break; }
+        }
+    }
+    if (hit < 0) return;
+    g_cur_tab = hit;
+    SendMessageW(g_app.hTab, TCM_SETCURSEL, hit, 0);
+    show_tab(hit);
+    m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, IDM_TAB_CLOSE, L"关闭窗口");
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
     DestroyMenu(m);
 }
@@ -838,8 +1022,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         TreeView_SetUnicodeFormat(g_app.hTree, TRUE);
         g_app.hSplitV = CreateWindowW(L"OSSplitter", L"", WS_CHILD | WS_VISIBLE,
                                       340, 34, 5, 400, hwnd, NULL, g_app.hInst, NULL);
-        g_app.hRight = CreateWindowW(L"STATIC", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | SS_OWNERDRAW,
+        g_app.hRight = CreateWindowExW(WS_EX_CLIENTEDGE, g_right_class, L"",
+                                      WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
                                      345, 34, 500, 400, hwnd, NULL, g_app.hInst, NULL);
+        g_app.hTab = CreateWindowW(WC_TABCONTROLW, L"",
+                                   WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | TCS_FIXEDWIDTH,
+                                   0, 0, 100, 100, g_app.hRight, NULL, g_app.hInst, NULL);
+        SendMessageW(g_app.hTab, TCM_SETITEMSIZE, 0, MAKELPARAM(150, 22));
+        SendMessageW(g_app.hTab, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         g_app.hLog = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                                      WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
                                      0, 500, 800, 170, hwnd, NULL, g_app.hInst, NULL);
@@ -934,6 +1124,21 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     }
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
+        if (h && h->hwndFrom == g_app.hTab) {
+            if (h->code == TCN_SELCHANGE) {
+                int sel = (int)SendMessageW(g_app.hTab, TCM_GETCURSEL, 0, 0);
+                if (sel >= 0 && sel < g_app.win_count) {
+                    g_cur_tab = sel;
+                    show_tab(sel);
+                }
+                os_log(OS_LOG_DEBUG, "Tab 切换 -> %d", sel);
+                return 0;
+            }
+            if (h->code == NM_RCLICK) {
+                tab_context_menu();
+                return 0;
+            }
+        }
         if (h && h->hwndFrom == g_app.hTree) {
             if (h->code == NM_RCLICK) {
                 tree_context_menu(hwnd, lParam);
@@ -968,7 +1173,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd, L"OpenScope v1.0.1\n\nMCU 变量采集与标定工具（类 CANape）\n"
+            MessageBoxW(hwnd, L"OpenScope v1.1.0\n\nMCU 变量采集与标定工具（类 CANape）\n"
                               L"C + Win32 + 动态模块架构", L"关于", MB_OK | MB_ICONINFORMATION);
             break;
         case IDM_EXIT:
@@ -979,6 +1184,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_TREE_ALL: tree_select_all(1); break;
         case IDM_TREE_NONE: tree_select_all(0); break;
         case IDM_TREE_RELOAD: os_mainwin_reload_elf(); break;
+        case IDM_TREE_ADD_CHART: tree_add_to_native(1); break;
+        case IDM_TREE_ADD_NUM: tree_add_to_native(0); break;
+        case IDM_TREE_ADD_SCOPE: tree_add_to_scope(); break;
+        case IDM_TAB_CLOSE:
+            if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count)
+                PostMessage(hwnd, WM_OS_WIN_CLOSED,
+                            (WPARAM)g_app.wins[g_cur_tab].hwnd, 0);
+            break;
         case IDM_TREE_WRITE: {
             HTREEITEM h = TreeView_GetSelection(g_app.hTree);
             if (h) {
@@ -1040,6 +1253,13 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_SIZEWE);
     wc.lpszClassName = L"OSSplitter";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = right_panel_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.lpszClassName = g_right_class;
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = pick_proc;

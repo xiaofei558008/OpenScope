@@ -20,5 +20,7 @@ int os_vartree_set_watch(int id, int on);
 /* 重载后未找到的原观测变量（最多 64 个） */
 int os_vartree_missing_count(void);
 const char* os_vartree_missing_at(int i);
+/* 按完整叶名称在变量树中定位并选中（供命令行测试钩子/自动化使用） */
+int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name);
 
 #endif

@@ -25,6 +25,7 @@ typedef struct ScopeSeries {
     int       leaf_id;
     char      name[256];
     COLORREF  color;
+    int64_t   ts[SCOPE_HIST];
     double    vals[SCOPE_HIST];
     int       written[SCOPE_HIST];
     int       head;      /* next write position */
@@ -33,7 +34,7 @@ typedef struct ScopeSeries {
 
 typedef struct ScopeWin {
     HWND        hwnd;
-    HWND        hBtnAdd, hBtnDel, hBtnWrite;
+    HWND        hBtnAdd, hBtnDel, hBtnWrite, hBtnClose;
     ScopeSeries series[SCOPE_MAX_SERIES];
     int         nseries;
     int         sel;      /* selected legend row, -1 = none */
@@ -100,6 +101,7 @@ static void utf8_to_wide_buf(const char* s, wchar_t* out, int outlen)
 
 static void series_append(ScopeSeries* s, const OS_Sample* smp)
 {
+    s->ts[s->head] = smp->ts_us;
     s->vals[s->head] = smp->value;
     s->written[s->head] = smp->written ? 1 : 0;
     s->head = (s->head + 1) % SCOPE_HIST;
@@ -137,6 +139,7 @@ static void scope_paint(ScopeWin* w)
     HBRUSH bg = CreateSolidBrush(RGB(18, 20, 26));
     HPEN gridpen = CreatePen(PS_SOLID, 1, RGB(48, 52, 62));
     int top = 30, i, k;
+    double ymin = 0, ymax = 1;
     RECT plot;
 
     hdc = BeginPaint(w->hwnd, &ps);
@@ -148,17 +151,20 @@ static void scope_paint(ScopeWin* w)
     FillRect(mem, &rc, bg);
     plot = rc;
     plot.top += top;
+    plot.left += 56;
+    plot.bottom -= 18;
+    plot.right -= 6;
 
     /* grid */
     {
         int gx, gy;
         HPEN oldp = (HPEN)SelectObject(mem, gridpen);
-        for (gx = 0; gx < plot.right; gx += 48) {
+        for (gx = plot.left; gx < plot.right; gx += 48) {
             MoveToEx(mem, gx, plot.top, NULL);
             LineTo(mem, gx, plot.bottom);
         }
         for (gy = plot.top; gy < plot.bottom; gy += 40) {
-            MoveToEx(mem, 0, gy, NULL);
+            MoveToEx(mem, plot.left, gy, NULL);
             LineTo(mem, plot.right, gy);
         }
         SelectObject(mem, oldp);
@@ -166,7 +172,6 @@ static void scope_paint(ScopeWin* w)
 
     /* autoscale Y over visible series */
     {
-        double ymin = 0, ymax = 1;
         int have = 0;
         for (i = 0; i < w->nseries; i++) {
             ScopeSeries* s = &w->series[i];
@@ -215,6 +220,82 @@ static void scope_paint(ScopeWin* w)
         }
     }
 
+    /* Y 轴刻度（左侧槽位） */
+    {
+        HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HFONT oldfont = (HFONT)SelectObject(mem, font);
+        int kk;
+        SetBkMode(mem, TRANSPARENT);
+        SetTextColor(mem, RGB(150, 150, 160));
+        for (kk = 0; kk <= 4; kk++) {
+            double v = ymax - (ymax - ymin) * kk / 4.0;
+            int y = plot.top + (plot.bottom - plot.top) * kk / 4;
+            char txt[64];
+            wchar_t wt[64];
+            RECT r;
+            _snprintf(txt, sizeof(txt), "%.3g", v);
+            utf8_to_wide_buf(txt, wt, 64);
+            r.left = 2; r.top = y - 8; r.right = plot.left - 4; r.bottom = y + 8;
+            DrawTextW(mem, wt, -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+        SelectObject(mem, oldfont);
+    }
+
+    /* 时间轴（底部） */
+    {
+        HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HFONT oldfont = (HFONT)SelectObject(mem, font);
+        int64_t t0 = 0, t1 = 0;
+        int have_t = 0, kk, nvis = 0;
+        SetBkMode(mem, TRANSPARENT);
+        SetTextColor(mem, RGB(150, 150, 160));
+        for (i = 0; i < w->nseries; i++) {
+            ScopeSeries* s = &w->series[i];
+            int n = s->count > SCOPE_HIST ? SCOPE_HIST : s->count;
+            for (k = 0; k < n; k++) {
+                int idx = (s->head - n + k + SCOPE_HIST) % SCOPE_HIST;
+                nvis++;
+                if (s->ts[idx] && s->ts[idx] != -1) {
+                    if (!have_t) { t0 = t1 = s->ts[idx]; have_t = 1; }
+                    if (s->ts[idx] < t0) t0 = s->ts[idx];
+                    if (s->ts[idx] > t1) t1 = s->ts[idx];
+                }
+            }
+        }
+        for (kk = 0; kk <= 4; kk++) {
+            int x = plot.left + (plot.right - plot.left) * kk / 4;
+            double sec = have_t ? (double)(t1 - t0) / 1e6 * kk / 4.0
+                                : (double)nvis * kk / 4.0;
+            wchar_t wt[64];
+            RECT r;
+            if (sec >= 60.0) _snwprintf(wt, 64, L"%dm%02ds", (int)(sec / 60.0), (int)sec % 60);
+            else if (sec >= 1.0) _snwprintf(wt, 64, L"%.1fs", sec);
+            else if (sec >= 0.001) _snwprintf(wt, 64, L"%.0fms", sec * 1000.0);
+            else _snwprintf(wt, 64, L"0");
+            r.left = x - 40; r.top = plot.bottom + 1;
+            r.right = x + 40; r.bottom = rc.bottom - 1;
+            DrawTextW(mem, wt, -1, &r, DT_CENTER | DT_TOP | DT_SINGLELINE);
+        }
+        SelectObject(mem, oldfont);
+    }
+
+    /* 无数据提示 */
+    if (w->nseries > 0) {
+        int total = 0;
+        for (i = 0; i < w->nseries; i++) total += w->series[i].count;
+        if (total == 0) {
+            HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+            HFONT oldfont = (HFONT)SelectObject(mem, font);
+            wchar_t wt[160];
+            RECT r = plot;
+            utf8_to_wide_buf("等待采集数据…（请连接 MCU 并开始采集）", wt, 160);
+            SetBkMode(mem, TRANSPARENT);
+            SetTextColor(mem, RGB(130, 140, 155));
+            DrawTextW(mem, wt, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(mem, oldfont);
+        }
+    }
+
     /* legend */
     {
         HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
@@ -241,7 +322,11 @@ static void scope_paint(ScopeWin* w)
             lr.left = 20; lr.top = y; lr.right = plot.right; lr.bottom = y + 14;
             if (i == w->sel) SetTextColor(mem, RGB(255, 255, 255));
             else SetTextColor(mem, RGB(210, 214, 224));
-            DrawTextA(mem, text, -1, &lr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            {
+                wchar_t wt[512];
+                utf8_to_wide_buf(text, wt, 512);
+                DrawTextW(mem, wt, -1, &lr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+            }
         }
         SelectObject(mem, oldfont);
     }
@@ -272,6 +357,7 @@ static void layout_buttons(ScopeWin* w)
     if (w->hBtnAdd) MoveWindow(w->hBtnAdd, 2, 2, 76, 24, TRUE);
     if (w->hBtnDel) MoveWindow(w->hBtnDel, 80, 2, 76, 24, TRUE);
     if (w->hBtnWrite) MoveWindow(w->hBtnWrite, 158, 2, 76, 24, TRUE);
+    if (w->hBtnClose) MoveWindow(w->hBtnClose, 236, 2, 56, 24, TRUE);
 }
 
 static void ensure_buttons(ScopeWin* w)
@@ -286,9 +372,13 @@ static void ensure_buttons(ScopeWin* w)
     w->hBtnWrite = CreateWindowW(L"BUTTON", L"写值",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                  158, 2, 76, 24, w->hwnd, (HMENU)3, GetModuleHandleW(NULL), NULL);
+    w->hBtnClose = CreateWindowW(L"BUTTON", L"关闭",
+                                 WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                 236, 2, 56, 24, w->hwnd, (HMENU)4, GetModuleHandleW(NULL), NULL);
     SendMessageW(w->hBtnAdd, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
     SendMessageW(w->hBtnDel, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
     SendMessageW(w->hBtnWrite, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(w->hBtnClose, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
 }
 
 static int legend_hit(ScopeWin* w, int y)
@@ -596,6 +686,14 @@ static LRESULT CALLBACK scope_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 }
             }
             return 0;
+        case 4: /* close window */
+            if (w && w->hwnd) {
+                if (g_fw && g_fw->post_msg)
+                    g_fw->post_msg(OS_WM_WIN_CLOSED, (WPARAM)w->hwnd, 0);
+                else
+                    PostMessageW(GetParent(w->hwnd), OS_WM_WIN_CLOSED, (WPARAM)w->hwnd, 0);
+            }
+            return 0;
         }
         break;
     case WM_DESTROY:
@@ -603,6 +701,7 @@ static LRESULT CALLBACK scope_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (w->hBtnAdd) DestroyWindow(w->hBtnAdd);
             if (w->hBtnDel) DestroyWindow(w->hBtnDel);
             if (w->hBtnWrite) DestroyWindow(w->hBtnWrite);
+            if (w->hBtnClose) DestroyWindow(w->hBtnClose);
             free(w);
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         }
@@ -728,6 +827,35 @@ static void mod_on_reload(void* ctx)
     }
 }
 
+static int mod_win_add_var(void* ctx, HWND hwnd, int leaf_id)
+{
+    ScopeMod* m = (ScopeMod*)ctx;
+    int i;
+    if (!m || !hwnd || leaf_id < 0) return OS_ERR_INVALID_ARG;
+    for (i = 0; i < m->nwins; i++) {
+        ScopeWin* w = m->wins[i];
+        if (w && w->hwnd == hwnd) {
+            const char* nm;
+            ScopeSeries* s;
+            if (w->nseries >= SCOPE_MAX_SERIES) return OS_ERR_BUSY;
+            nm = g_fw->leaf_name(leaf_id);
+            s = &w->series[w->nseries];
+            memset(s, 0, sizeof(*s));
+            s->leaf_id = leaf_id;
+            _snprintf(s->name, sizeof(s->name), "%s", nm ? nm : "?");
+            s->color = g_palette[w->nseries % 8];
+            w->nseries++;
+            w->sel = w->nseries - 1;
+            if (g_fw && g_fw->log)
+                g_fw->log(OS_LOG_DEBUG, "示波器窗口添加变量: id=%d name=%s",
+                          leaf_id, s->name);
+            InvalidateRect(hwnd, NULL, TRUE);
+            return OS_ERR_OK;
+        }
+    }
+    return OS_ERR_FAIL;
+}
+
 static const OS_WindowType g_window_types[] = {
     { "scope.bar", "示波器窗口" },
     { NULL, NULL }
@@ -737,7 +865,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_WINDOW,
     "scope",
-    "1.0.1",
+    "1.1.0",
     "示波器窗口模块：实时曲线、变量模糊搜索、数值写回",
     g_window_types,
     mod_init,
@@ -746,7 +874,8 @@ static const OS_Module g_module = {
     mod_create_window,
     mod_destroy_window,
     mod_on_samples,
-    mod_on_reload
+    mod_on_reload,
+    mod_win_add_var
 };
 
 const OS_Module* os_module_get(void)

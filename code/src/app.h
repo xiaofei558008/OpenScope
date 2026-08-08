@@ -58,7 +58,7 @@ typedef struct OS_WinItem {
 
 typedef struct OS_App {
     HINSTANCE hInst;
-    HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hBtnBar;
+    HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hBtnBar, hTab;
     int tree_w, log_h;
 
     OS_ElfFile* elf;

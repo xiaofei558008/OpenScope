@@ -1,8 +1,10 @@
 /*
- * OpenScope real-world .out regression test (IAR, multi-CU DWARF4).
+ * OpenScope real-world .out regression test (IAR DWARF).
  *
- * Verifies that tests/enc.out parses all global variables with DWARF
- * types and expands structs/unions/arrays down to atomic leaves.
+ * Verifies a real IAR .out parses all global variables with DWARF types
+ * and expands structs/unions/arrays down to atomic leaves.  The fixture is
+ * the user's project file tests/linix_stm32l031_v1.2.out (18 globals,
+ * 511 atomic leaves); tests/enc.out is kept as a fallback.
  */
 #include <stdio.h>
 #include <string.h>
@@ -49,8 +51,10 @@ int main(void)
     setvbuf(stdout, NULL, _IONBF, 0);
     memset(&g_app, 0, sizeof(g_app));
 
-    elf = os_elf_open("tests/enc.out", err, sizeof(err));
-    CHECK(elf != NULL, "os_elf_open loads tests/enc.out");
+    elf = os_elf_open("tests/linix_stm32l031_v1.2.out", err, sizeof(err));
+    if (!elf)
+        elf = os_elf_open("tests/enc.out", err, sizeof(err));
+    CHECK(elf != NULL, "os_elf_open loads real IAR .out");
     if (!elf) {
         printf("  err: %s\n", err);
         return 1;
@@ -71,42 +75,43 @@ int main(void)
     }
 
     /* key globals with expected addresses/sizes */
-    idx = var_index(elf, "ADC_Temper");
-    CHECK(idx >= 0, "ADC_Temper present");
+    idx = var_index(elf, "SystemCoreClock");
+    CHECK(idx >= 0, "SystemCoreClock present");
     if (idx >= 0) {
         const OS_Variable* v = os_elf_var_at(elf, idx);
-        CHECK(v->address == 0x20000934u && v->symbol_size == 12,
-              "ADC_Temper @0x20000934 size 12");
-        CHECK(v->type && v->type->kind == OS_TYPE_STRUCT &&
-              v->type->child_count == 4, "ADC_Temper struct with 4 members");
+        CHECK(v->address == 0x20000000u && v->symbol_size == 4,
+              "SystemCoreClock @0x20000000 size 4");
     }
-    idx = var_index(elf, "hall_chk");
-    CHECK(idx >= 0, "hall_chk present");
+    idx = var_index(elf, "vofa");
+    CHECK(idx >= 0, "vofa present");
     if (idx >= 0) {
         const OS_Variable* v = os_elf_var_at(elf, idx);
-        CHECK(v->address == 0x20000918u && v->symbol_size == 28,
-              "hall_chk @0x20000918 size 28");
+        CHECK(v->address == 0x20000004u && v->symbol_size == 400,
+              "vofa @0x20000004 size 400");
+        CHECK(v->type && v->type->kind == OS_TYPE_STRUCT,
+              "vofa struct type resolved");
+    }
+    idx = var_index(elf, "AbsEnc");
+    CHECK(idx >= 0, "AbsEnc present");
+    if (idx >= 0) {
+        const OS_Variable* v = os_elf_var_at(elf, idx);
+        CHECK(v->address == 0x20000258u && v->symbol_size == 180,
+              "AbsEnc @0x20000258 size 180");
+        CHECK(v->type && v->type->kind == OS_TYPE_STRUCT,
+              "AbsEnc struct type resolved");
     }
     idx = var_index(elf, "MT6835");
     CHECK(idx >= 0, "MT6835 present");
     if (idx >= 0) {
         const OS_Variable* v = os_elf_var_at(elf, idx);
-        CHECK(v->address == 0x20000840u, "MT6835 @0x20000840");
-        CHECK(v->type && v->type->kind == OS_TYPE_STRUCT,
-              "MT6835 struct type resolved");
-    }
-    idx = var_index(elf, "ta_enc");
-    CHECK(idx >= 0, "ta_enc present");
-    if (idx >= 0) {
-        const OS_Variable* v = os_elf_var_at(elf, idx);
-        CHECK(v->address == 0x200008B8u && v->symbol_size == 96,
-              "ta_enc @0x200008B8 size 96");
+        CHECK(v->address == 0x2000030Cu && v->symbol_size == 64,
+              "MT6835 @0x2000030C size 64");
     }
 
     /* struct expansion to atomic leaves */
     g_app.elf = elf;
     os_vartree_build();
-    CHECK(g_app.leaf_count >= 285, ">= 285 atomic leaves");
+    CHECK(g_app.leaf_count >= 300, ">= 300 atomic leaves");
     {
         int structs = 0, zero = 0;
         for (i = 0; i < g_app.leaf_count; i++) {
@@ -119,20 +124,18 @@ int main(void)
     }
     {
         const OS_Leaf* l;
-        l = leaf_by_name("MT6835.AbsEnc.AngleBit");
-        CHECK(l && l->address == 0x20000840u && l->size == 4,
-              "nested leaf MT6835.AbsEnc.AngleBit @0x20000840");
-        l = leaf_by_name("ta_enc.index_tx");
-        CHECK(l && l->address == 0x200008B8u, "leaf ta_enc.index_tx");
-        l = leaf_by_name("modbus_rtu_slave.addr");
-        CHECK(l && l->address == 0x20000608u, "leaf modbus_rtu_slave.addr");
-        l = leaf_by_name("hall_chk.error");
-        CHECK(l && l->address == 0x20000918u, "leaf hall_chk.error");
-        l = leaf_by_name("ADC_Temper.MCU_Temper");
-        CHECK(l && l->address == 0x2000093Cu, "leaf ADC_Temper.MCU_Temper");
-        l = leaf_by_name("aCRCh");
-        CHECK(l && l->address == 0x20000000u && l->size == 256,
-              "char array aCRCh kept as single leaf (256B)");
+        l = leaf_by_name("AbsEnc.anon.FRawAng");
+        CHECK(l && l->address == 0x20000258u && l->size == 4,
+              "bitfield leaf AbsEnc.anon.FRawAng @0x20000258");
+        l = leaf_by_name("AbsEnc.Param.anon.AngleBit");
+        CHECK(l && l->address == 0x2000025Cu && l->size == 4,
+              "nested leaf AbsEnc.Param.anon.AngleBit @0x2000025C");
+        l = leaf_by_name("SystemCoreClock");
+        CHECK(l && l->address == 0x20000000u && l->size == 4,
+              "leaf SystemCoreClock @0x20000000");
+        l = leaf_by_name("MT6835.EEPROM.reg0x09.anon.zero_posi_11_4");
+        CHECK(l && l->address == 0x2000031Du && l->size == 1,
+              "deep leaf MT6835.EEPROM.reg0x09.anon.zero_posi_11_4 @0x2000031D");
     }
 
     os_elf_close(elf);
