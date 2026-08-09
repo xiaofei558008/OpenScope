@@ -69,10 +69,16 @@ static int g_emu_count = -1; /* 最近一次 J-Link 扫描到的设备数（-1=�
 #define IDD_EDIT_VALUE   2414
 
 typedef struct PickState {
-    int* result;
     int ids[300];
     int count;
+    struct PickResult* pr; /* N13a: 多选结果输出（lpCreateParams 传入） */
 } PickState;
+
+/* N13a: 变量多选结果（模糊搜索对话框确定后回填） */
+typedef struct PickResult {
+    int count;
+    int ids[512];
+} PickResult;
 
 typedef struct EditState {
     int* result;
@@ -1151,19 +1157,41 @@ static void pick_refresh(HWND dlg)
     HWND hList = GetDlgItem(dlg, IDD_PICK_LIST);
     HWND hEdit = GetDlgItem(dlg, IDD_PICK_EDIT);
     int i;
+    if (!st) return;
     GetWindowTextW(hEdit, wtext, 512);
     WideCharToMultiByte(CP_UTF8, 0, wtext, -1, text, sizeof(text), NULL, NULL);
     st->count = os_vartree_search(text, 300, st->ids);
-    SendMessageW(hList, LB_RESETCONTENT, 0, 0);
+    SendMessageW(hList, LVM_DELETEALLITEMS, 0, 0);
     for (i = 0; i < st->count; i++) {
         const OS_Leaf* L = os_vartree_leaf(st->ids[i]);
         char full[420];
         wchar_t wfull[420];
+        LVITEMW it;
         if (!L) continue;
         _snprintf(full, 420, "%s @0x%llX", L->name, (unsigned long long)L->address);
         os_utf8_to_wide_buf(full, wfull, 420);
-        SendMessageW(hList, LB_ADDSTRING, 0, (LPARAM)wfull);
+        memset(&it, 0, sizeof(it));
+        it.mask = LVIF_TEXT;
+        it.iItem = i;
+        it.pszText = wfull;
+        SendMessageW(hList, LVM_INSERTITEMW, 0, (LPARAM)&it);
     }
+}
+
+/* N13a: 收集 ListView 中全部选中项（多选）到结果 */
+static void pick_collect(HWND dlg, PickState* st)
+{
+    HWND hList = GetDlgItem(dlg, IDD_PICK_LIST);
+    int n = (int)SendMessageW(hList, LVM_GETITEMCOUNT, 0, 0);
+    int i, out = 0;
+    if (!st || !st->pr) return;
+    st->pr->count = 0;
+    for (i = 0; i < n && out < 512; i++) {
+        if (ListView_GetItemState(hList, i, LVIS_SELECTED)) {
+            if (i < st->count) st->pr->ids[out++] = st->ids[i];
+        }
+    }
+    st->pr->count = out;
 }
 
 static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
@@ -1172,17 +1200,27 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_CREATE: {
         PickState* st = (PickState*)calloc(1, sizeof(PickState));
         CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
+        HWND hList;
+        LVCOLUMNW lc;
         if (!st) return -1;
-        if (cs) st->result = (int*)cs->lpCreateParams;
+        if (cs) st->pr = (PickResult*)cs->lpCreateParams;
         SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)st);
         CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                      10, 10, 380, 24, dlg, (HMENU)IDD_PICK_EDIT, g_app.hInst, NULL);
-        CreateWindowW(L"LISTBOX", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-                      10, 40, 380, 270, dlg, (HMENU)IDD_PICK_LIST, g_app.hInst, NULL);
+                      10, 10, 420, 24, dlg, (HMENU)IDD_PICK_EDIT, g_app.hInst, NULL);
+        /* N13a: 列表改 ListView（报表模式，原生支持 Ctrl+单击多选 / Shift 起止范围选） */
+        hList = CreateWindowW(WC_LISTVIEWW, L"",
+                              WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL | LVS_REPORT | LVS_SHOWSELALWAYS,
+                              10, 40, 420, 280, dlg, (HMENU)IDD_PICK_LIST, g_app.hInst, NULL);
+        ListView_SetExtendedListViewStyle(hList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+        memset(&lc, 0, sizeof(lc));
+        lc.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+        lc.pszText = L"变量（名称 @ 地址）";
+        lc.cx = 400;
+        SendMessageW(hList, LVM_INSERTCOLUMNW, 0, (LPARAM)&lc);
         CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                      270, 320, 60, 26, dlg, (HMENU)IDD_PICK_OK, g_app.hInst, NULL);
+                      310, 330, 60, 26, dlg, (HMENU)IDD_PICK_OK, g_app.hInst, NULL);
         CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE,
-                      340, 320, 60, 26, dlg, (HMENU)IDD_PICK_CANCEL, g_app.hInst, NULL);
+                      380, 330, 60, 26, dlg, (HMENU)IDD_PICK_CANCEL, g_app.hInst, NULL);
         return 0;
     }
     case WM_DESTROY: {
@@ -1196,59 +1234,117 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         MoveWindow(GetDlgItem(dlg, IDD_PICK_OK), LOWORD(lParam) - 140, HIWORD(lParam) - 36, 60, 26, TRUE);
         MoveWindow(GetDlgItem(dlg, IDD_PICK_CANCEL), LOWORD(lParam) - 70, HIWORD(lParam) - 36, 60, 26, TRUE);
         return 0;
+    case WM_OS_PICK_TEST_SELECT: {
+        /* N13a 测试钩子：跨进程无法伪造键盘 Ctrl/Shift 状态，也无法用指针式
+         * LVM_SETITEMSTATE 编组；此钩子由回归脚本发送，在对话框进程内
+         * 程序化选中 [start, start+count) 范围（等价 Ctrl/Shift 手选结果）。 */
+        HWND hList = GetDlgItem(dlg, IDD_PICK_LIST);
+        int n = (int)SendMessageW(hList, LVM_GETITEMCOUNT, 0, 0);
+        int start = (int)wParam, cnt = (int)lParam, i;
+        LVITEMW it;
+        memset(&it, 0, sizeof(it));
+        it.mask = LVIF_STATE;
+        it.stateMask = LVIS_SELECTED;
+        for (i = 0; i < n; i++) {
+            it.iItem = i;
+            it.state = 0;
+            SendMessageW(hList, LVM_SETITEMSTATE, (WPARAM)i, (LPARAM)&it);
+        }
+        for (i = start; i < n && i < start + cnt; i++) {
+            it.iItem = i;
+            it.state = LVIS_SELECTED;
+            SendMessageW(hList, LVM_SETITEMSTATE, (WPARAM)i, (LPARAM)&it);
+        }
+        return 0;
+    }
+    case WM_NOTIFY: {
+        NMHDR* h = (NMHDR*)lParam;
+        if (h && h->idFrom == IDD_PICK_LIST) {
+            if (h->code == NM_DBLCLK) {
+                /* 双击列表项 = 确定（全部选中项） */
+                PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+                pick_collect(dlg, st);
+                DestroyWindow(dlg);
+                return 0;
+            }
+            if (h->code == LVN_KEYDOWN) {
+                /* N13a: Ctrl+A 全选 */
+                NMLVKEYDOWN* kv = (NMLVKEYDOWN*)lParam;
+                if (kv && kv->wVKey == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                    HWND hList = GetDlgItem(dlg, IDD_PICK_LIST);
+                    int n = (int)SendMessageW(hList, LVM_GETITEMCOUNT, 0, 0);
+                    int i;
+                    LVITEMW it;
+                    memset(&it, 0, sizeof(it));
+                    it.mask = LVIF_STATE;
+                    it.stateMask = LVIS_SELECTED;
+                    for (i = 0; i < n; i++) {
+                        it.iItem = i;
+                        it.state = LVIS_SELECTED;
+                        SendMessageW(hList, LVM_SETITEMSTATE, (WPARAM)i, (LPARAM)&it);
+                    }
+                    return 0;
+                }
+            }
+        }
+        break;
+    }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDD_PICK_EDIT:
             if (HIWORD(wParam) == EN_CHANGE) pick_refresh(dlg);
             return 0;
-        case IDD_PICK_LIST:
-            if (HIWORD(wParam) == LBN_DBLCLK) {
-                PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
-                int sel = (int)SendMessageW(GetDlgItem(dlg, IDD_PICK_LIST), LB_GETCURSEL, 0, 0);
-                if (sel >= 0 && sel < st->count) {
-                    if (st->result) *st->result = st->ids[sel] + 1;
-                    DestroyWindow(dlg);
-                }
-            }
-            return 0;
         case IDD_PICK_OK: {
             PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
-            int sel = (int)SendMessageW(GetDlgItem(dlg, IDD_PICK_LIST), LB_GETCURSEL, 0, 0);
-            if (sel < 0) sel = 0;
-            if (st->count > 0 && sel >= 0 && sel < st->count) {
-                if (st->result) *st->result = st->ids[sel] + 1;
-                DestroyWindow(dlg);
-            }
-            return 0;
-        }
-        case IDD_PICK_CANCEL:
-        {
-            PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
-            if (st && st->result) *st->result = 0;
+            pick_collect(dlg, st);
             DestroyWindow(dlg);
             return 0;
         }
+        case IDD_PICK_CANCEL:
+            DestroyWindow(dlg);
+            return 0;
         }
         break;
     }
     return DefWindowProcW(dlg, msg, wParam, lParam);
 }
 
-int os_dlg_pick_var(HWND owner, int* out_leaf_id)
+/* N13a: 共享对话框运行：多选结果写入 pr */
+static int run_pick_dialog(HWND owner, PickResult* pr)
 {
     HWND dlg;
-    int res = 0;
+    pr->count = 0;
+    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgPick", L"添加变量（模糊搜索·支持多选）",
+                          WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                          CW_USEDEFAULT, CW_USEDEFAULT, 460, 400, owner, NULL, g_app.hInst, pr);
+    if (!dlg) return -1;
+    run_modal(dlg, owner);
+    return (pr->count > 0) ? 0 : -1;
+}
+
+/* N13a: 多选版本：成功返回 0，out_ids 写入全部选中叶变量 id，out_count 为个数；取消返回 -1 */
+int os_dlg_pick_vars(HWND owner, int* out_ids, int max_out, int* out_count)
+{
+    PickResult pr;
+    int i, n;
     if (g_app.leaf_count <= 0) {
         MessageBoxW(owner, L"请先加载 ELF 文件", L"选择变量", MB_OK | MB_ICONINFORMATION);
         return -1;
     }
-    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgPick", L"添加变量（模糊搜索）",
-                          WS_POPUP | WS_CAPTION | WS_SYSMENU,
-                          CW_USEDEFAULT, CW_USEDEFAULT, 420, 370, owner, NULL, g_app.hInst, &res);
-    if (!dlg) return -1;
-    run_modal(dlg, owner);
-    if (res > 0) {
-        if (out_leaf_id) *out_leaf_id = res - 1;
+    if (run_pick_dialog(owner, &pr) != 0) return -1;
+    n = pr.count;
+    if (n > max_out) n = max_out;
+    for (i = 0; i < n; i++) out_ids[i] = pr.ids[i];
+    if (out_count) *out_count = n;
+    return 0;
+}
+
+int os_dlg_pick_var(HWND owner, int* out_leaf_id)
+{
+    int ids[1], n = 0;
+    if (os_dlg_pick_vars(owner, ids, 1, &n) != 0) return -1;
+    if (n > 0) {
+        if (out_leaf_id) *out_leaf_id = ids[0];
         return 0;
     }
     return -1;
@@ -1955,7 +2051,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.6.0\n\n"
+                        L"OpenScope v1.7.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"

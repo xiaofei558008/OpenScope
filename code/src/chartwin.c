@@ -40,7 +40,14 @@ typedef struct OS_ChartWin {
     int fit_y;          /* 1 = Y 自动缩放，0 = 手动 vylo/vyhi */
     int64_t vx0, vx1;   /* 手动 X 时间窗 (us) */
     double vylo, vyhi;  /* 手动 Y 值域 */
-    int multiaxis;      /* Ctrl+B 多坐标轴：每路独立 Y 轴 */
+    int stacked;        /* N13c: Ctrl+B 堆叠排列：1=每路一行（独立Y轴左置），0=全部叠加 */
+    /* N13e/f/g: 光标 + Δ 测量 */
+    POINT cursor;       /* 鼠标位置（客户区） */
+    int hover_plot;     /* 鼠标在绘图区内 */
+    POINT m0, m1;       /* 测量锚点1/2（客户区），x<0=未设置 */
+    int64_t mt0, mt1;   /* 锚点时间 (us) */
+    double mv0, mv1;    /* 锚点值 */
+    int mark_sid;       /* 测量所用系列下标 */
 } OS_ChartWin;
 
 static const wchar_t* g_chart_class = L"OSChartWin";
@@ -238,22 +245,169 @@ static void chart_series_range(OS_ChartWin* cw, const OS_Series* sr, double* ylo
     else { double pad = (*yhi - *ylo) * 0.08; *ylo -= pad; *yhi += pad; }
 }
 
+/* ---------- N13 辅助：绘图区/坐标映射 ---------- */
+
+/* 绘图区客户坐标（左 56px 为 Y 轴标注槽，底部 18px 为 X 轴标注） */
+static void chart_plot_rect(OS_ChartWin* cw, RECT* plot)
+{
+    RECT rc;
+    GetClientRect(cw->hwnd, &rc);
+    *plot = rc;
+    plot->top += 26;
+    plot->left += 56;
+    plot->bottom -= 18;
+    plot->right -= 6;
+}
+
+static int map_x(const RECT* plot, int64_t x0, int64_t x1, int64_t t)
+{
+    int x;
+    if (x1 <= x0) return plot->left + (plot->right - plot->left) / 2;
+    x = plot->left + (int)((double)(plot->right - plot->left) * (double)(t - x0) / (double)(x1 - x0));
+    if (x < plot->left) x = plot->left;
+    if (x > plot->right) x = plot->right;
+    return x;
+}
+
+static int map_y(const RECT* lane, double val, double ylo, double yhi)
+{
+    int y;
+    if (yhi - ylo < 1e-12) yhi = ylo + 1.0;
+    y = lane->bottom - (int)((val - ylo) / (yhi - ylo) * (lane->bottom - lane->top));
+    if (y < lane->top) y = lane->top;
+    if (y > lane->bottom) y = lane->bottom;
+    return y;
+}
+
+/* 某系列时间上距 t 最近的样本下标（缓冲下标），无样本返回 0 */
+static int chart_sample_at_time(const OS_Series* sr, int view_all, int npoints, int64_t t)
+{
+    int start = chart_vis_start(sr, view_all, npoints);
+    int64_t best = INT64_MAX;
+    int j, bi = -1;
+    for (j = start; j < sr->count; j++) {
+        int idx = (sr->head - sr->count + j) % OS_CHART_HIST;
+        int64_t dt;
+        if (idx < 0) idx += OS_CHART_HIST;
+        dt = sr->ts[idx] - t;
+        if (dt < 0) dt = -dt;
+        if (dt < best) { best = dt; bi = idx; }
+    }
+    return (bi >= 0) ? bi : 0;
+}
+
+/* N13f: 叶变量的数据类型文本，如 uint32_t / int16_t / float / enum */
+static void chart_type_name(const OS_Leaf* L, char* out, int cap)
+{
+    const char* base = "other";
+    if (!L || cap <= 0) return;
+    switch (L->kind) {
+    case OS_TYPE_INT:  base = L->is_signed ? "int" : "uint"; break;
+    case OS_TYPE_UINT: base = L->is_signed ? "int" : "uint"; break;
+    case OS_TYPE_FLOAT: base = "float"; break;
+    case OS_TYPE_BOOL: base = "bool"; break;
+    case OS_TYPE_ENUM: base = "enum"; break;
+    case OS_TYPE_STRING: base = "char"; break;
+    case OS_TYPE_PTR: base = "ptr"; break;
+    default: base = "other"; break;
+    }
+    if (L->kind == OS_TYPE_INT || L->kind == OS_TYPE_UINT) {
+        int bits = (int)(L->size ? L->size : 4) * 8;
+        _snprintf(out, cap, "%s%d_t%s%s", L->is_signed ? "int" : "uint", bits,
+                  L->is_ptr ? "*" : "", L->is_bitfield ? ":bf" : "");
+    } else {
+        _snprintf(out, cap, "%s%s%s", base, L->is_ptr ? "*" : "",
+                  L->is_bitfield ? ":bf" : "");
+    }
+}
+
+/* 绘制一路曲线：折线 + （可见点少时）采样圆点 */
+static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
+                              const RECT* plot, const RECT* lane, int64_t x0, int64_t x1,
+                              double ylo, double yhi, int have_t, int view_all)
+{
+    int start = chart_vis_start(sr, view_all, cw->npoints);
+    int npts = sr->count - start;
+    int j, first = 1;
+    HPEN pen, old;
+    int dots = (npts > 0 && npts <= 120); /* N13d: 放大后采样点圆点 */
+    pen = CreatePen(PS_SOLID, 1, sr->color);
+    old = (HPEN)SelectObject(hdc, pen);
+    for (j = 0; j < npts; j++) {
+        int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
+        int x, y;
+        if (idx < 0) idx += OS_CHART_HIST;
+        if (have_t) {
+            int64_t t = sr->ts[idx];
+            if (t == 0 || t == -1) { first = 1; continue; }
+            if (t < x0 || t > x1) { first = 1; continue; }
+            x = map_x(plot, x0, x1, t);
+        } else {
+            x = (npts > 1) ? plot->left + (plot->right - plot->left) * j / (npts - 1) : plot->left;
+        }
+        y = map_y(lane, sr->val[idx], ylo, yhi);
+        if (first) { MoveToEx(hdc, x, y, NULL); first = 0; }
+        else LineTo(hdc, x, y);
+        if (dots) {
+            HBRUSH br = CreateSolidBrush(sr->color);
+            HBRUSH obr = (HBRUSH)SelectObject(hdc, br);
+            Ellipse(hdc, x - 2, y - 2, x + 2, y + 2);
+            SelectObject(hdc, obr);
+            DeleteObject(br);
+        }
+    }
+    SelectObject(hdc, old);
+    DeleteObject(pen);
+}
+
+/* N13e/g: 在像素 (px,py) 处取时间 + 最近系列样本，设置测量锚点 */
+static void chart_set_mark(OS_ChartWin* cw, const OS_ChartView* v, const RECT* plot, int px, int py)
+{
+    int64_t t;
+    int i, best_i = -1;
+    double best_d = 1e300, best_v = 0;
+    int64_t best_t;
+    if (!v->have_t || v->x1 <= v->x0) return;
+    t = v->x0 + (int64_t)((double)(v->x1 - v->x0) * (px - plot->left) / (double)(plot->right - plot->left));
+    best_t = t;
+    for (i = 0; i < cw->series_count; i++) {
+        OS_Series* sr = &cw->series[i];
+        int idx = chart_sample_at_time(sr, cw->view_all, cw->npoints, t);
+        double vv, d;
+        int x, y;
+        if (idx < 0 || idx >= OS_CHART_HIST || sr->count <= 0) continue;
+        vv = sr->val[idx];
+        x = map_x(plot, v->x0, v->x1, sr->ts[idx]);
+        y = map_y(plot, vv, v->ylo, v->yhi);
+        d = (double)(x - px) * (x - px) + (double)(y - py) * (y - py);
+        if (d < best_d) { best_d = d; best_i = i; best_v = vv; best_t = sr->ts[idx]; }
+    }
+    if (best_i < 0) return;
+    if (cw->m0.x >= 0 && cw->m1.x >= 0) { cw->m0.x = cw->m1.x = -1; }
+    if (cw->m0.x < 0) {
+        cw->m0.x = px; cw->m0.y = py;
+        cw->mt0 = best_t; cw->mv0 = best_v; cw->mark_sid = best_i;
+        os_log(OS_LOG_INFO, "波形测量标记1: t=%lldus 值=%g", (long long)best_t, best_v);
+    } else {
+        cw->m1.x = px; cw->m1.y = py;
+        cw->mt1 = best_t; cw->mv1 = best_v;
+        os_log(OS_LOG_INFO, "波形测量Δ: ΔX=%lldus ΔY=%g",
+               (long long)(best_t - cw->mt0), best_v - cw->mv0);
+    }
+}
+
 static void chart_draw(OS_ChartWin* cw, HDC hdc)
 {
     RECT rc, plot;
-    int th = 26, lw = 56, xh = 18, i, j;
-    int right_gutter;
+    int th = 26, i, j;
     HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     OS_ChartView v;
     GetClientRect(cw->hwnd, &rc);
-    /* N9(c): 多坐标轴时右侧每路独立 Y 轴，占 (路数 × 42) 宽度 */
-    right_gutter = (cw->multiaxis && cw->series_count > 0)
-                       ? cw->series_count * 42 + 6 : 6;
     plot = rc;
     plot.top += th;
-    plot.left += lw;
-    plot.bottom -= xh;
-    plot.right -= right_gutter;
+    plot.left += 56;
+    plot.bottom -= 18;
+    plot.right -= 6;
     chart_compute_view(cw, &v);
     /* 标题栏 */
     {
@@ -268,9 +422,9 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         DrawTextW(hdc, cw->title, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         RECT xr = { rc.right - 20, 2, rc.right - 4, th - 2 };
         DrawTextW(hdc, L"×", -1, &xr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        if (cw->multiaxis) {
+        if (cw->stacked) {
             RECT mr = { rc.right - 190, 2, rc.right - 22, th - 2 };
-            DrawTextW(hdc, L"[多坐标轴]", -1, &mr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(hdc, L"[逐行堆叠]", -1, &mr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
         }
     }
     /* 绘图区背景 */
@@ -279,39 +433,103 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         FillRect(hdc, &plot, br);
         DeleteObject(br);
     }
-    /* 网格 */
+    /* 网格：竖直网格共享；水平网格叠加模式全局 / 堆叠模式逐 lane */
     {
         HPEN pen = CreatePen(PS_SOLID, 1, RGB(45, 45, 58));
         HPEN old = (HPEN)SelectObject(hdc, pen);
-        int nx = 10, ny = 8;
+        int nx = 10;
         for (i = 1; i < nx; i++) {
             int x = plot.left + (plot.right - plot.left) * i / nx;
             MoveToEx(hdc, x, plot.top, NULL);
             LineTo(hdc, x, plot.bottom);
         }
-        for (i = 1; i < ny; i++) {
-            int y = plot.top + (plot.bottom - plot.top) * i / ny;
-            MoveToEx(hdc, plot.left, y, NULL);
-            LineTo(hdc, plot.right, y);
-        }
         SelectObject(hdc, old);
         DeleteObject(pen);
+        if (cw->stacked && cw->series_count > 0) {
+            int lane_h = (plot.bottom - plot.top) / cw->series_count;
+            for (i = 0; i < cw->series_count; i++) {
+                RECT ln = plot;
+                ln.top = plot.top + i * lane_h;
+                ln.bottom = (i == cw->series_count - 1) ? plot.bottom : ln.top + lane_h;
+                HPEN sep = CreatePen(PS_DOT, 1, RGB(82, 82, 98));
+                HPEN os = (HPEN)SelectObject(hdc, sep);
+                if (i > 0) { MoveToEx(hdc, ln.left, ln.top - 1, NULL); LineTo(hdc, ln.right, ln.top - 1); }
+                for (j = 1; j < 3; j++) {
+                    int yy = ln.top + (ln.bottom - ln.top) * j / 3;
+                    MoveToEx(hdc, ln.left, yy, NULL);
+                    LineTo(hdc, ln.right, yy);
+                }
+                SelectObject(hdc, os);
+                DeleteObject(sep);
+            }
+        } else {
+            HPEN hpen = CreatePen(PS_SOLID, 1, RGB(45, 45, 58));
+            HPEN oh = (HPEN)SelectObject(hdc, hpen);
+            for (i = 1; i < 8; i++) {
+                int y = plot.top + (plot.bottom - plot.top) * i / 8;
+                MoveToEx(hdc, plot.left, y, NULL);
+                LineTo(hdc, plot.right, y);
+            }
+            SelectObject(hdc, oh);
+            DeleteObject(hpen);
+        }
     }
-    /* 坐标标注 */
-    SelectObject(hdc, font);
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, RGB(150, 150, 160));
-    {
-        char txt[64];
-        wchar_t wtxt[128];
-        RECT r;
+    /* Y 轴标注 + 曲线 */
+    if (cw->stacked && cw->series_count > 0) {
+        /* N13b/c: 堆叠模式：每路独立一行，独立 Y 轴放界面左侧 */
+        int lane_h = (plot.bottom - plot.top) / cw->series_count;
+        for (i = 0; i < cw->series_count; i++) {
+            OS_Series* sr = &cw->series[i];
+            const OS_Leaf* L = os_vartree_leaf(sr->leaf_id);
+            double sy0, sy1;
+            RECT ln = plot;
+            ln.top = plot.top + i * lane_h;
+            ln.bottom = (i == cw->series_count - 1) ? plot.bottom : ln.top + lane_h;
+            chart_series_range(cw, sr, &sy0, &sy1);
+            SelectObject(hdc, font);
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, sr->color);
+            for (j = 0; j <= 2; j++) {
+                double val = sy1 - (sy1 - sy0) * j / 2.0;
+                int yy = ln.top + (ln.bottom - ln.top) * j / 2;
+                char txt[64];
+                wchar_t wt[128];
+                RECT r;
+                _snprintf(txt, 64, "%.3g", val);
+                os_utf8_to_wide_buf(txt, wt, 128);
+                r.left = 2; r.top = yy - 8; r.right = plot.left - 2; r.bottom = yy + 8;
+                DrawTextW(hdc, wt, -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            }
+            if (L) {
+                wchar_t wnm[340];
+                char nm[300];
+                RECT tr;
+                _snprintf(nm, 300, "%s", L->name);
+                os_utf8_to_wide_buf(nm, wnm, 340);
+                tr.left = ln.left + 4; tr.top = ln.top + 1;
+                tr.right = ln.left + 360; tr.bottom = ln.top + 15;
+                DrawTextW(hdc, wnm, -1, &tr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_END_ELLIPSIS);
+            }
+            chart_draw_series(hdc, cw, sr, &plot, &ln, v.x0, v.x1, sy0, sy1, v.have_t, cw->view_all);
+        }
+    } else {
+        SelectObject(hdc, font);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, RGB(150, 150, 160));
         for (i = 0; i <= 4; i++) {
             double val = v.yhi - (v.yhi - v.ylo) * i / 4.0;
             int y = plot.top + (plot.bottom - plot.top) * i / 4;
+            char txt[64];
+            wchar_t wt[128];
+            RECT r;
             _snprintf(txt, 64, "%.3g", val);
-            os_utf8_to_wide_buf(txt, wtxt, 128);
+            os_utf8_to_wide_buf(txt, wt, 128);
             r.left = 2; r.top = y - 8; r.right = plot.left - 2; r.bottom = y + 8;
-            DrawTextW(hdc, wtxt, -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+            DrawTextW(hdc, wt, -1, &r, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
+        }
+        for (i = 0; i < cw->series_count; i++) {
+            OS_Series* sr = &cw->series[i];
+            chart_draw_series(hdc, cw, sr, &plot, &plot, v.x0, v.x1, v.ylo, v.yhi, v.have_t, cw->view_all);
         }
     }
     /* 时间轴（底部） */
@@ -330,81 +548,95 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
             DrawTextW(hdc, wt, -1, &r, DT_CENTER | DT_TOP | DT_SINGLELINE);
         }
     }
-    /* 曲线 */
-    for (i = 0; i < cw->series_count; i++) {
-        OS_Series* sr = &cw->series[i];
-        int start = chart_vis_start(sr, cw->view_all, cw->npoints);
-        int npts = sr->count - start;
-        double s_ylo = v.ylo, s_yhi = v.yhi;
-        int first = 1;
-        HPEN pen, old;
-        if (cw->multiaxis) chart_series_range(cw, sr, &s_ylo, &s_yhi);
-        pen = CreatePen(PS_SOLID, 1, sr->color);
-        old = (HPEN)SelectObject(hdc, pen);
-        if (npts > 0) {
-            for (j = 0; j < npts; j++) {
-                int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
-                int x, y;
-                if (idx < 0) idx += OS_CHART_HIST;
-                if (v.have_t) {
-                    int64_t t = sr->ts[idx];
-                    int64_t denom = v.x1 - v.x0;
-                    if (t == 0 || t == -1) { first = 1; continue; }
-                    if (t < v.x0 || t > v.x1) { first = 1; continue; }
-                    if (denom > 0)
-                        x = plot.left + (int)((double)(plot.right - plot.left) * (double)(t - v.x0) / (double)denom);
-                    else
-                        x = plot.left + (plot.right - plot.left) / 2;
-                } else {
-                    x = (npts > 1) ? plot.left + (plot.right - plot.left) * j / (npts - 1) : plot.left;
-                }
-                if (x < plot.left) x = plot.left;
-                if (x > plot.right) x = plot.right;
-                y = plot.bottom - (int)((sr->val[idx] - s_ylo) / (s_yhi - s_ylo) * (plot.bottom - plot.top));
-                if (y < plot.top) y = plot.top;
-                if (y > plot.bottom) y = plot.bottom;
-                if (first) { MoveToEx(hdc, x, y, NULL); first = 0; }
-                else LineTo(hdc, x, y);
+    /* N13e: 测量标记 + Δ 读值 */
+    if (cw->m0.x >= 0) {
+        int sid = (cw->mark_sid >= 0 && cw->mark_sid < cw->series_count) ? cw->mark_sid : 0;
+        COLORREF mc = cw->series[sid].color;
+        HPEN mpen = CreatePen(PS_DASHDOT, 1, mc);
+        HPEN old = (HPEN)SelectObject(hdc, mpen);
+        SelectObject(hdc, font);
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, mc);
+        MoveToEx(hdc, cw->m0.x, plot.top, NULL);
+        LineTo(hdc, cw->m0.x, plot.bottom);
+        if (cw->m1.x >= 0) {
+            MoveToEx(hdc, cw->m0.x, cw->m0.y, NULL);
+            LineTo(hdc, cw->m1.x, cw->m1.y);
+            MoveToEx(hdc, cw->m1.x, plot.top, NULL);
+            LineTo(hdc, cw->m1.x, plot.bottom);
+            {
+                wchar_t wt[180];
+                RECT r;
+                _snwprintf(wt, 180, L"ΔX=%lldus  ΔY=%g",
+                           (long long)(cw->mt1 - cw->mt0), cw->mv1 - cw->mv0);
+                r.left = cw->m0.x + 8; r.top = plot.top + 4;
+                r.right = cw->m0.x + 320; r.bottom = plot.top + 22;
+                if (r.right > plot.right) { r.left = cw->m0.x - 320; r.right = cw->m0.x - 8; }
+                DrawTextW(hdc, wt, -1, &r, DT_LEFT | DT_TOP | DT_SINGLELINE);
             }
         }
         SelectObject(hdc, old);
-        DeleteObject(pen);
+        DeleteObject(mpen);
     }
-    /* N9(c): 多坐标轴：右侧每路独立 Y 轴（竖线+刻度值），颜色跟随变量颜色 */
-    if (cw->multiaxis && cw->series_count > 0) {
-        int lane = 42;
-        int gutter = cw->series_count * lane + 6;
-        for (i = 0; i < cw->series_count; i++) {
-            OS_Series* sr = &cw->series[i];
-            double sy0, sy1;
-            int lane_left = rc.right - gutter + i * lane;
-            int ax = lane_left + 6;
-            int k;
-            HPEN pen, old;
-            if (sr->count <= 0) continue;
-            chart_series_range(cw, sr, &sy0, &sy1);
-            pen = CreatePen(PS_SOLID, 1, sr->color);
-            old = (HPEN)SelectObject(hdc, pen);
-            MoveToEx(hdc, ax, plot.top, NULL);
-            LineTo(hdc, ax, plot.bottom);
-            SelectObject(hdc, old);
-            DeleteObject(pen);
-            SetTextColor(hdc, sr->color);
-            for (k = 0; k <= 2; k++) {
-                double val = sy1 - (sy1 - sy0) * k / 2.0;
-                int y = plot.top + (plot.bottom - plot.top) * k / 2;
-                char txt[64];
-                wchar_t wt[128];
+    /* N13f/g: 十字光标 + HUD 数值（同一 X 各系列 Y 值同时显示） */
+    if (cw->hover_plot && cw->cursor.x >= plot.left && cw->cursor.x <= plot.right &&
+        cw->cursor.y >= plot.top && cw->cursor.y <= plot.bottom) {
+        int64_t t;
+        HPEN cpen = CreatePen(PS_DOT, 1, RGB(190, 190, 210));
+        HPEN old = (HPEN)SelectObject(hdc, cpen);
+        MoveToEx(hdc, cw->cursor.x, plot.top, NULL);
+        LineTo(hdc, cw->cursor.x, plot.bottom);
+        MoveToEx(hdc, plot.left, cw->cursor.y, NULL);
+        LineTo(hdc, plot.right, cw->cursor.y);
+        SelectObject(hdc, old);
+        DeleteObject(cpen);
+        if (v.have_t && v.x1 > v.x0) {
+            t = v.x0 + (int64_t)((double)(v.x1 - v.x0) * (cw->cursor.x - plot.left) / (double)(plot.right - plot.left));
+            {
+                char buf[900];
+                int nlines = 0, ii;
+                wchar_t wbuf[1000];
                 RECT r;
-                _snprintf(txt, 64, "%.3g", val);
-                os_utf8_to_wide_buf(txt, wt, 128);
-                r.left = ax + 3; r.top = y - 8;
-                r.right = lane_left + lane - 2; r.bottom = y + 8;
-                DrawTextW(hdc, wt, -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                buf[0] = 0;
+                for (ii = 0; ii < cw->series_count; ii++) {
+                    OS_Series* sr = &cw->series[ii];
+                    const OS_Leaf* L = os_vartree_leaf(sr->leaf_id);
+                    int idx;
+                    char line[340], tn[64];
+                    if (!L || sr->count <= 0) continue;
+                    idx = chart_sample_at_time(sr, cw->view_all, cw->npoints, t);
+                    chart_type_name(L, tn, 64);
+                    _snprintf(line, 340, "%s = %.6g (%s)", L->name, sr->val[idx], tn);
+                    if (nlines < 8) {
+                        if (nlines) strncat(buf, "\n", sizeof(buf) - strlen(buf) - 1);
+                        strncat(buf, line, sizeof(buf) - strlen(buf) - 1);
+                    }
+                    nlines++;
+                }
+                if (buf[0]) {
+                    int hpx = nlines * 14 + 8, wpx = 320;
+                    int bx = cw->cursor.x + 12, by = cw->cursor.y + 12;
+                    os_utf8_to_wide_buf(buf, wbuf, 1000);
+                    if (bx + wpx > plot.right) bx = cw->cursor.x - wpx - 12;
+                    if (by + hpx > plot.bottom) by = cw->cursor.y - hpx - 12;
+                    r.left = bx; r.top = by; r.right = bx + wpx; r.bottom = by + hpx;
+                    {
+                        HBRUSH bgb = CreateSolidBrush(RGB(24, 26, 38));
+                        HPEN bpen = CreatePen(PS_SOLID, 1, RGB(90, 95, 115));
+                        HBRUSH ob = (HBRUSH)SelectObject(hdc, bgb);
+                        HPEN obp = (HPEN)SelectObject(hdc, bpen);
+                        Rectangle(hdc, r.left, r.top, r.right, r.bottom);
+                        SelectObject(hdc, ob);
+                        DeleteObject(bgb);
+                        SelectObject(hdc, obp);
+                        DeleteObject(bpen);
+                    }
+                    SetTextColor(hdc, RGB(220, 225, 235));
+                    DrawTextW(hdc, wbuf, -1, &r, DT_LEFT | DT_TOP | DT_NOCLIP);
+                }
             }
         }
     }
-
     /* 无数据提示 */
     {
         int total = 0;
@@ -418,8 +650,8 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
             DrawTextW(hdc, wt, -1, &r, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         }
     }
-    /* 图例 */
-    {
+    /* 图例（叠加模式；堆叠模式每 lane 已有标题） */
+    if (!cw->stacked) {
         int ly = plot.top + 4;
         for (i = 0; i < cw->series_count; i++) {
             OS_Series* sr = &cw->series[i];
@@ -459,6 +691,9 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         p->npoints = 600;
         p->fit_x = 1;  /* 新建窗口默认跟随最新（与暂停态相反），保证 X 时间窗有效 */
         p->fit_y = 1;
+        p->cursor.x = p->cursor.y = -1;  /* N13e/f/g: 初始无光标/测量标记 */
+        p->m0.x = p->m1.x = -1;
+        p->mark_sid = -1;
         if (cs->lpszName) _snwprintf(p->title, 128, L"%s", cs->lpszName);
         else _snwprintf(p->title, 128, L"波形窗口");
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)p);
@@ -494,24 +729,59 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_LBUTTONDOWN: {
         if (cw) {
             int x = (short)LOWORD(lParam);
-            RECT rc;
+            int y = (short)HIWORD(lParam);
+            RECT rc, plot;
+            int hit;
             GetClientRect(hwnd, &rc);
-            if (x >= rc.right - 22 && (short)HIWORD(lParam) < 26) {
+            if (x >= rc.right - 22 && y < 26) {
                 PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
                 return 0;
             }
             /* N9(b): 点击图例选中对应系列 */
-            {
-                int hit = chart_legend_hit(cw, x, (short)HIWORD(lParam));
-                if (hit >= 0) {
-                    cw->sel = hit;
-                    InvalidateRect(hwnd, NULL, FALSE);
+            hit = chart_legend_hit(cw, x, y);
+            if (hit >= 0) {
+                cw->sel = hit;
+                InvalidateRect(hwnd, NULL, FALSE);
+            } else {
+                /* N13e: 绘图区内点击设置测量锚点（两次测量 Δ） */
+                chart_plot_rect(cw, &plot);
+                if (x >= plot.left && x <= plot.right && y >= plot.top && y <= plot.bottom) {
+                    OS_ChartView v;
+                    chart_compute_view(cw, &v);
+                    chart_set_mark(cw, &v, &plot, x, y);
+                    InvalidateRect(hwnd, NULL, TRUE);
                 }
             }
             SetFocus(hwnd); /* 便于接收 F / Ctrl+B 快捷键 */
         }
         return 0;
     }
+    case WM_MOUSEMOVE: {
+        /* N13e/f/g: 记录光标位置，绘图区内显示十字光标 + HUD 数值 */
+        if (cw) {
+            RECT plot;
+            int x = (short)LOWORD(lParam);
+            int y = (short)HIWORD(lParam);
+            TRACKMOUSEEVENT tme;
+            cw->cursor.x = x;
+            cw->cursor.y = y;
+            chart_plot_rect(cw, &plot);
+            cw->hover_plot = (x >= plot.left && x <= plot.right && y >= plot.top && y <= plot.bottom) ? 1 : 0;
+            InvalidateRect(hwnd, NULL, FALSE);
+            tme.cbSize = sizeof(tme);
+            tme.dwFlags = TME_LEAVE;
+            tme.hwndTrack = hwnd;
+            TrackMouseEvent(&tme);
+        }
+        return 0;
+    }
+    case WM_MOUSELEAVE:
+        if (cw) {
+            cw->hover_plot = 0;
+            cw->cursor.x = cw->cursor.y = -1;
+            InvalidateRect(hwnd, NULL, FALSE);
+        }
+        return 0;
     case WM_RBUTTONUP: {
         HMENU m = CreatePopupMenu();
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
@@ -529,7 +799,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         AppendMenuW(m, MF_STRING, MENU_CHART_ADD, L"添加变量...");
         AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), MENU_CHART_REMOVE, L"移除选中变量");
         AppendMenuW(m, MF_STRING | (cw && cw->paused ? MF_CHECKED : 0), MENU_CHART_PAUSE, L"暂停刷新");
-        AppendMenuW(m, MF_STRING | (cw && cw->multiaxis ? MF_CHECKED : 0), MENU_CHART_MULTIAXIS, L"多坐标轴 (Ctrl+B)");
+        AppendMenuW(m, MF_STRING | (cw && cw->stacked ? MF_CHECKED : 0), MENU_CHART_MULTIAXIS, L"逐行堆叠 (Ctrl+B)");
         AppendMenuW(m, MF_STRING, MENU_CHART_FITALL, L"全局显示 (F)");
         AppendMenuW(m, MF_STRING, MENU_CHART_ZOOMRESET, L"重置缩放");
         AppendMenuW(m, MF_STRING, MENU_CHART_CLEAR, L"清除数据");
@@ -588,6 +858,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     }
                 }
                 cw->view_all = 0; /* 缩放退出整体展示 */
+                cw->m0.x = cw->m1.x = -1; /* 缩放后清除测量标记 */
                 InvalidateRect(hwnd, NULL, TRUE);
             }
         }
@@ -601,10 +872,10 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 os_log(OS_LOG_DEBUG, "波形全局显示 (F)");
                 InvalidateRect(hwnd, NULL, TRUE);
                 break;
-            case 'B': case 'b': /* Ctrl+B 多坐标轴 */
+            case 'B': case 'b': /* Ctrl+B：逐行堆叠 / 全部叠加 */
                 if (GetKeyState(VK_CONTROL) & 0x8000) {
-                    cw->multiaxis = !cw->multiaxis;
-                    os_log(OS_LOG_DEBUG, "波形多坐标轴: %d", cw->multiaxis);
+                    cw->stacked = !cw->stacked;
+                    os_log(OS_LOG_DEBUG, "波形多坐标轴: %d", cw->stacked);
                     InvalidateRect(hwnd, NULL, TRUE);
                 }
                 break;
@@ -630,8 +901,12 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case MENU_CHART_ADD: {
-            int id = -1;
-            if (os_dlg_pick_var(hwnd, &id) == 0 && id >= 0) os_chart_add_var(hwnd, id);
+            /* N13a: 多选：一次添加全部选中变量 */
+            int ids[OS_MAX_CHART_SERIES], n = 0, i;
+            if (os_dlg_pick_vars(hwnd, ids, OS_MAX_CHART_SERIES, &n) == 0) {
+                for (i = 0; i < n; i++) os_chart_add_var(hwnd, ids[i]);
+                os_log(OS_LOG_INFO, "波形窗口批量添加变量: %d 个", n);
+            }
             break;
         }
         case MENU_CHART_PAUSE:
@@ -652,14 +927,15 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             break;
         case MENU_CHART_MULTIAXIS:
             if (cw) {
-                cw->multiaxis = !cw->multiaxis;
-                os_log(OS_LOG_DEBUG, "波形多坐标轴: %d (菜单)", cw->multiaxis);
+                cw->stacked = !cw->stacked;
+                os_log(OS_LOG_DEBUG, "波形多坐标轴: %d (菜单)", cw->stacked);
                 InvalidateRect(hwnd, NULL, TRUE);
             }
             break;
         case MENU_CHART_ZOOMRESET:
             if (cw) {
                 cw->view_all = 0; cw->fit_x = 1; cw->fit_y = 1;
+                cw->m0.x = cw->m1.x = -1;
                 InvalidateRect(hwnd, NULL, TRUE);
             }
             break;

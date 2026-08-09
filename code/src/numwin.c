@@ -332,8 +332,12 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case MENU_NUM_ADD: {
-            int id = -1;
-            if (os_dlg_pick_var(hwnd, &id) == 0 && id >= 0) os_num_add_var(hwnd, id);
+            /* N13a: 多选：一次添加全部选中变量 */
+            int ids[16], n = 0, i;
+            if (os_dlg_pick_vars(hwnd, ids, 16, &n) == 0) {
+                for (i = 0; i < n && i < 16; i++) os_num_add_var(hwnd, ids[i]);
+                os_log(OS_LOG_INFO, "数值窗口批量添加变量: %d 个", n);
+            }
             break;
         }
         case MENU_NUM_REMOVE: {

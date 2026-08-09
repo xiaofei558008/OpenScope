@@ -5,6 +5,8 @@
 
 /* 变量模糊搜索选择对话框：成功返回 0 并写 leaf id，取消返回非 0 */
 int os_dlg_pick_var(HWND owner, int* out_leaf_id);
+/* N13a: 多选版本：成功返回 0，out_ids 写入全部选中叶变量 id，out_count 为个数 */
+int os_dlg_pick_vars(HWND owner, int* out_ids, int max_out, int* out_count);
 /* 变量值编辑/写入对话框：成功返回 0 */
 int os_dlg_edit_value(HWND owner, int leaf_id);
 

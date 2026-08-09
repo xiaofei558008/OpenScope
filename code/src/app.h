@@ -27,6 +27,7 @@
 #define WM_OS_WIN_MAXIMIZE (WM_APP + 8) /* N11: 窗口最大化/还原填满当前 tab (wParam=HWND) */
 #define WM_OS_TREE_AUTOHIDE (WM_APP + 9) /* N9(d): 变量栏自动隐藏开关 (wParam=0/1，测试钩子) */
 #define WM_OS_WIN_FULLSCREEN (WM_APP + 10) /* Bug3: 单窗口全屏/退出全屏 (wParam=HWND) */
+#define WM_OS_PICK_TEST_SELECT (WM_APP + 30) /* N13a 测试钩子：变量选择对话框选中范围 [wParam, wParam+lParam) */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 

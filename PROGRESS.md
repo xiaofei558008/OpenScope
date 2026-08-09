@@ -100,6 +100,15 @@
   - Bug3 修复：单窗口全屏/退出全屏（SetParent 临时改父为主窗口铺满客户区，退出还原回 tab）。
   - 测试：新增 `tests/ui_features_drive.ps1`（16 项：N6 无关于按钮 / N11 多窗口+最大化 / Bug3 全屏 / N12 钉图标 / N10 结构 / Ctrl+B 不崩溃），全部回归 dev+installed 两版 ALL PASS。
   - 版本 1.6.0：重新打包 `dist/OpenScope-Setup-1.6.0.exe`（10.4MB），安装版验证版本 1.6.0.0。
+- **checkpoint-18（2026-08-09）**：完成 request.md 新增特性 13（波形窗口分析增强）全部 + 需求 9（git tag + 双远端推送）（1.7.0）。
+  - N13a 添加变量弹窗多选：列表改 ListView（SysListView32，报表模式 + LVS_EX_FULLROWSELECT），原生支持 Ctrl+A 全选、Ctrl+单击多选、Shift 起止范围选（含起止本身）；新增 `os_dlg_pick_vars`（单变量 `os_dlg_pick_var` 复用其封装），波形/数值窗口“添加变量”一次批量添加全部选中项；新增 `WM_OS_PICK_TEST_SELECT`（WM_APP+30）测试钩子（跨进程无法伪造键盘状态/指针式 LVM_SETITEMSTATE），在对话框进程内程序化选中范围等价 Ctrl/Shift 手选结果。
+  - N13b/c 多坐标轴左置 + Ctrl+B 堆叠：`multiaxis` 重构为 `stacked`，逐行堆叠时每路信号独立一行、独立 Y 轴刻度左置（信号颜色），叠加排列时共享 Y 轴 + 图例；Ctrl+B / 菜单“逐行堆叠 (Ctrl+B)”切换，日志保持 `波形多坐标轴: 1/0`（兼容旧回归）。
+  - N13d 放大后采样点圆点显示：可见采样点 <=120 时以 2px 圆点绘制，便于观察采样间隔/时间。
+  - N13e 光标测量：绘图区两次左键分别设置测量标记 1/2，日志输出 `波形测量标记1: t=..值=..` 与 `波形测量Δ: ΔX=.. ΔY=..`，图上以虚点线标出并显示 Δ 读数框（第三次点击清除）。
+  - N13f/g 光标数值 HUD：鼠标悬停绘图区显示十字光标（PS_DOT），右侧 320px HUD 框列出各系列“变量名 = 数值 (类型)”在鼠标时刻的取值（同一 X 轴各 Y 曲线数值同时显示）；类型名含 int32_t/uint8_t/float/bool/enum/char/指针 + :bf 位域。
+  - 测试：新增 `tests/ui_pick_multi_drive.ps1`（N13a：ListView 结构/扩展样式/模糊搜索填充 178 项/范围选中含起止/全选首末项/批量添加 2 个 + 条数核对）与 `tests/ui_chart_n13_drive.ps1`（N13b-g：堆叠切换/滚轮放大/两次点击 Δ 测量/光标 HUD 渲染），dev+installed 两版全部 ALL PASS；连同既有 ui_rename/ui_windows/ui_chartview/ui_layout/ui_n9_watch/ui_bug2_restore/ui_features/ui_connect 全套回归 dev+installed 全部 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.7.0：重新打包 `dist/OpenScope-Setup-1.7.0.exe`（10.4MB），安装版验证版本 1.7.0.0。
+  - 需求 9：checkpoint-18 提交 git + `git tag v1.7.0` + 推送 `gitee_origin` 与 `github_origin` 双远端（首个 tag，便于 checkpoint 管理）。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -142,6 +151,11 @@
 - [x] 10 数值窗口就地写入 + 实时更新勾选框（checkpoint-17）
 - [x] 11 窗口最大化填满 tab + 一个 tab 多窗口（checkpoint-17）
 - [x] 12 左侧 elf 栏钉图标 + 自动隐藏（checkpoint-17）
+- [x] 13 波形窗口分析增强：多选添加变量 / 多坐标轴左置 + Ctrl+B 堆叠 / 放大采样点圆点 / 光标 Δ 测量 / 悬停数值 HUD（checkpoint-18）
+
+## 需求（request.md 软件功能清单）
+
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送）
 
 ## Bug（request.md，已修复）
 
