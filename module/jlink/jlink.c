@@ -25,6 +25,7 @@ typedef struct JLinkCtx {
     OS_ConnectCfg cfg;        /* 配置对话框保存的连接参数 */
     int connected;
     ULONGLONG last_reconnect_ms; /* 自动重连节流时间戳 */
+    ULONGLONG last_reconnect_log_ms; /* 重连成功日志节流时间戳（Bug10: 5s 一次） */
     char dll_dir[MAX_PATH];
     OS_DriverInfo info;
 } JLinkCtx;
@@ -212,7 +213,7 @@ static void jlink_refresh_info(void)
     OS_DriverInfo* d = &g_ctx.info;
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
-    _snprintf(d->version, sizeof(d->version), "%s", "1.8.2");
+    _snprintf(d->version, sizeof(d->version), "%s", "1.8.3");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
@@ -304,6 +305,9 @@ static int mod_disconnect(void)
 
 /* 自动重连节流：掉线后至少间隔这么久才再次重连，避免边缘目标高频重连刷日志 */
 #define OS_JLINK_RECONNECT_MIN_MS 500
+/* Bug10: 重连成功日志节流（5s 一次）。边缘目标高速下每 500ms 掉线重连一次，
+ * 若每次打日志会 2 条/秒刷屏；采集线程已改为时间基停摆判定，无需每次重连都提醒。 */
+#define OS_JLINK_RECONNECT_LOG_MS 5000
 
 static int mod_read(OS_MemReq* req)
 {
@@ -322,7 +326,10 @@ static int mod_read(OS_MemReq* req)
         /* 掉线（IsConnected=0）时自动重连一次恢复采集（Bug 9：避免永久全 0） */
         if (a->is_connected && !a->is_connected() &&
             (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_ms >= OS_JLINK_RECONNECT_MIN_MS) {
-            if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
+            if (g_fw && (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_log_ms >= OS_JLINK_RECONNECT_LOG_MS) {
+                g_ctx.last_reconnect_log_ms = (ULONGLONG)GetTickCount64();
+                g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
+            }
             mod_disconnect();
             if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
                 g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
@@ -422,7 +429,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "jlink",
-    "1.8.2",
+    "1.8.3",
     "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
     NULL,
     mod_init,

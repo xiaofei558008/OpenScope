@@ -6,11 +6,19 @@
 #include "vartree.h"
 #include <string.h>
 
+/* Bug10: 边缘目标高速下连接瞬时掉线（mod_read 重连节流 500ms 内读失败累积）。
+ * 旧 fail_count>10 硬中断（20ms 周期 × 2 变量 ≈ 100ms 即超限）会把"瞬时掉线（可自愈）"
+ * 误判为"连接中断"，在自动重连恢复前退出采集线程。
+ * 改为时间基：仅当连续无任何成功样本超过 OS_POLL_STALL_MS 才判定失联停止；
+ * 真死连接（重连失败 connected=0）仍由 IS_CONNECTED 即时捕获。 */
+#define OS_POLL_STALL_MS 3000
+
 static DWORD WINAPI poll_thread(LPVOID p)
 {
     /* Bug1: 480KB 栈数组会耗尽 1MB 线程栈导致无日志崩溃，改用堆 */
     OS_Sample* batch = (OS_Sample*)malloc(OS_MAX_LEAVES * sizeof(OS_Sample));
-    int fail_count = 0;
+    int fail_count = 0;          /* Bug10: 仅用于失败日志节流（前 3 次），不再用于中断 */
+    ULONGLONG last_ok_ms = GetTickCount64(); /* 最近一次成功读取时间戳（停摆判定起点） */
     (void)p;
     if (!batch) {
         os_log(OS_LOG_ERROR, "采集线程内存分配失败");
@@ -27,6 +35,11 @@ static DWORD WINAPI poll_thread(LPVOID p)
         }
         if (!connected) {
             os_log(OS_LOG_ERROR, "采集停止：MCU 连接已断开");
+            break;
+        }
+        if (GetTickCount64() - last_ok_ms > OS_POLL_STALL_MS) {
+            os_log(OS_LOG_ERROR, "采集停止：长时间读取失败（%d 秒无成功样本）",
+                   OS_POLL_STALL_MS / 1000);
             break;
         }
         for (i = 0; i < g_app.leaf_count && n < OS_MAX_LEAVES; i++) {
@@ -46,14 +59,14 @@ static DWORD WINAPI poll_thread(LPVOID p)
             req.data = buf;
             r = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &req, NULL);
             if (r != (int)sz) {
-                fail_count++;
-                if (fail_count <= 3)
+                /* Bug10: 瞬时失败（mod_read 自动重连可自愈），只节流记日志，不中断采集 */
+                if (fail_count++ < 3)
                     os_log(OS_LOG_ERROR, "读取 %s @0x%llX 失败 (ret=%d)",
                            L->name, (unsigned long long)L->address, r);
-                if (fail_count > 10) break;
                 continue;
             }
             fail_count = 0;
+            last_ok_ms = GetTickCount64();
             s = &batch[n++];
             memset(s, 0, sizeof(*s));
             s->ts_us = os_time_us();
@@ -68,7 +81,6 @@ static DWORD WINAPI poll_thread(LPVOID p)
         if (n > 0) {
             os_ds_push_batch(batch, n);
         }
-        if (fail_count > 10) break;
         Sleep((DWORD)g_app.poll_interval_ms);
     }
     g_app.stop_poll = 0;

@@ -1,7 +1,19 @@
-# OpenScope Epics & Stories（v6：request.md 更新版全覆盖）
+# OpenScope Epics & Stories（v7：request.md 更新版全覆盖）
 
-> BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~9、需求 9/10）。
-> 生成日期：2026-08-09。关联 checkpoint-20 基线（v1.8.1，需求 10 语音通知已完成）。**本轮 Epic 10：Bug 7/8/9 修复 + 选芯片简化（只需核心名）。checkpoint-21（v1.8.2）目标。**
+> BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~10、需求 9/10/17）。
+> 生成日期：2026-08-09。关联 checkpoint-21 基线（v1.8.2，Bug 7/8/9 + F17 已完成）。**本轮 Epic 11：Bug 10 修复（12000kHz 高速采集线程退出）。checkpoint-22（v1.8.3）目标。**
+
+## 本轮根因结论（BMAD 排查，2026-08-09）
+
+### Bug 10（12000 速度采集一开始就失败，采集线程退出）— 根因已确认
+- 现象：用 12000 kHz 采集，一开始即失败，日志出现"读取 xxx 失败"→"采集线程已退出"。
+- 机制（datasrv.c poll_thread + jlink.c mod_read 联动）：
+  1. 边缘目标在 12000 kHz 下 SWD 连接在 connect 后约 20ms 掉线（`IsConnected→0`，与 Bug 9 实测同一现象），connect 本身成功、采集线程启动；
+  2. Bug 9 修复已让 `mod_read` 在掉线时自动重连，但**重连节流 500ms**（`OS_JLINK_RECONNECT_MIN_MS`）；
+  3. 而 `poll_thread` 仍用**旧 fail_count>10 硬中断**：每次读失败 `fail_count++`，`>10` 即 `break` 退出线程。`poll_interval_ms=20`（main.c:163），1 个观测变量时 10 次失败仅 ~220ms，2 个变量更快——**远小于 500ms 重连节流窗口**；
+  4. 于是线程在自动重连能恢复之前就被 `fail_count>10` 误杀 → "采集线程退出，读取 xxx 失败"。
+- 结论：**fail_count>10 把"瞬时掉线（可自愈）"误判为"连接中断"**。重连恢复窗口（500ms）内失败必然累积超阈值。
+- 修复：poll_thread 中断条件改为**时间基**——仅当连续无成功样本超过 `OS_POLL_STALL_MS`（3s，≈6×重连节流）才退出；瞬时失败只节流记日志、不计数中断。真死连接仍由 `IS_CONNECTED`（重连失败后 `connected=0`）即时捕获，3s 停摆作兜底。另：重连成功日志节流（5s 一次）避免高速掉线时刷屏。
 
 ## 本轮根因结论（BMAD 排查，2026-08-09）
 
@@ -51,7 +63,11 @@
 | B7 | 采集时点击"记录"，界面卡死在选择录制文件路径对话框 | 🔄 修复 | mainwin.c cmd_log_start |
 | B8 | 自动隐藏功能应归位到左侧 elf 变量列表，而非菜单栏下固定按键 | 🔄 修复 | mainwin.c（删 IDC_BTN_PIN） |
 | B9 | 除 4000 外速度连接，采集到的变量值全为 0 | 🔄 修复 | jlink.c mod_read/mod_write + mainwin.c g_devices |
-| F17 | 跳过选芯片环节：只需选芯片核心（如 Cortex-M0+）；纯内存读写不需知道型号/架构 | 🔄 实现 | mainwin.c g_devices 核心列表 |
+| F17 | 跳过选芯片环节：只需选芯片核心（如 Cortex-M0+）；纯内存读写不需知道型号/架构 | ✅ checkpoint-21 DONE | mainwin.c g_devices 核心列表 |
+| B7 | 采集时点击"记录"，界面卡死在选择录制文件路径对话框 | ✅ checkpoint-21 DONE | mainwin.c cmd_log_start |
+| B8 | 自动隐藏功能应归位到左侧 elf 变量列表，而非菜单栏下固定按键 | ✅ checkpoint-21 DONE | mainwin.c（删 IDC_BTN_PIN） |
+| B9 | 除 4000 外速度连接，采集到的变量值全为 0 | ✅ checkpoint-21 DONE | jlink.c mod_read/mod_write + mainwin.c g_devices |
+| B10 | 12000 速度采集一开始就失败，采集线程退出，读取 xxx 变量失败 | 🔄 修复 | datasrv.c poll_thread + jlink.c 重连日志节流 |
 
 ## Epic 5：窗口管理完善（N3 就地重命名 + N6 删关于 + Bug3 全屏）
 
@@ -168,13 +184,33 @@
 ## 验收风险
 
 - mod_write 原 `r == size` 判定在旧 J-Link 版本可能返回字节数？实测 v96600 WriteMem 失败返回 -1、成功返回 0（SEGGER 手册：>0=未能写入字节数），统一 `r == 0` 安全。
-- 自动重连须节流（500ms），避免边缘目标 25ms 掉线导致高频重连刷日志；重连失败仍走 poll_thread fail_count 停止路径。
+- 自动重连须节流（500ms），避免边缘目标 25ms 掉线导致高频重连刷日志；重连失败仍走 poll_thread IS_CONNECTED 停止路径。
 - 删除工具栏 PIN 按钮需同步 ui_connect_drive.ps1 按钮文字断言（若存在"钉住变量栏"检查）。
 - 录制暂停采集的间隙不会录数据（用户选路径期间本来就无新样本），可接受。
 
 ## Sprint 计划
 
-- Sprint-11：Story 10.1 → 10.2 → 10.3（B7 → B8 → B9+F17）→ 新增回归（ui_record_dialog / ui_features 钉图标保留 / speed_smoke 全速）→ 全量回归 dev+installed → 版本 1.8.1→1.8.2 打包安装 → checkpoint-21 提交 + tag v1.8.2 + 推送双远端 → 末尾 Windows 播报"任务执行完毕"
+- Sprint-11：Story 10.1 → 10.2 → 10.3（B7 → B8 → B9+F17）→ 新增回归（ui_record_dialog / ui_features 钉图标保留 / speed_smoke 全速）→ 全量回归 dev+installed → 版本 1.8.1→1.8.2 打包安装 → checkpoint-21 提交 + tag v1.8.2 + 推送双远端 → 末尾 Windows 播报"任务执行完毕" ✅ checkpoint-21 DONE（bug9_smoke 4 速度 + Bug7/Bug8 新用例 dev+installed ALL PASS；tag v1.8.2 已推送 gitee_origin + github_origin；末尾已播报"任务执行完毕"）
+
+## Epic 11：高速采集线程退出修复（Bug 10，checkpoint-22）
+
+### Story 11.1 — 12000 kHz 采集线程瞬时失败不应退出（B10）
+- AC：以 12000 kHz（或任意高速）连接并开始采集，边缘目标掉线自愈周期内**采集线程不退出**；自动重连成功后恢复出样本；仅当连接真死（重连失败 `connected=0`）或**连续 3 秒无任何成功样本**才停止采集。
+- 根因：`poll_thread` 旧 `fail_count>10` 硬中断（20ms 周期×2 变量≈100ms 即超限）远小于 `mod_read` 500ms 重连节流窗口，重连未及恢复线程已被误杀。
+- 文件：
+  - `code/src/datasrv.c`（poll_thread：`fail_count` 改为仅日志节流；新增 `last_ok_ms` + `OS_POLL_STALL_MS=3000` 时间基停摆判定；成功读取更新 `last_ok_ms`）
+  - `module/jlink/jlink.c`（`last_reconnect_log_ms`：重连成功日志 5s 节流，避免高速掉线刷屏；重连行为不变）
+- 测试：
+  - 硬件回归 `tests/ui_speed12000_drive.ps1`（dev+installed）：速度下拉设为 12000 → 连接 → 开始采集 → 等待 ≥3s → 断言日志**不出现**"采集线程已退出"/"采集停止：长时间"、且期间出现"采集已开始"与至少一次成功样本/重连恢复日志（容错：若 12000 连接本身失败则 PASS 条件放宽为不闪退）。
+  - `tests/bug9_smoke.c` 已有 12000 kHz 一致性断言（重连后读取一致、无屏蔽零值）继续覆盖。
+- 验收风险：
+  - 12000 kHz 在本机边缘目标上 connect 偶发失败（rc=-1，曾见），UI 回归对"连接失败"路径容错，核心断言是**已启动采集后线程不再因瞬时失败退出**。
+  - 时间基停摆 3s ≈ 6×重连节流：只要重连周期性成功一次（读后即续读），线程永不误杀；真死连接由 IS_CONNECTED 即时捕获，3s 停摆兜底。
+  - 移除 fail_count 硬中断后，采集线程在"连接但完全无响应"时最长 3s 后停止（可接受，不再无限空转）。
+
+## Sprint 计划
+
+- Sprint-12：Story 11.1（B10）→ 新增回归（ui_speed12000_drive + bug9_smoke 12000）→ 全量回归 dev+installed → 版本 1.8.2→1.8.3 打包安装 → checkpoint-22 提交 + tag v1.8.3 + 推送双远端 → 末尾 Windows 播报"任务执行完毕"
 
 ## 验收风险
 - 删除关于按钮需同步 ui_connect_drive.ps1（其按文字找按钮）与工具栏布局数组。

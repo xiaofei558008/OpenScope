@@ -889,7 +889,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_WINDOW,
     "scope",
-    "1.8.2",
+    "1.8.3",
     "示波器窗口模块：实时曲线、变量模糊搜索、数值写回",
     g_window_types,
     mod_init,

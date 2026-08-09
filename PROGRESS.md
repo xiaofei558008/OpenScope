@@ -130,6 +130,11 @@
   - 回归：新增 `tests/bug9_smoke.c`（J-Link 读一致性：每速度至少 1 次成功 + 所有 rc==size 读值一致，直接捕获 r>=0 屏蔽零值 bug；50/400/4000/12000 kHz 四速度 ALL PASS，接入 build_tests.bat 每次构建自动回归）+ `tests/ui_record_dialog_drive.ps1`（Bug7：采集运行中点击记录→保存对话框→取消→进程存活/采集自动恢复/主线程响应）+ `tests/ui_features_drive.ps1` 加 Bug8 断言（工具栏无 2015 按钮）；新增 `tests/run_regression.sh` 全量 UI 回归脚本。
   - 版本 1.8.2：全量 UI 回归 dev + 安装版 ALL PASS（含 bug9_smoke 4 速度 + Bug7/Bug8 新用例）；重新打包 `dist/OpenScope-Setup-1.8.2.exe`（10.4MB），安装版验证版本 1.8.2.0；构建 0 error/0 warning。
   - 需求 9：checkpoint-21 提交 git + `git tag v1.8.2` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+- **checkpoint-22（2026-08-09）**：修复 request.md Bug 10（12000kHz 高速采集一开始就失败、采集线程退出）（1.8.3）。
+  - Bug10 高速瞬时掉线误杀采集线程：边缘目标 12000kHz 连接后 ~20ms SWD 掉线（IsConnected=0），mod_read 自动重连节流 500ms；旧 `fail_count>10` 硬中断（20ms 周期 × 1~2 变量 ≈ 100~200ms 即超限）在重连恢复前就 break 退出 → "采集线程退出，读取 xxx 变量失败"。修复：datasrv.c poll_thread 失败处理改为时间基停摆判定 `OS_POLL_STALL_MS=3000`（连续 3s 无成功样本才停止），瞬时失败只节流记日志（前 3 次）不中断；真死连接仍由 IS_CONNECTED（connected=0）即时捕获；jlink.c 重连成功日志节流 5s 一次（`OS_JLINK_RECONNECT_LOG_MS`）。
+  - 回归：新增 `tests/ui_speed12000_drive.ps1`（Bug10 UI 回归：速度下拉设 12000 → 连接 → 开始采集 → 等待 3.5s（>500ms 重连节流多次周期）→ 断言日志不出现"采集线程已退出/采集停止：长时间/采集停止：MCU 连接已断开"且进程存活；连接失败路径放宽为不闪退）。注意：`SetWindowText` API 对 ComboBox 不生效，须 `SendMessage WM_SETTEXT` + 读回校验。dev 版 3 次 + 安装版 1 次 ALL PASS。
+  - 版本 1.8.3：全量 UI 回归 dev + 安装版 32/32 ALL PASS（13 非 J-Link + 3 J-Link × 2 变体，含新增 ui_speed12000_drive.ps1）；重新打包 `dist/OpenScope-Setup-1.8.3.exe`，安装版验证版本 1.8.3.0；构建 0 error/0 warning。
+  - 需求 9：checkpoint-22 提交 git + `git tag v1.8.3` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -178,7 +183,7 @@
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
@@ -192,6 +197,7 @@
 - [x] Bug7 采集时点击录制数据界面卡死在选择录制文件路径上（checkpoint-21）
 - [x] Bug8 自动隐藏应归位到左侧 elf 变量树而非菜单栏固定按键（checkpoint-21）
 - [x] Bug9 除4000外速度连接采集到的变量值全为0（checkpoint-21）
+- [x] Bug10 用12000的速度采集数据，一开始就会失败；采集线程退出，读取xxx变量失败（checkpoint-22）
 
 ## 总结
 

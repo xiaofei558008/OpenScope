@@ -25,6 +25,7 @@ NON_JLINK=(
 JLINK=(
   ui_record_dialog_drive.ps1
   ui_connect_drive.ps1
+  ui_speed12000_drive.ps1
 )
 
 run_one() { # <script> <exe> <label>
