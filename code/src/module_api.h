@@ -128,7 +128,7 @@ typedef struct OS_Framework {
 } OS_Framework;
 
 typedef struct OS_WindowType {
-    const char* type;         /* 类型标识，如 "scope.bar" */
+    const char* type;         /* 类型标识，如 "mywin.line" */
     const char* display_name; /* 显示名，如 "仪表窗口" */
 } OS_WindowType;
 

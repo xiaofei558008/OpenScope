@@ -1,10 +1,10 @@
 ﻿# OpenScope 树 Ctrl 多选批量添加 UI 回归（request.md Bug 4 补充）：
-#   左侧 elf 变量列表 Ctrl 多选 -> 右键批量添加到波形/数值/示波器窗口。
+#   左侧 elf 变量列表 Ctrl 多选 -> 右键批量添加到波形/数值窗口。
 #   跨进程无法伪造 Ctrl/指针式 TVM_SETITEMSTATE，用进程内测试钩子 WM_OS_TREE_TEST_SELECT
 #   程序化选中叶子项 [start, start+count)（等价 Ctrl 手选结果），再触发右键菜单命令验证：
 #   1. 添加到波形窗口：日志 "树右键批量添加变量: 3 个" + 3 条 波形窗口添加变量
 #   2. 添加到数值窗口：日志 "树右键批量添加变量: 2 个" + 2 条 数值窗口添加变量
-#   3. 添加到示波器窗口：日志 "树右键批量添加变量: 4 个"
+#   3. 第二个波形窗口：日志 "树右键批量添加变量: 4 个"
 param(
     [string]$Elf = "D:\OpenScope\tests\linix_stm32l031_v1.2.out",
     [string]$ExePath = ""
@@ -33,10 +33,8 @@ public class OsMselUi {
     // 菜单命令 ID
     public const int IDM_WIN_CHART = 2012;
     public const int IDM_WIN_NUM = 2013;
-    public const int IDM_WIN_MODULE_BASE = 2200;   // 首个模块窗口（scope.bar）
     public const int IDM_TREE_ADD_CHART = 2305;
     public const int IDM_TREE_ADD_NUM = 2306;
-    public const int IDM_TREE_ADD_SCOPE = 2307;
 }
 "@
 
@@ -114,14 +112,14 @@ try {
     Check (Log-Has '树右键批量添加变量: 2 个') "数值: 批量添加日志 2 个"
     Check ((Count-LogLines '数值窗口添加变量: id=') -ge 2) "数值: 2 条逐变量添加日志"
 
-    # 3) 示波器窗口：多选 4 个叶子 -> 添加到示波器（scope.bar）
-    Send-Cmd $main ([OsMselUi]::IDM_WIN_MODULE_BASE)
+    # 3) 第二个波形窗口：多选 4 个叶子 -> 批量添加到波形窗口
+    Send-Cmd $main ([OsMselUi]::IDM_WIN_CHART)
     Start-Sleep -Milliseconds 250
     $ret3 = [OsMselUi]::SendMessage($main, [OsMselUi]::WM_OS_TREE_TEST_SELECT, [IntPtr]5, [IntPtr]4)
     Check ($ret3.ToInt32() -eq 4) "测试钩子选中 4 个叶子（返回 $($ret3.ToInt32())）"
-    Send-Cmd $main ([OsMselUi]::IDM_TREE_ADD_SCOPE)
+    Send-Cmd $main ([OsMselUi]::IDM_TREE_ADD_CHART)
     Start-Sleep -Milliseconds 300
-    Check (Log-Has '树右键批量添加变量: 4 个') "示波器: 批量添加日志 4 个"
+    Check (Log-Has '树右键批量添加变量: 4 个') "波形2: 批量添加日志 4 个"
 
     Check (-not $proc.HasExited) "进程未闪退"
     Write-Output "--- 日志关键行 ---"

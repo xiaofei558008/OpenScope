@@ -1,10 +1,11 @@
-﻿# OpenScope 变量选择对话框多选功能 UI 回归（request.md 新增特性 13a）：
+﻿# OpenScope 变量选择对话框多选功能 UI 回归（request.md 新增特性 13a / N19）：
 #   1. 添加变量弹窗的列表为 ListView（SysListView32，报表模式，原生 Ctrl+单击/Shift 范围多选）
 #   2. 扩展样式含 LVS_EX_FULLROWSELECT
 #   3. 模糊搜索键入后列表填充（数量 >= 2）
 #   4. 测试钩子 WM_OS_PICK_TEST_SELECT 范围选中 = Ctrl/Shift 手选结果（含起止本身）
 #   5. 确定 -> 波形窗口一次性批量添加全部选中变量（日志 + 数量核对）
-#   6. 全程观察进程是否闪退
+#   6. N19: 数值窗口右键"添加变量"复用同一多选对话框批量添加（日志 + 数量核对）
+#   7. 全程观察进程是否闪退
 # 数据来源：加载 ELF 后变量树即时可用，无需真实 MCU / 回放。
 param(
     [string]$Elf = "D:\OpenScope\tests\linix_stm32l031_v1.2.out",
@@ -156,6 +157,39 @@ try {
         Check (Log-Has '波形窗口批量添加变量: 2 个') "波形窗口批量添加日志 (2 个)"
         $addCount = @(Get-Content $log -Encoding UTF8 | Select-String -Pattern '波形窗口添加变量: id=').Count
         Check ($addCount -eq 2) "实际逐条添加日志条数 = 2（实际 $addCount）"
+    }
+
+    # N19: 数值窗口右键"添加变量"同样走 os_dlg_pick_vars 多选对话框（Ctrl+A/多选/Shift 范围）
+    Send-Cmd $main 2013   # IDM_WIN_NUM
+    Start-Sleep -Milliseconds 300
+    $num = Find-ChildByClass $main "OSNumWin"
+    Check ($num -ne [IntPtr]::Zero) "数值窗口已创建"
+    [OsPickUi]::PostMessage($num, 0x111, [IntPtr]3101, [IntPtr]0) | Out-Null  # MENU_NUM_ADD (async)
+    $dlg2 = [IntPtr]::Zero
+    for ($i = 0; $i -lt 40 -and -not $proc.HasExited; $i++) {
+        $dlg2 = Find-ByClass $proc.Id "OSDlgPick"
+        if ($dlg2 -ne [IntPtr]::Zero) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    Check ($dlg2 -ne [IntPtr]::Zero) "数值窗口添加变量弹窗已打开"
+    if ($dlg2 -ne [IntPtr]::Zero) {
+        $hEdit2 = [OsPickUi]::GetDlgItem($dlg2, 2403)
+        $hList2 = [OsPickUi]::GetDlgItem($dlg2, 2404)
+        # 键入 'f' 触发模糊搜索填充列表（列表初始为空）
+        [OsPickUi]::SendMessage($hEdit2, 0x102, [IntPtr][int][char]'f', [IntPtr]1) | Out-Null  # WM_CHAR 'f'
+        $n2 = 0
+        for ($i = 0; $i -lt 30; $i++) {
+            $n2 = [OsPickUi]::SendMessage($hList2, 0x1004, [IntPtr]0, [IntPtr]0).ToInt64()
+            if ($n2 -ge 3) { break }
+            Start-Sleep -Milliseconds 200
+        }
+        Check ($n2 -ge 3) "数值弹窗列表填充 >= 3 项（实际 $n2）"
+        [OsPickUi]::SendMessage($dlg2, 0x801E, [IntPtr]0, [IntPtr]3) | Out-Null  # 选中 [0,3)
+        Send-Cmd $dlg2 2401   # IDD_PICK_OK
+        Start-Sleep -Milliseconds 400
+        Check (Log-Has '数值窗口批量添加变量: 3 个') "数值窗口批量添加日志 (3 个)"
+        $numAddCount = @(Get-Content $log -Encoding UTF8 | Select-String -Pattern '数值窗口添加变量: id=').Count
+        Check ($numAddCount -eq 3) "数值窗口逐条添加日志条数 = 3（实际 $numAddCount）"
     }
 
     Check (-not $proc.HasExited) "进程未闪退"

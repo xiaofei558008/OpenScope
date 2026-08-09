@@ -1,5 +1,5 @@
 ﻿# OpenScope 布局持久化 UI 回归：
-#   A. 创建 3 窗口+变量 -> 关闭应用（自动保存布局到 %LOCALAPPDATA%\OpenScope\layout.ini）
+#   A. 创建 2 窗口+变量 -> 关闭应用（自动保存布局到 %LOCALAPPDATA%\OpenScope\layout.ini）
 #   B. 重新启动（带 ELF）-> 自动恢复窗口与变量（待解析变量在 ELF 后补挂）
 #   C. 用 --layout-load 显式导入布局文件
 param(
@@ -92,9 +92,9 @@ $p = Start-App @($Elf, "--select-leaf=$LeafName")
 $main = Wait-Main $p
 Check ($main -ne [IntPtr]::Zero) "A: 主窗口创建"
 Start-Sleep -Milliseconds 600
-Send-Cmd $main 2012; Send-Cmd $main 2013; Send-Cmd $main 2200
+Send-Cmd $main 2012; Send-Cmd $main 2013
 Start-Sleep -Milliseconds 400
-Send-Cmd $main 2305; Send-Cmd $main 2306; Send-Cmd $main 2307
+Send-Cmd $main 2305; Send-Cmd $main 2306
 Start-Sleep -Milliseconds 400
 [OsLayUi]::SendMessage($main, 0x10, [IntPtr]0, [IntPtr]0) | Out-Null  # WM_CLOSE
 $p.WaitForExit(5000) | Out-Null
@@ -102,8 +102,8 @@ Check (Test-Path $autoLayout) "A: 关闭后自动保存布局文件"
 $content = ""
 if (Test-Path $autoLayout) {
     $content = Get-Content $autoLayout -Encoding UTF8 -Raw
-    Check ($content -match 'wins=3' -and $content -match 'type=chart' -and
-           $content -match 'type=num' -and $content -match 'type=scope.bar') "A: 布局含 3 窗口类型"
+    Check ($content -match 'wins=2' -and $content -match 'type=chart' -and
+           $content -match 'type=num') "A: 布局含 2 窗口类型"
     Check ($content -match 'vars=.*AngleBit') "A: 布局含变量名"
 }
 
@@ -115,16 +115,16 @@ $tab2 = Find-ChildByClass $main2 "SysTabControl32"
 $n2 = 0
 for ($i = 0; $i -lt 40; $i++) {
     $n2 = [OsLayUi]::SendMessage($tab2, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
-    if ($n2 -eq 3) { break }
+    if ($n2 -eq 2) { break }
     Start-Sleep -Milliseconds 150
 }
-Check ($n2 -eq 3) "B: 恢复 3 个窗口 Tab（实际 $n2）"
+Check ($n2 -eq 2) "B: 恢复 2 个窗口 Tab（实际 $n2）"
 Start-Sleep -Milliseconds 800
 $added2 = 0
 if (Test-Path $log) {
     $added2 = (Get-Content $log -Encoding UTF8 | Select-String -Pattern '添加变量' | Measure-Object).Count
 }
-Check ($added2 -ge 3) "B: ELF 后补挂变量（日志 $added2 条）"
+Check ($added2 -ge 2) "B: ELF 后补挂变量（日志 $added2 条）"
 if (-not $p2.HasExited) { Stop-Process -Id $p2.Id -Force }
 
 # ---------- C：显式导入布局（--layout-load） ----------
@@ -136,10 +136,10 @@ $tab3 = Find-ChildByClass $main3 "SysTabControl32"
 $n3 = 0
 for ($i = 0; $i -lt 40; $i++) {
     $n3 = [OsLayUi]::SendMessage($tab3, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
-    if ($n3 -eq 3) { break }
+    if ($n3 -eq 2) { break }
     Start-Sleep -Milliseconds 150
 }
-Check ($n3 -eq 3) "C: --layout-load 导入 3 窗口（实际 $n3）"
+Check ($n3 -eq 2) "C: --layout-load 导入 2 窗口（实际 $n3）"
 if (-not $p3.HasExited) { Stop-Process -Id $p3.Id -Force }
 
 Write-Output ("ALL " + $(if ($fails -eq 0) { "PASS" } else { "FAILURES: $fails" }))

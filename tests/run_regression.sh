@@ -21,6 +21,9 @@ NON_JLINK=(
   ui_rightmenu_drive.ps1
   ui_tree_multisel_drive.ps1
   ui_chart_bug5_drive.ps1
+  ui_chart_flicker_drive.ps1
+  ui_log_select_drive.ps1
+  ui_tree_autohide_drive.ps1
 )
 JLINK=(
   ui_record_dialog_drive.ps1

@@ -135,6 +135,25 @@
   - 回归：新增 `tests/ui_speed12000_drive.ps1`（Bug10 UI 回归：速度下拉设 12000 → 连接 → 开始采集 → 等待 3.5s（>500ms 重连节流多次周期）→ 断言日志不出现"采集线程已退出/采集停止：长时间/采集停止：MCU 连接已断开"且进程存活；连接失败路径放宽为不闪退）。注意：`SetWindowText` API 对 ComboBox 不生效，须 `SendMessage WM_SETTEXT` + 读回校验。dev 版 3 次 + 安装版 1 次 ALL PASS。
   - 版本 1.8.3：全量 UI 回归 dev + 安装版 32/32 ALL PASS（13 非 J-Link + 3 J-Link × 2 变体，含新增 ui_speed12000_drive.ps1）；重新打包 `dist/OpenScope-Setup-1.8.3.exe`，安装版验证版本 1.8.3.0；构建 0 error/0 warning。
   - 需求 9：checkpoint-22 提交 git + `git tag v1.8.3` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+- **checkpoint-23（2026-08-09）**：修复 request.md Bug 11/12/13 + 新增特性 18/19 + 需求 11 发布 v1.9.0（1.9.0）。
+  - Bug11 波形闪烁 + 采集线程退出提示：chartwin WM_PAINT 改双缓冲绘制（先画内存 DC 再一次性 BitBlt），避免采集时鼠标在波形区滑动（WM_MOUSEMOVE 高频重绘）整窗闪烁；datasrv 采集线程正常停止（stop_poll 置位）为 INFO「采集线程已退出」，异常退出（断连/停摆）为 WARN 级。
+  - Bug12 变量栏自动隐藏修复：`g_tree_in_ms` 原用 `(int)(os_time_us()/1000)` 存 Unix 纪元毫秒，2026 年值 ~1.78e12 强转 int 溢出为负 → 时间差比较永远为假、永不隐藏；改用 `GetTickCount64()`（自启动毫秒，int64 无溢出）。隐藏后仅留左侧 8px 细条 OSTreeStrip（layout 隐藏分支补 `ShowWindow(SW_SHOW)`），光标进入细条（客户区 x<=10）自动展开；`tree_auto_expand` 日志 `%ls`+中文在 C locale 转多字节失败产生空行 → 改 `os_wide_to_utf8_buf` + `%s`。
+  - Bug13 消息区域多选 + 右键复制/清除：日志 ListView 不设 LVS_SINGLESEL 支持 Ctrl/Shift 多选；右键菜单「复制选中」(IDM_LOG_COPY=2601) /「全部清除」(IDM_LOG_CLEAR=2602)；新增 `WM_OS_LOG_TEST_SELECT`（WM_APP+31）进程内测试钩子（跨进程指针式 LVM_SETITEMSTATE 无法编组会 0xC0000005）；日志 ListView 恢复 LVS_EX_DOUBLEBUFFER（1.8.3 证实与崩溃无关）。
+  - N18 删除示波器功能模块：删除 module/scope（scope.c/vcxproj/tests）+ dll/scope.dll，移除「示波器窗口」菜单项。
+  - N19 数值窗口右键添加变量多选：复用 N13a 的 `os_dlg_pick_vars` 多选对话框，一次批量添加全部选中变量（日志 `数值窗口批量添加变量: %d 个`）。
+  - 回归：新增 `tests/ui_chart_flicker_drive.ps1`（Bug11：300 次鼠标滑动 + 高频重绘不闪退/无 FATAL）、`tests/ui_log_select_drive.ps1`（Bug13：多选支持/剪贴板复制/全部清除）、`tests/ui_tree_autohide_drive.ps1`（Bug12：光标移出自动隐藏 + 细条悬停展开 + 钉住保持）；`tests/run_regression.sh` 纳入 3 个新脚本；全量回归 dev + 安装版 **38/38 ALL PASS**（16 非 J-Link + 3 J-Link × 2 变体，含新 3 脚本）；构建 0 error/0 warning。
+  - 版本 1.9.0：重新打包 `dist/OpenScope-Setup-1.9.0.exe`（10.4MB），安装版验证版本 1.9.0.0 + 启动日志 `OpenScope 启动 (version 1.9.0)`。
+  - 需求 11：发布 `dist/OpenScope-Setup-1.9.0.exe` + request.md 到 `D:\OpenDebugger`；`publish.py` 上传 www.opendebugger.com/downloads/（下载页 + 最新包 HTTP 200、SHA256 一致 cc3d3426...）；修复 publish.py 自检 emoji（✅/❌）在 GBK 控制台 UnicodeEncodeError → 改 ASCII [OK]/[ERR]。
+  - 需求 9：checkpoint-23 提交 git + `git tag v1.9.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+- **checkpoint-23 附（2026-08-09）**：软件下载包发布基础设施（request.md 第 11 条，自动发布，与 1.9.0 同批提交）。
+  - 网站修复：www.opendebugger.com 此前仅 HTTP（80），现代浏览器自动升级 https 导致"无法访问"。已签发 Let's Encrypt 证书（certbot + nginx 443 监听 + HTTP→HTTPS 301 重定向，certbot.timer 自动续期），并修复 `/img/` 目录列出 404。
+  - 下载基础设施：服务器新增 `/var/www/downloads/openscope/`（安装包存储）+ nginx `location ^~ /downloads/`（alias 到 /var/www/downloads，.exe 返回 `Content-Disposition: attachment` + `application/x-msdownload`，支持断点续传）。
+  - 全自动发布：新增 `publish.py`（扫描 dist/ → 上传缺失/更新的安装包 → 自动生成下载页 index.html（版本/大小/日期/SHA256/最新版徽标，蓝主题与主站一致）→ 上传 → HTTPS 自检）；`packaging/make_setup.py` 新增 `--publish` 参数，实现"打包 + 发布"一步完成。
+  - 主站入口：`/var/www/html/shop/index.html` 导航栏新增"软件下载"，首页 Hero 新增"下载 OpenScope 软件"按钮。
+  - 已发布：OpenScope-Setup-1.4.1 ~ 1.8.3 共 8 个版本全部上线 `https://www.opendebugger.com/downloads/`；端到端验证通过（下载页 HTTP 200、最新包 HTTP 200、远程/本地 SHA256 一致 0ac3c19...）。
+  - 下载修复：用户反馈"只下载到名为'下载'的文本文件"——根因是 `Content-Disposition: attachment` 未带 `filename=`，且嵌套正则 `^/downloads/([^/]+\.exe)$` 无法匹配 `/downloads/openscope/` 子目录路径。修复为 `Content-Disposition: attachment; filename="$1"` + 正则 `([^/]+\.(?:exe|zip|...))$`（捕获任意层级文件名）。修复后响应头 `Content-Disposition: attachment; filename="OpenScope-Setup-1.8.3.exe"`，SHA256 与本地一致。
+  - 操作文档：`RELEASE.md`（一键发布 `python packaging\make_setup.py --publish`）。
+  - 注：发布涉及服务器修改（nginx/证书/文件）需 sudo，密码见 request.md；publish.py 走本机免密 scp 无需 sudo。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -183,7 +202,7 @@
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 

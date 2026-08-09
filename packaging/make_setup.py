@@ -51,6 +51,8 @@ def ensure_icon():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--version", default=None, help="完整版本号，默认读取 version.rc")
+    ap.add_argument("--publish", action="store_true",
+                    help="打包完成后自动发布到 www.opendebugger.com（调用 publish.py）")
     args = ap.parse_args()
     full = args.version or read_version()
     display = display_version(full)
@@ -75,6 +77,16 @@ def main():
         raise SystemExit(f"[make_setup] output missing: {setup}")
     size = os.path.getsize(setup)
     print(f"[make_setup] OK {os.path.relpath(setup, ROOT)} ({size} bytes)")
+
+    if args.publish:
+        print(f"[make_setup] 自动发布新版本 v{display} ...")
+        publish_py = os.path.join(ROOT, "publish.py")
+        if not os.path.isfile(publish_py):
+            raise SystemExit(f"[make_setup] publish.py not found: {publish_py}")
+        r = subprocess.run([sys.executable, publish_py], cwd=ROOT)
+        if r.returncode:
+            raise SystemExit(f"[make_setup] publish failed rc={r.returncode}")
+        print(f"[make_setup] 发布完成 ✅ https://www.opendebugger.com/downloads/")
 
 
 if __name__ == "__main__":

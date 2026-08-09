@@ -83,9 +83,13 @@ static DWORD WINAPI poll_thread(LPVOID p)
         }
         Sleep((DWORD)g_app.poll_interval_ms);
     }
+    /* Bug11: 正常停止（stop_poll 置位）为信息级；异常退出（断连/停摆）才是警告 */
+    if (g_app.stop_poll)
+        os_log(OS_LOG_INFO, "采集线程已退出");
+    else
+        os_log(OS_LOG_WARN, "采集线程已退出");
     g_app.stop_poll = 0;
     g_app.acq_state = OS_ACQ_STOPPED;
-    os_log(OS_LOG_WARN, "采集线程已退出");
     if (g_app.hMain) PostMessage(g_app.hMain, WM_OS_ACQ_STATE, 0, 0);
     return 0;
 }

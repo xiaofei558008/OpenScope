@@ -727,9 +727,31 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
     case WM_PAINT: {
+        /* Bug11: 双缓冲绘制——先画到内存 DC 再一次性 BitBlt，
+         * 避免采集时鼠标在波形区域滑动（WM_MOUSEMOVE 高频重绘）整窗闪烁 */
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        if (cw) chart_draw(cw, hdc);
+        if (cw) {
+            RECT rc;
+            HDC mdc;
+            HBITMAP bmp, obmp;
+            int w, h;
+            GetClientRect(hwnd, &rc);
+            w = rc.right - rc.left;
+            h = rc.bottom - rc.top;
+            if (w > 0 && h > 0) {
+                mdc = CreateCompatibleDC(hdc);
+                bmp = CreateCompatibleBitmap(hdc, w, h);
+                obmp = (HBITMAP)SelectObject(mdc, bmp);
+                chart_draw(cw, mdc);
+                BitBlt(hdc, 0, 0, w, h, mdc, 0, 0, SRCCOPY);
+                SelectObject(mdc, obmp);
+                DeleteObject(bmp);
+                DeleteDC(mdc);
+            } else {
+                chart_draw(cw, hdc);
+            }
+        }
         EndPaint(hwnd, &ps);
         return 0;
     }

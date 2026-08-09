@@ -1,8 +1,8 @@
 ﻿# OpenScope 窗口管理 UI 回归：
 #   1. 以 ELF 路径启动应用（命令行加载）
-#   2. 通过“窗口”菜单创建 波形窗口/数值窗口/示波器窗口
+#   2. 通过“窗口”菜单创建 波形窗口/数值窗口
 #   3. 校验 Tab 数量与“同一时刻只显示一个窗口”
-#   4. 树中选择叶变量，触发 添加到波形/数值/示波器窗口 命令
+#   4. 树中选择叶变量，触发 添加到波形/数值窗口 命令
 #   5. 切换 Tab、关闭窗口，全程观察进程是否闪退
 param(
     [string]$Elf = "D:\OpenScope\tests\linix_stm32l031_v1.2.out",
@@ -123,36 +123,32 @@ try {
     }
     Check ($selLog -match 'rc=0') "已选择树节点（叶）"
 
-    # 创建三种窗口
+    # 创建两种窗口
     Send-Cmd $main 2012   # IDM_WIN_CHART
     Write-Output "chart cmd alive=$(-not $proc.HasExited)"
     Send-Cmd $main 2013   # IDM_WIN_NUM
     Write-Output "num cmd alive=$(-not $proc.HasExited)"
-    Send-Cmd $main 2200   # IDM_WIN_MODULE_BASE + 0 (scope.bar)
-    Write-Output "scope cmd alive=$(-not $proc.HasExited)"
     Start-Sleep -Milliseconds 500
     $tab = Find-ChildByClass $main "SysTabControl32"
     Write-Output "tab found alive=$(-not $proc.HasExited)"
     $ntab = [OsWinUi]::SendMessage($tab, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()  # TCM_GETITEMCOUNT
     Write-Output "tabcount=$ntab alive=$(-not $proc.HasExited)"
-    Check ($ntab -eq 3) "Tab 数量 = 3（实际 $ntab）"
+    Check ($ntab -eq 2) "Tab 数量 = 2（实际 $ntab）"
 
     $chart = Find-ChildByClass $main "OSChartWin"
     $num = Find-ChildByClass $main "OSNumWin"
-    $scope = Find-ChildByClass $main "OSScopeWin"
-    Check ($chart -ne [IntPtr]::Zero -and $num -ne [IntPtr]::Zero -and $scope -ne [IntPtr]::Zero) "三类窗口均已创建"
-    Check ([OsWinUi]::IsWindowVisible($scope) -and -not [OsWinUi]::IsWindowVisible($chart) -and -not [OsWinUi]::IsWindowVisible($num)) "同一时刻只显示当前 Tab 窗口"
+    Check ($chart -ne [IntPtr]::Zero -and $num -ne [IntPtr]::Zero) "波形/数值窗口均已创建"
+    Check ([OsWinUi]::IsWindowVisible($num) -and -not [OsWinUi]::IsWindowVisible($chart)) "同一时刻只显示当前 Tab 窗口"
 
     # 树右键“添加到…”命令
     Send-Cmd $main 2305   # IDM_TREE_ADD_CHART
     Send-Cmd $main 2306   # IDM_TREE_ADD_NUM
-    Send-Cmd $main 2307   # IDM_TREE_ADD_SCOPE
     Start-Sleep -Milliseconds 400
     $added = 0
     if (Test-Path $log) {
         $added = (Get-Content $log -Encoding UTF8 | Select-String -Pattern '添加变量' | Measure-Object).Count
     }
-    Check ($added -ge 3) "三个窗口均收到添加变量（日志 $added 条）"
+    Check ($added -ge 2) "两个窗口均收到添加变量（日志 $added 条）"
 
     # 切换 Tab：用方向键（WM_KEYDOWN），Tab 控件在进程内处理并触发 TCN_SELCHANGE
     function Select-Tab([int]$Idx, [IntPtr]$TabHwnd) {
@@ -170,7 +166,7 @@ try {
     }
     Select-Tab 0 $tab
     Start-Sleep -Milliseconds 200
-    Check ([OsWinUi]::IsWindowVisible($chart) -and -not [OsWinUi]::IsWindowVisible($scope)) "Tab0 -> 波形窗口可见"
+    Check ([OsWinUi]::IsWindowVisible($chart)) "Tab0 -> 波形窗口可见"
     Select-Tab 1 $tab
     Start-Sleep -Milliseconds 200
     Check ([OsWinUi]::IsWindowVisible($num) -and -not [OsWinUi]::IsWindowVisible($chart)) "Tab1 -> 数值窗口可见"
@@ -179,7 +175,7 @@ try {
     Send-Cmd $main 2501   # IDM_TAB_CLOSE
     Start-Sleep -Milliseconds 300
     $ntab2 = [OsWinUi]::SendMessage($tab, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
-    Check ($ntab2 -eq 2) "关闭 Tab 后数量 = 2（实际 $ntab2）"
+    Check ($ntab2 -eq 1) "关闭 Tab 后数量 = 1（实际 $ntab2）"
 
     # 波形窗口标题栏 × 关闭（切到 Tab0 后点击右上角）
     Select-Tab 0 $tab
@@ -190,7 +186,7 @@ try {
     [OsWinUi]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$lp) | Out-Null
     Start-Sleep -Milliseconds 300
     $ntab3 = [OsWinUi]::SendMessage($tab, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
-    Check ($ntab3 -eq 1) "波形窗口 × 关闭后 Tab 数量 = 1（实际 $ntab3）"
+    Check ($ntab3 -eq 0) "波形窗口 × 关闭后 Tab 数量 = 0（实际 $ntab3）"
 
     Check (-not $proc.HasExited) "进程未闪退"
     Write-Output "--- 日志关键行 ---"

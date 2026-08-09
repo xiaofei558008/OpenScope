@@ -34,13 +34,15 @@
 #define IDM_TREE_RELOAD  2304
 #define IDM_TREE_ADD_CHART 2305
 #define IDM_TREE_ADD_NUM   2306
-#define IDM_TREE_ADD_SCOPE 2307
 #define IDM_TAB_CLOSE      2501
 #define IDM_TAB_RENAME     2502
 #define IDM_TAB_ADD_CHART  2503 /* N11: 在当前 tab 添加波形窗口 */
 #define IDM_TAB_ADD_NUM    2504 /* N11: 在当前 tab 添加数值窗口 */
 #define IDM_TAB_MAXIMIZE   2505 /* N11: 最大化/还原当前窗口 */
 #define IDM_TAB_FULLSCREEN 2506 /* Bug3: 全屏/退出全屏 */
+
+#define IDM_LOG_COPY    2601 /* Bug13: 复制选中消息到剪贴板 */
+#define IDM_LOG_CLEAR   2602 /* Bug13: 全部清除 */
 
 /* 连接配置控件（直接放主界面工具栏，不弹对话框） */
 #define IDC_CFG_DEVICE   2101
@@ -155,6 +157,71 @@ static void log_insert_now(int level, const wchar_t* line)
     ListView_SetItemText(g_app.hLog, item.iItem, 2, msg);
     if (ListView_GetItemCount(g_app.hLog) > 5000)
         ListView_DeleteItem(g_app.hLog, ListView_GetItemCount(g_app.hLog) - 1);
+}
+
+/* Bug13: 复制选中消息到剪贴板（时间 + 级别 + 消息，每行一条） */
+static void log_copy_selected(void)
+{
+    static wchar_t buf[4096];
+    int count = 0, i, pos = 0;
+    int n = g_app.hLog ? ListView_GetItemCount(g_app.hLog) : 0;
+    if (n <= 0) return;
+    buf[0] = 0;
+    for (i = 0; i < n; i++) {
+        wchar_t t[64], lvl[16], msg[1024];
+        if (!(ListView_GetItemState(g_app.hLog, i, LVIS_SELECTED) & LVIS_SELECTED))
+            continue;
+        memset(t, 0, sizeof(t)); memset(lvl, 0, sizeof(lvl)); memset(msg, 0, sizeof(msg));
+        ListView_GetItemText(g_app.hLog, i, 0, t, 64);
+        ListView_GetItemText(g_app.hLog, i, 1, lvl, 16);
+        ListView_GetItemText(g_app.hLog, i, 2, msg, 1024);
+        pos += _snwprintf(buf + pos, (sizeof(buf) / sizeof(buf[0])) - pos,
+                          L"%s %s %s\r\n", t, lvl, msg);
+        if (pos >= (int)(sizeof(buf) / sizeof(buf[0])) - 16) break;
+        count++;
+    }
+    if (count <= 0) return;
+    if (OpenClipboard(g_app.hMain)) {
+        size_t nch = wcslen(buf) + 1;
+        HGLOBAL hg = GlobalAlloc(GMEM_MOVEABLE, nch * sizeof(wchar_t));
+        if (hg) {
+            void* dst = GlobalLock(hg);
+            if (dst) {
+                memcpy(dst, buf, nch * sizeof(wchar_t));
+                GlobalUnlock(hg);
+                EmptyClipboard();
+                SetClipboardData(CF_UNICODETEXT, hg);
+            } else {
+                GlobalFree(hg);
+            }
+        }
+        CloseClipboard();
+    }
+    os_log(OS_LOG_INFO, "已复制 %d 条消息", count);
+}
+
+/* Bug13: 全部清除消息 */
+static void log_clear_all(void)
+{
+    if (g_app.hLog && IsWindow(g_app.hLog))
+        ListView_DeleteAllItems(g_app.hLog);
+    os_log(OS_LOG_INFO, "已清除全部消息");
+}
+
+/* Bug13: 消息区域右键菜单：复制选中 / 全部清除 */
+static void log_context_menu(void)
+{
+    HMENU m = CreatePopupMenu();
+    POINT pt;
+    int has_sel = 0, i;
+    int n = g_app.hLog ? ListView_GetItemCount(g_app.hLog) : 0;
+    for (i = 0; i < n && !has_sel; i++)
+        if (ListView_GetItemState(g_app.hLog, i, LVIS_SELECTED) & LVIS_SELECTED) has_sel = 1;
+    AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_LOG_COPY, L"复制选中");
+    AppendMenuW(m, MF_STRING | (n > 0 ? 0 : MF_GRAYED), IDM_LOG_CLEAR, L"全部清除");
+    GetCursorPos(&pt);
+    TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    DestroyMenu(m);
 }
 
 void os_mainwin_append_log(int level, const wchar_t* line)
@@ -519,8 +586,10 @@ static void layout(void)
     }
     /* N9(d): 变量栏自动隐藏后，只留左侧细条；右侧窗口区从细条右侧开始 */
     if (g_app.tree_hidden) {
-        if (g_app.hTreeStrip && IsWindow(g_app.hTreeStrip))
+        if (g_app.hTreeStrip && IsWindow(g_app.hTreeStrip)) {
             MoveWindow(g_app.hTreeStrip, 0, bh, 8, right_h, TRUE);
+            ShowWindow(g_app.hTreeStrip, SW_SHOW); /* Bug12: 隐藏变量栏时显示左侧细条 */
+        }
         if (IsWindow(g_app.hTree)) ShowWindow(g_app.hTree, SW_HIDE);
         sw = 8;
         right_w = bw - sw - 5;
@@ -627,7 +696,7 @@ static LRESULT CALLBACK splith_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 /* ---------- N9(d) 变量栏自动隐藏/钉住 ---------- */
 
-static int g_tree_in_ms; /* 光标最后在树区的时间戳 */
+static ULONGLONG g_tree_in_ms; /* 光标最后在树区的时间戳（GetTickCount64，避免 32 位溢出） */
 
 static void refresh_tree_pin(void)
 {
@@ -637,10 +706,13 @@ static void refresh_tree_pin(void)
 
 static void tree_auto_expand(const wchar_t* why)
 {
+    char why8[64];
     if (!g_app.tree_hidden) return;
     g_app.tree_hidden = 0;
     layout();
-    os_log(OS_LOG_INFO, "变量栏展开: %ls", why);
+    /* os_log %ls 在 C locale 下转多字节中文失败（vsnprintf 返回 -1 产生空行），故先转 UTF-8 窄串 */
+    os_wide_to_utf8_buf(why, why8, sizeof(why8));
+    os_log(OS_LOG_INFO, "变量栏展开: %s", why8);
 }
 
 static void tree_auto_tick(void)
@@ -663,10 +735,10 @@ static void tree_auto_tick(void)
     }
     /* 展开态：光标仍在树区或分隔条上 → 保持；离开超过 800ms → 自动隐藏 */
     if (x >= 0 && x <= g_app.tree_w + 12) {
-        g_tree_in_ms = (int)(os_time_us() / 1000);
+        g_tree_in_ms = GetTickCount64();
         return;
     }
-    if ((int)(os_time_us() / 1000) - g_tree_in_ms > 800) {
+    if (GetTickCount64() - g_tree_in_ms > 800) {
         g_app.tree_hidden = 1;
         layout();
         os_log(OS_LOG_INFO, "变量栏自动隐藏");
@@ -1629,7 +1701,6 @@ static void tree_context_menu(HWND hwnd, LPARAM lParam)
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_CHART, L"添加到波形窗口");
     AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_NUM, L"添加到数值窗口");
-    AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_SCOPE, L"添加到示波器窗口");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TREE_RELOAD, L"重新加载 ELF");
     GetCursorPos(&pt);
@@ -1673,61 +1744,6 @@ static void tree_add_to_native(int chart)
     }
 }
 
-static int module_has_type(const OS_Module* m, const char* type)
-{
-    const OS_WindowType* wt = m->window_types;
-    while (wt && wt->type) {
-        if (strcmp(wt->type, type) == 0) return 1;
-        wt++;
-    }
-    return 0;
-}
-
-/* Bug4: 添加到示波器（scope.bar）窗口（全部选中变量）：优先当前激活窗口，否则已有，否则新建 */
-static void tree_add_to_scope(void)
-{
-    int ids[512], n = 0, i;
-    OS_Module* m = NULL;
-    void* ctx = NULL;
-    HWND w = NULL;
-    if ((n = tree_selected_ids(ids, 512)) <= 0) return;
-    if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
-        OS_WinItem* wi = &g_app.wins[g_cur_tab];
-        if (wi->is_module && wi->mod && module_has_type(wi->mod, "scope.bar")) {
-            m = wi->mod; ctx = wi->mod_ctx; w = wi->hwnd;
-        }
-    }
-    if (!m) {
-        for (i = 0; i < g_app.win_count && !m; i++) {
-            OS_WinItem* wi = &g_app.wins[i];
-            if (wi->is_module && wi->mod && module_has_type(wi->mod, "scope.bar")) {
-                m = wi->mod; ctx = wi->mod_ctx; w = wi->hwnd;
-            }
-        }
-        if (!m) {
-            for (i = 0; i < g_modwin_menu_count; i++) {
-                ModWinMenuItem* it = &g_modwin_menu[i];
-                if (it->mod && it->wt && strcmp(it->wt->type, "scope.bar") == 0) {
-                    char title8[128];
-                    wchar_t title[128];
-                    os_utf8_to_wide_buf(it->wt->display_name, title, 128);
-                    os_wide_to_utf8_buf(title, title8, 128);
-                    w = it->mod->create_window(it->ctx, it->wt->type, g_app.hTab,
-                                               0, 0, 200, 150, title8);
-                    if (w) {
-                        add_win_item(w, 1, it->mod, it->ctx, title);
-                        m = it->mod; ctx = it->ctx;
-                    }
-                    break;
-                }
-            }
-        }
-    }
-    if (m && m->api_version >= 2 && m->win_add_var && w) {
-        for (i = 0; i < n; i++) m->win_add_var(ctx, w, ids[i]);
-        os_log(OS_LOG_INFO, "树右键批量添加变量: %d 个", n);
-    }
-}
 
 static void tab_context_menu(void)
 {
@@ -1956,9 +1972,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         g_app.hSplitH = CreateWindowW(L"OSSplitterH", L"", WS_CHILD | WS_VISIBLE,
                                       0, 500, 800, 5, hwnd, NULL, g_app.hInst, NULL);
         g_app.hLog = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
-                                     WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
+                                     WS_CHILD | WS_VISIBLE | LVS_REPORT,
                                      0, 505, 800, 165, hwnd, NULL, g_app.hInst, NULL);
-        ListView_SetExtendedListViewStyle(g_app.hLog, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
+        /* Bug13: 不设 LVS_SINGLESEL 即支持多选（Ctrl 连续选择 / Shift 起止范围选）+ 整行选中 */
+        ListView_SetExtendedListViewStyle(g_app.hLog,
+            LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_DOUBLEBUFFER);
         {
             LVCOLUMNW col;
             memset(&col, 0, sizeof(col));
@@ -2052,6 +2070,24 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             it.hItem = items[i];
             it.state = (i >= start && i < start + cnt) ? TVIS_SELECTED : 0;
             TreeView_SetItem(g_app.hTree, &it);
+            if (it.state) sel++;
+        }
+        return sel;
+    }
+    case WM_OS_LOG_TEST_SELECT: {
+        /* Bug13 测试钩子：程序化选中日志 [start, start+count)（等价 Shift 起止范围选）。
+         * 跨进程无法用指针式 LVM_SETITEMSTATE 编组（会读到发送方进程地址崩溃），
+         * 故由主线程进程内设置，返回实际选中数。 */
+        int start = (int)wParam, cnt = (int)lParam, n, i, sel = 0;
+        LVITEMW it;
+        n = g_app.hLog ? ListView_GetItemCount(g_app.hLog) : 0;
+        memset(&it, 0, sizeof(it));
+        it.mask = LVIF_STATE;
+        it.stateMask = LVIS_SELECTED;
+        for (i = 0; i < n; i++) {
+            it.iItem = i;
+            it.state = (i >= start && i < start + cnt) ? LVIS_SELECTED : 0;
+            SendMessageW(g_app.hLog, LVM_SETITEMSTATE, (WPARAM)i, (LPARAM)&it);
             if (it.state) sel++;
         }
         return sel;
@@ -2188,6 +2224,13 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 return 0;
             }
         }
+        if (h && h->hwndFrom == g_app.hLog) {
+            /* Bug13: 消息区域右键菜单（复制选中 / 全部清除） */
+            if (h->code == NM_RCLICK) {
+                log_context_menu();
+                return 0;
+            }
+        }
         if (h && h->hwndFrom == g_app.hTree) {
             if (h->code == NM_RCLICK) {
                 tree_context_menu(hwnd, lParam);
@@ -2228,7 +2271,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.8.3\n\n"
+                        L"OpenScope v1.9.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -2272,7 +2315,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_TREE_RELOAD: os_mainwin_reload_elf(); break;
         case IDM_TREE_ADD_CHART: tree_add_to_native(1); break;
         case IDM_TREE_ADD_NUM: tree_add_to_native(0); break;
-        case IDM_TREE_ADD_SCOPE: tree_add_to_scope(); break;
+        case IDM_LOG_COPY: log_copy_selected(); break;
+        case IDM_LOG_CLEAR: log_clear_all(); break;
         case IDM_TAB_CLOSE:
             if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count)
                 PostMessage(hwnd, WM_OS_WIN_CLOSED,
