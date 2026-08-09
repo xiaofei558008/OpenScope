@@ -7,6 +7,7 @@
 #include "datalog.h"
 #include "layout.h"
 #include "util.h"
+#include "theme.h"
 #include <string.h>
 #include <commctrl.h>
 
@@ -164,7 +165,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.9.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.10.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -172,6 +173,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_chart_register();
     os_num_register();
     os_mainwin_register();
+    os_theme_load(); /* F20: 创建主窗口前读回持久化主题，标题栏/控件从首帧即按主题渲染 */
     hMain = CreateWindowW(L"OpenScopeMain", L"OpenScope - MCU 变量采集与标定",
                           WS_OVERLAPPEDWINDOW,
                           CW_USEDEFAULT, CW_USEDEFAULT, 1280, 800,
@@ -184,6 +186,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_mainwin_cfg_init(); /* 主界面连接配置：接口/速度/J-Link 设备列表 */
     ShowWindow(hMain, nCmdShow);
     UpdateWindow(hMain);
+    os_theme_apply(hMain); /* F20: 窗口可见后再刷一次（菜单栏暗色需窗口已显示） */
     {
         wchar_t* elf = NULL, *sel = NULL, *llo = NULL, *lsv = NULL;
         int no_layout = 0;

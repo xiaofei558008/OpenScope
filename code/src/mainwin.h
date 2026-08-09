@@ -32,5 +32,7 @@ HWND os_tab_edit_hwnd(void);
 void os_tab_edit_handle_key(WPARAM key);
 void os_tab_edit_focus_check(void);
 void os_mainwin_cfg_init(void);
+/* F20: 把当前主题应用到主窗口各控件（树/日志/状态栏/窗口列表）颜色 */
+void os_mainwin_apply_theme(void);
 
 #endif

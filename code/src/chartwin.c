@@ -2,6 +2,7 @@
 #include "chartwin.h"
 #include "mainwin.h"
 #include "vartree.h"
+#include "theme.h"
 #include <string.h>
 
 #define OS_MAGIC_CHART 0x43484152u /* 'CHAR' */
@@ -435,13 +436,13 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
     chart_compute_view(cw, &v);
     /* 标题栏 */
     {
-        HBRUSH br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+        HBRUSH br = CreateSolidBrush(os_theme(TH_PANEL));
         FillRect(hdc, &rc, br);
         DeleteObject(br);
-        FrameRect(hdc, &rc, (HBRUSH)GetStockObject(GRAY_BRUSH));
+        FrameRect(hdc, &rc, os_theme_brush(TH_BORDER));
         SelectObject(hdc, font);
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+        SetTextColor(hdc, os_theme(TH_TEXT));
         /* Bug5: 不再绘制内部标题文字“波形窗口 N”（tab 标签已展示名称），保留右上 × */
         RECT xr = { rc.right - 20, 2, rc.right - 4, th - 2 };
         DrawTextW(hdc, L"×", -1, &xr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -452,13 +453,13 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
     }
     /* 绘图区背景 */
     {
-        HBRUSH br = CreateSolidBrush(RGB(12, 12, 18));
+        HBRUSH br = CreateSolidBrush(os_theme(TH_CHART_PLOT_BG));
         FillRect(hdc, &plot, br);
         DeleteObject(br);
     }
     /* 网格：竖直网格共享；水平网格叠加模式全局 / 堆叠模式逐 lane */
     {
-        HPEN pen = CreatePen(PS_SOLID, 1, RGB(45, 45, 58));
+        HPEN pen = CreatePen(PS_SOLID, 1, os_theme(TH_CHART_GRID));
         HPEN old = (HPEN)SelectObject(hdc, pen);
         int nx = 10;
         for (i = 1; i < nx; i++) {
@@ -486,7 +487,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
                 DeleteObject(sep);
             }
         } else {
-            HPEN hpen = CreatePen(PS_SOLID, 1, RGB(45, 45, 58));
+            HPEN hpen = CreatePen(PS_SOLID, 1, os_theme(TH_CHART_GRID));
             HPEN oh = (HPEN)SelectObject(hdc, hpen);
             for (i = 1; i < 8; i++) {
                 int y = plot.top + (plot.bottom - plot.top) * i / 8;
@@ -538,7 +539,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
     } else {
         SelectObject(hdc, font);
         SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, RGB(150, 150, 160));
+        SetTextColor(hdc, os_theme(TH_CHART_AXIS));
         for (i = 0; i <= 4; i++) {
             double val = v.yhi - (v.yhi - v.ylo) * i / 4.0;
             int y = plot.top + (plot.bottom - plot.top) * i / 4;
@@ -560,7 +561,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         RECT r;
         double dur = v.have_t ? (double)(v.x1 - v.x0) / 1e6 : (double)v.nvis;
         if (dur < 0) dur = 0;
-        SetTextColor(hdc, RGB(150, 150, 160));
+        SetTextColor(hdc, os_theme(TH_CHART_AXIS));
         for (i = 0; i <= 4; i++) {
             int x = plot.left + (plot.right - plot.left) * i / 4;
             double sec = dur * i / 4.0;

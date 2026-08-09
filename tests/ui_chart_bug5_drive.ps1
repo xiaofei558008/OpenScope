@@ -119,8 +119,17 @@ try {
             [OsBug5]::SendMessage($chart, 0x20A, [IntPtr](120 -shl 16), [IntPtr]$wl) | Out-Null
             Start-Sleep -Milliseconds 60
         }
-        Start-Sleep -Milliseconds 800   # 等待重绘（圆点状态变化日志）
+        # 重绘 + 日志落盘可能受回归环境负载影响，最多等待 3s（200ms 步进）
+        $t0 = Get-Date
+        while (-not (Log-Has '波形 X 轴缩放') -and ((Get-Date) - $t0).TotalMilliseconds -lt 3000) {
+            Start-Sleep -Milliseconds 200
+        }
+        Start-Sleep -Milliseconds 200
         Check (Log-Has '波形 X 轴缩放') "滚轮放大 X 轴执行"
+        $t0 = Get-Date
+        while (-not (Log-Has '波形采样点圆点') -and ((Get-Date) - $t0).TotalMilliseconds -lt 3000) {
+            Start-Sleep -Milliseconds 200
+        }
         Check (Log-Has '波形采样点圆点') "放大后采样点圆点仍显示（可见点计数 <= 120）"
         Check (-not $proc.HasExited) "缩放+圆点渲染未闪退"
     }

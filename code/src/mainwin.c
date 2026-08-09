@@ -7,6 +7,7 @@
 #include "datalog.h"
 #include "module_mgr.h"
 #include "layout.h"
+#include "theme.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <string.h>
@@ -43,6 +44,8 @@
 
 #define IDM_LOG_COPY    2601 /* Bug13: 复制选中消息到剪贴板 */
 #define IDM_LOG_CLEAR   2602 /* Bug13: 全部清除 */
+
+#define IDM_THEME_DARK  2701 /* F20: 深色模式开关（菜单勾选项） */
 
 /* 连接配置控件（直接放主界面工具栏，不弹对话框） */
 #define IDC_CFG_DEVICE   2101
@@ -94,9 +97,15 @@ typedef struct ModWinMenuItem {
     const OS_WindowType* wt;
 } ModWinMenuItem;
 
+/* F20: WM_CTLCOLOR* 统一返回主题画刷（定义在 os_mainwin_proc 前，供对话框先使用） */
+static LRESULT theme_ctlcolor(HDC hdc, int edit);
+/* F20: 标准控件 SetWindowTheme 暗色化（定义在 os_mainwin_apply_theme 前，供对话框先使用） */
+static void ctrl_dark_theme(HWND h);
+
 static const wchar_t* g_main_class = L"OpenScopeMain";
 static const wchar_t* g_right_class = L"OSRightPanel";
 static HMENU g_menu;
+static HMENU g_menu_file; /* F20: 深色模式菜单项所在菜单（勾选状态同步） */
 static HMENU g_menu_win;
 static ModWinMenuItem g_modwin_menu[64];
 static int g_modwin_menu_count;
@@ -534,6 +543,13 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
         if (g_app.hMain) new_win_context_menu();
         return 0;
     }
+    if (msg == WM_ERASEBKGND) { /* F20: 右侧面板背景随主题 */
+        RECT rc;
+        HDC hdc = (HDC)wp;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
@@ -649,7 +665,7 @@ static LRESULT CALLBACK split_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        FillRect(hdc, &rc, (HBRUSH)GetStockObject(GRAY_BRUSH));
+        FillRect(hdc, &rc, os_theme_brush(TH_BORDER));
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -684,7 +700,7 @@ static LRESULT CALLBACK splith_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        FillRect(hdc, &rc, (HBRUSH)GetStockObject(GRAY_BRUSH));
+        FillRect(hdc, &rc, os_theme_brush(TH_BORDER));
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -753,10 +769,10 @@ static LRESULT CALLBACK tree_strip_proc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
         RECT rc;
         HDC hdc = BeginPaint(hwnd, &ps);
         GetClientRect(hwnd, &rc);
-        FillRect(hdc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
+        FillRect(hdc, &rc, os_theme_brush(TH_PANEL));
         SetBkMode(hdc, TRANSPARENT);
         SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-        SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+        SetTextColor(hdc, os_theme(TH_TEXT));
         DrawTextW(hdc, L"❯", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         EndPaint(hwnd, &ps);
         return 0;
@@ -813,7 +829,7 @@ static LRESULT CALLBACK tree_pin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         HDC hdc = BeginPaint(hwnd, &ps);
         RECT rc;
         GetClientRect(hwnd, &rc);
-        FillRect(hdc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
+        FillRect(hdc, &rc, os_theme_brush(TH_PANEL));
         pin_draw(hdc, &rc, g_app.tree_auto ? 0 : 1);
         EndPaint(hwnd, &ps);
         return 0;
@@ -1376,12 +1392,30 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         lc.pszText = L"变量（名称 @ 地址）";
         lc.cx = 400;
         SendMessageW(hList, LVM_INSERTCOLUMNW, 0, (LPARAM)&lc);
+        /* F20: 列表配色随主题 */
+        ListView_SetBkColor(hList, os_theme(TH_LOG_BG));
+        ListView_SetTextColor(hList, os_theme(TH_LOG_TEXT));
+        ListView_SetTextBkColor(hList, os_theme(TH_LOG_BG));
+        os_theme_listview_header(hList);
         CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
                       310, 330, 60, 26, dlg, (HMENU)IDD_PICK_OK, g_app.hInst, NULL);
         CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE,
                       380, 330, 60, 26, dlg, (HMENU)IDD_PICK_CANCEL, g_app.hInst, NULL);
         return 0;
     }
+    case WM_ERASEBKGND: { /* F20 */
+        RECT rc;
+        HDC hdc = (HDC)wParam;
+        GetClientRect(dlg, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        return theme_ctlcolor((HDC)wParam, 0);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return theme_ctlcolor((HDC)wParam, 1);
     case WM_DESTROY: {
         PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
         free(st);
@@ -1563,6 +1597,19 @@ int os_dlg_edit_value(HWND owner, int leaf_id)
 static LRESULT CALLBACK edit_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_ERASEBKGND: { /* F20 */
+        RECT rc;
+        HDC hdc = (HDC)wParam;
+        GetClientRect(dlg, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        return theme_ctlcolor((HDC)wParam, 0);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return theme_ctlcolor((HDC)wParam, 1);
     case WM_DESTROY: {
         EditState* st = (EditState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
         free(st);
@@ -1913,6 +1960,314 @@ static void tree_select_all(int on)
     os_mainwin_update_buttons();
 }
 
+/* ---------- F20 主题应用 ---------- */
+
+/* WM_CTLCOLOR* 统一返回主题画刷（edit=输入框/列表，否则按钮/静态文本） */
+static LRESULT theme_ctlcolor(HDC hdc, int edit)
+{
+    if (edit) {
+        SetTextColor(hdc, os_theme(TH_EDIT_TEXT));
+        SetBkColor(hdc, os_theme(TH_EDIT_BG));
+        return (LRESULT)os_theme_brush(TH_EDIT_BG);
+    }
+    SetTextColor(hdc, os_theme(TH_TEXT));
+    SetBkColor(hdc, os_theme(TH_BG));
+    return (LRESULT)os_theme_brush(TH_BG);
+}
+
+/* ---------- F20: 状态栏与 tab 控件完整自绘（标准消息无法可靠改色，子类化接管） ---------- */
+
+#define STATUS_MAX_PARTS 8
+static int     g_status_parts[STATUS_MAX_PARTS];
+static int     g_status_nparts;
+static wchar_t g_status_text[STATUS_MAX_PARTS][256];
+static WNDPROC g_status_oldproc;
+static WNDPROC g_tab_oldproc;
+
+/* SB_SETTEXTW(=0x040B) 走子类拦截：存下文本，随后 WM_PAINT 用主题色自绘 */
+static void status_capture_text(int part, const wchar_t* text)
+{
+    if (part < 0 || part >= STATUS_MAX_PARTS) return;
+    if (!text) text = L"";
+    _snwprintf(g_status_text[part], 256, L"%ls", text);
+}
+
+static void status_capture_parts(int n, const int* parts)
+{
+    int i;
+    if (n > STATUS_MAX_PARTS) n = STATUS_MAX_PARTS;
+    g_status_nparts = n;
+    for (i = 0; i < n; i++) g_status_parts[i] = parts[i];
+}
+
+static LRESULT CALLBACK status_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1; /* 背景交给 WM_PAINT 统一绘制 */
+    case SB_SETPARTS:
+        status_capture_parts((int)wParam, (const int*)lParam);
+        break;
+    case SB_SETTEXTW: /* Unicode 构建下 SB_SETTEXT 同值，仅列一个避免 C2196 */
+        status_capture_text((int)wParam, (const wchar_t*)lParam);
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc;
+        RECT rc;
+        int i, x;
+        hdc = BeginPaint(h, &ps);
+        GetClientRect(h, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_STATUS_BG));
+        /* 顶部边框线（与分隔条同色，浅色主题下与原视觉一致） */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, os_theme(TH_BORDER));
+            HGDIOBJ op = SelectObject(hdc, pen);
+            MoveToEx(hdc, rc.left, rc.top, NULL);
+            LineTo(hdc, rc.right, rc.top);
+            SelectObject(hdc, op);
+            DeleteObject(pen);
+        }
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, os_theme(TH_STATUS_TEXT));
+        SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        x = 0;
+        for (i = 0; i < g_status_nparts; i++) {
+            RECT tr;
+            int end = g_status_parts[i];
+            if (end < 0 || end > rc.right) end = rc.right;
+            if (end <= x) break;
+            tr.left = x + 4; tr.top = rc.top + 1;
+            tr.right = end - 2; tr.bottom = rc.bottom - 1;
+            DrawTextW(hdc, g_status_text[i], -1, &tr,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            x = end;
+        }
+        EndPaint(h, &ps);
+        return 0;
+    }
+    }
+    return CallWindowProcW(g_status_oldproc, h, msg, wParam, lParam);
+}
+
+/* ---------- F20: 组合框完整自绘（CBS_DROPDOWNLIST 闭合面不受 SetWindowTheme 影响） ---------- */
+
+static HWND    g_combo_hwnd[8];
+static WNDPROC g_combo_old[8];
+static int     g_combo_count;
+
+static int combo_index(HWND h)
+{
+    int i;
+    for (i = 0; i < g_combo_count; i++)
+        if (g_combo_hwnd[i] == h) return i;
+    return -1;
+}
+
+static void combo_draw_arrow(HDC hdc, RECT* rc)
+{
+    int cx = (rc->left + rc->right) / 2;
+    int cy = (rc->top + rc->bottom) / 2;
+    int i;
+    for (i = 0; i < 4; i++) {
+        MoveToEx(hdc, cx - 4 - i / 2, cy - 1 + i, NULL);
+        LineTo(hdc, cx + 4 + i / 2, cy - 1 + i);
+    }
+}
+
+static LRESULT CALLBACK combo_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc;
+        RECT rc, tr, ar;
+        wchar_t txt[256];
+        int n = 0;
+        txt[0] = 0;
+        hdc = BeginPaint(h, &ps);
+        GetClientRect(h, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_EDIT_BG));
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, os_theme(TH_BORDER));
+            HGDIOBJ op = SelectObject(hdc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            Rectangle(hdc, rc.left, rc.top, rc.right - 1, rc.bottom - 1);
+            SelectObject(hdc, ob);
+            SelectObject(hdc, op);
+            DeleteObject(pen);
+        }
+        /* 选中项文本：DROPDOWNLIST 用 CB_GETCURSEL+CB_GETLBTEXT；DROPDOWN 用窗口文本 */
+        {
+            LRESULT sel = SendMessageW(h, CB_GETCURSEL, 0, 0);
+            if (sel != CB_ERR) {
+                n = (int)SendMessageW(h, CB_GETLBTEXTLEN, sel, 0);
+                if (n > 0 && n < 256)
+                    SendMessageW(h, CB_GETLBTEXT, sel, (LPARAM)txt);
+            } else {
+                GetWindowTextW(h, txt, 256);
+                n = (int)wcslen(txt);
+            }
+        }
+        tr = rc;
+        tr.left += 3; tr.top += 1; tr.right -= 22; tr.bottom -= 1;
+        if (n > 0) {
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, os_theme(TH_EDIT_TEXT));
+            SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+            DrawTextW(hdc, txt, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+        /* 下拉箭头 */
+        ar.left = rc.right - 18; ar.top = rc.top; ar.right = rc.right - 2; ar.bottom = rc.bottom;
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, os_theme(TH_EDIT_TEXT));
+            HGDIOBJ op = SelectObject(hdc, pen);
+            combo_draw_arrow(hdc, &ar);
+            SelectObject(hdc, op);
+            DeleteObject(pen);
+        }
+        EndPaint(h, &ps);
+        return 0;
+    }
+    }
+    {
+        int i = combo_index(h);
+        if (i >= 0) return CallWindowProcW(g_combo_old[i], h, msg, wParam, lParam);
+    }
+    return DefWindowProcW(h, msg, wParam, lParam);
+}
+
+static void combo_install_theme(HWND h)
+{
+    if (g_combo_count < 8) {
+        g_combo_hwnd[g_combo_count] = h;
+        g_combo_old[g_combo_count] = (WNDPROC)SetWindowLongPtrW(h, GWLP_WNDPROC,
+                                                                (LONG_PTR)combo_theme_proc);
+        g_combo_count++;
+    }
+}
+
+/* F20: 标准控件（按钮/组合框/编辑框/tab）暗色化。
+ * SetPreferredAppMode(FORCE) 后，控件仍需 SetWindowTheme("DarkMode_Explorer")
+ * 才按暗色主题渲染；切回浅色时用 "Explorer" 还原。动态加载避免改链接。 */
+static void ctrl_dark_theme(HWND h)
+{
+    static HRESULT (WINAPI* fn)(HWND, const wchar_t*, const wchar_t*);
+    static int inited;
+    const wchar_t* name;
+    if (!inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) fn = (HRESULT (WINAPI*)(HWND, const wchar_t*, const wchar_t*))
+                       GetProcAddress(ux, "SetWindowTheme");
+        inited = 1;
+    }
+    if (!fn) return;
+    name = os_theme_dark() ? L"DarkMode_Explorer" : L"Explorer";
+    fn(h, name, NULL);
+    SendMessageW(h, WM_THEMECHANGED, 0, 0);
+    RedrawWindow(h, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+}
+
+static void apply_dark_theme_controls(HWND root)
+{
+    HWND child = GetWindow(root, GW_CHILD);
+    while (child) {
+        wchar_t cls[64];
+        GetClassNameW(child, cls, 64);
+        if (wcscmp(cls, L"Button") == 0 || wcscmp(cls, L"ComboBox") == 0 ||
+            wcscmp(cls, L"Edit") == 0 || wcscmp(cls, L"SysTabControl32") == 0)
+            ctrl_dark_theme(child);
+        child = GetWindow(child, GW_HWNDNEXT);
+    }
+}
+
+/* tab 控件：背景（tab 项以外区域）用主题色填充；tab 项本身由 uxtheme 暗色渲染 */
+static LRESULT CALLBACK tab_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc;
+        GetClientRect(h, &rc);
+        FillRect((HDC)wParam, &rc, os_theme_brush(TH_TAB_BG));
+        return 1;
+    }
+    case WM_CTLCOLORSTATIC: {
+        HDC hdc = (HDC)wParam;
+        SetTextColor(hdc, os_theme(TH_TAB_TEXT));
+        SetBkColor(hdc, os_theme(TH_TAB_BG));
+        return (LRESULT)os_theme_brush(TH_TAB_BG);
+    }
+    case WM_PAINT: {
+        LRESULT r = CallWindowProcW(g_tab_oldproc, h, msg, wParam, lParam);
+        /* 旧 proc 绘完 tab 项后，把“页区域”（tab 项下方空区）补成主题色 */
+        if (g_app.win_count == 0) { /* 有窗口时页区域被子窗口覆盖，无需补色 */
+            HDC hdc = GetDC(h);
+            RECT rc, strip;
+            GetClientRect(h, &rc);
+            strip = rc;
+            if (TabCtrl_GetItemCount(h) > 0) {
+                RECT ir;
+                if (TabCtrl_GetItemRect(h, TabCtrl_GetItemCount(h) - 1, &ir))
+                    strip.top = ir.bottom + 2;
+            } else {
+                strip.top = 2;
+            }
+            if (strip.top < rc.bottom) {
+                HBRUSH ob = (HBRUSH)SelectObject(hdc, os_theme_brush(TH_TAB_BG));
+                PatBlt(hdc, rc.left, strip.top, rc.right - rc.left, rc.bottom - strip.top, PATCOPY);
+                SelectObject(hdc, ob);
+            }
+            ReleaseDC(h, hdc);
+        }
+        return r;
+    }
+    }
+    return CallWindowProcW(g_tab_oldproc, h, msg, wParam, lParam);
+}
+
+/* 把当前主题刷到树/日志/状态栏/各窗口（theme.c 切换时也会调用） */
+void os_mainwin_apply_theme(void)
+{
+    int i, k;
+    if (g_app.hTree && IsWindow(g_app.hTree)) {
+        SendMessageW(g_app.hTree, TVM_SETBKCOLOR, 0, os_theme(TH_TREE_BG));
+        SendMessageW(g_app.hTree, TVM_SETTEXTCOLOR, 0, os_theme(TH_TREE_TEXT));
+        SendMessageW(g_app.hTree, TVM_SETLINECOLOR, 0, os_theme(TH_TREE_LINE));
+        InvalidateRect(g_app.hTree, NULL, TRUE);
+    }
+    if (g_app.hLog && IsWindow(g_app.hLog)) {
+        ListView_SetBkColor(g_app.hLog, os_theme(TH_LOG_BG));
+        ListView_SetTextColor(g_app.hLog, os_theme(TH_LOG_TEXT));
+        ListView_SetTextBkColor(g_app.hLog, os_theme(TH_LOG_BG));
+        InvalidateRect(g_app.hLog, NULL, TRUE);
+        /* 列头（SysHeader32）SetWindowTheme 无效，改用共享自绘子类 */
+        os_theme_listview_header(g_app.hLog);
+    }
+    if (g_app.hStatus && IsWindow(g_app.hStatus)) {
+        /* 状态栏已子类化自绘（status_theme_proc），这里仅触发重绘 */
+        InvalidateRect(g_app.hStatus, NULL, TRUE);
+    }
+    for (i = 0; i < g_app.win_count; i++) {
+        for (k = 0; k < g_app.wins[i].group_count; k++) {
+            HWND w = g_app.wins[i].group[k];
+            if (!w || !IsWindow(w)) continue;
+            if (os_num_is(w)) os_num_apply_theme(w);
+            else if (os_chart_is(w)) InvalidateRect(w, NULL, TRUE);
+        }
+    }
+    if (g_app.hTab && IsWindow(g_app.hTab)) InvalidateRect(g_app.hTab, NULL, TRUE);
+    if (g_app.hRight && IsWindow(g_app.hRight)) InvalidateRect(g_app.hRight, NULL, TRUE);
+    /* 标准控件（按钮/组合框/编辑框/tab）暗色主题 */
+    if (g_app.hMain && IsWindow(g_app.hMain)) {
+        apply_dark_theme_controls(g_app.hMain);
+        if (g_app.hRight && IsWindow(g_app.hRight))
+            apply_dark_theme_controls(g_app.hRight);
+    }
+}
+
 LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
@@ -1920,6 +2275,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         HMENU mFile, mAcq, mLog, mHelp;
         int i;
         g_app.hMain = hwnd;
+        os_theme_set_main(hwnd);
         g_app.hBtnBar = hwnd;
         for (i = 0; i < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); i++) {
             HWND b = CreateWindowW(L"BUTTON", g_tool_btns[i].text,
@@ -1934,15 +2290,19 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
                               584, 5, 140, 200, hwnd, (HMENU)IDC_CFG_DEVICE, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c); /* F20: 闭合面自绘（暗色） */
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
                               650, 5, 62, 120, hwnd, (HMENU)IDC_CFG_IFACE, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c);
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWN | WS_TABSTOP,
                               716, 5, 92, 200, hwnd, (HMENU)IDC_CFG_SPEED, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c);
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
                               812, 5, 260, 120, hwnd, (HMENU)IDC_CFG_EMU, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c);
             c = CreateWindowW(L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                               1078, 5, 48, 24, hwnd, (HMENU)IDC_CFG_REFRESH, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
@@ -1965,6 +2325,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                    0, 0, 100, 100, g_app.hRight, NULL, g_app.hInst, NULL);
         SendMessageW(g_app.hTab, TCM_SETITEMSIZE, 0, MAKELPARAM(150, 22));
         SendMessageW(g_app.hTab, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        /* F20: 子类化 tab 控件，背景/文字用主题色 */
+        g_tab_oldproc = (WNDPROC)SetWindowLongPtrW(g_app.hTab, GWLP_WNDPROC,
+                                                   (LONG_PTR)tab_theme_proc);
         g_app.hTreeStrip = CreateWindowW(L"OSTreeStrip", L"", WS_CHILD,
                                          0, 34, 8, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hTreePin = CreateWindowW(L"OSTreePin", L"", WS_CHILD | WS_VISIBLE,
@@ -1993,15 +2356,22 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         g_app.hStatus = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE,
                                       0, 0, 0, 0, hwnd, NULL, g_app.hInst, NULL);
+        /* F20: 子类化状态栏，整体用主题色自绘（标准 SB_SET*COLOR 消息无效） */
+        g_status_oldproc = (WNDPROC)SetWindowLongPtrW(g_app.hStatus, GWLP_WNDPROC,
+                                                      (LONG_PTR)status_theme_proc);
         /* 菜单 */
         mFile = CreateMenu();
         mAcq = CreateMenu();
         mLog = CreateMenu();
         g_menu_win = CreateMenu();
         mHelp = CreateMenu();
+        g_menu_file = mFile;
         AppendMenuW(mFile, MF_STRING, IDC_BTN_OPEN, L"打开 ELF 文件...\tCtrl+O");
         AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_SAVE, L"保存布局为...");
         AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_LOAD, L"加载布局...");
+        AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
+        /* F20: 界面风格设置——深色模式（勾选项，勾选状态 WM_INITMENU 同步） */
+        AppendMenuW(mFile, MF_STRING, IDM_THEME_DARK, L"深色模式");
         AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mFile, MF_STRING, IDM_EXIT, L"退出\tAlt+F4");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_CONNECT, L"连接...\tF5");
@@ -2031,11 +2401,30 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_log(OS_LOG_INFO, "OpenScope 已启动");
         refresh_status();
         os_mainwin_update_buttons();
+        os_theme_apply(hwnd); /* F20: 主题（标题栏/树/日志/状态栏/控件色） */
         return 0;
     }
     case WM_SIZE:
         layout();
         return 0;
+    case WM_ERASEBKGND: /* F20: 主窗口背景随主题（工具行间隙等） */
+    {
+        RECT rc;
+        HDC hdc = (HDC)wParam;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_INITMENU: /* F20: 菜单打开时同步深色模式勾选状态 */
+        CheckMenuItem(g_menu_file, IDM_THEME_DARK,
+                      MF_BYCOMMAND | (os_theme_dark() ? MF_CHECKED : MF_UNCHECKED));
+        break;
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        return theme_ctlcolor((HDC)wParam, 0);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return theme_ctlcolor((HDC)wParam, 1);
     case WM_CLOSE:
         os_layout_save_auto(); /* 关闭时保存布局，便于下次恢复 */
         DestroyWindow(hwnd);
@@ -2271,7 +2660,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.9.0\n\n"
+                        L"OpenScope v1.10.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -2308,6 +2697,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (GetOpenFileNameW(&ofn)) os_layout_load_from(file);
             break;
         }
+        case IDM_THEME_DARK: /* F20: 切换深色/白色主题并持久化 */
+            os_theme_set_dark(!os_theme_dark());
+            os_layout_save_auto(); /* theme 键随布局持久化 */
+            os_log(OS_LOG_INFO, "界面主题: %s", os_theme_dark() ? "深色" : "白色");
+            break;
         case IDM_WIN_CHART: cmd_add_window(1); break;
         case IDM_WIN_NUM: cmd_add_window(0); break;
         case IDM_TREE_ALL: tree_select_all(1); break;

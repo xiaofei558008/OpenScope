@@ -3,8 +3,7 @@
  *
  * 能力：OS_CAP_DRIVER
  *  - OS_CMD_SCAN      扫描 USB 上的 J-Link 仿真器（EMU_GetNumDevices/GetDeviceInfo）
- *  - OS_CMD_CONFIGURE 弹配置对话框（SWD/JTAG、时钟速度、目标器件、连接/断开）
- *  - OS_CMD_CONNECT   使用对话框保存的配置连接 MCU
+ *  - OS_CMD_CONNECT   使用主界面控件构造的配置连接 MCU（Bug14：不再弹芯片配置对话框）
  *  - OS_CMD_DISCONNECT 断开（JLINKARM_Close）
  *  - OS_CMD_READ_MEM / OS_CMD_WRITE_MEM  内存读写（互斥序列化，AD-11）
  *  - OS_CMD_GET_INFO  驱动/仿真器信息
@@ -44,32 +43,6 @@ BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
     if (reason == DLL_PROCESS_ATTACH) g_hmod = hinst;
     return TRUE;
 }
-
-OS_ConnectCfg* os_jlink_cfg(void) { return &g_ctx.cfg; }
-
-int os_jlink_scan_devices(OS_DeviceInfo* items, int cap)
-{
-    OS_ScanReq req;
-    int rc;
-    req.items = items;
-    req.capacity = cap;
-    req.count = 0;
-    rc = mod_scan(&req);
-    /* 成功时返回设备数（此前误返回 OS_ERR_OK=0，导致对话框永远“没有发现设备”） */
-    return rc == OS_ERR_OK ? req.count : rc;
-}
-
-int os_jlink_connect_now(char* err, int errlen)
-{
-    return mod_connect_ex(err, errlen);
-}
-
-int os_jlink_disconnect_now(void)
-{
-    return mod_disconnect();
-}
-
-const OS_Framework* os_jlink_fw(void) { return g_fw; }
 
 /* ---------------- DLL 路径与绑定 ---------------- */
 
@@ -213,7 +186,7 @@ static void jlink_refresh_info(void)
     OS_DriverInfo* d = &g_ctx.info;
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
-    _snprintf(d->version, sizeof(d->version), "%s", "1.9.0");
+    _snprintf(d->version, sizeof(d->version), "%s", "1.10.0");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
@@ -361,8 +334,6 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     switch (cmd) {
     case OS_CMD_SCAN:
         return mod_scan((OS_ScanReq*)in);
-    case OS_CMD_CONFIGURE:
-        return os_jlink_show_config_dialog((HWND)in);
     case OS_CMD_CONNECT:
         if (in) memcpy(&g_ctx.cfg, in, sizeof(g_ctx.cfg));
         return mod_connect_ex(NULL, 0);
@@ -429,7 +400,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "jlink",
-    "1.9.0",
+    "1.10.0",
     "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
     NULL,
     mod_init,

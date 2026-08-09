@@ -65,14 +65,4 @@ typedef char os_jlink_emu_info_size_check[(sizeof(OS_JLinkEmuInfo) == 264) ? 1 :
 int os_jlink_bind(OS_JLinkApi* api, char* err, int err_len);
 void os_jlink_unbind(OS_JLinkApi* api);
 
-/* 配置对话框（OS_CMD_CONFIGURE 实现） */
-int os_jlink_show_config_dialog(HWND parent);
-/* 供对话框使用的内部访问器 */
-OS_ConnectCfg* os_jlink_cfg(void);
-int  os_jlink_scan_devices(OS_DeviceInfo* items, int cap);
-int  os_jlink_connect_now(char* err, int errlen);
-int  os_jlink_disconnect_now(void);
-/* 框架回调（对话框用于日志） */
-const OS_Framework* os_jlink_fw(void);
-
 #endif

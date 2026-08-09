@@ -10,6 +10,7 @@
 #include "numwin.h"
 #include "vartree.h"
 #include "mainwin.h"
+#include "theme.h"
 
 #include <io.h>
 #include <stdio.h>
@@ -119,6 +120,7 @@ int os_layout_save_to(const wchar_t* path)
     write_utf8_line(f, "log_h=%d", g_app.log_h);
     active = os_mainwin_active_tab();
     write_utf8_line(f, "active=%d", active);
+    write_utf8_line(f, "theme=%d", os_theme_dark() ? 1 : 0); /* F20 */
     write_utf8_line(f, "wins=%d", g_app.win_count);
     for (i = 0; i < g_app.win_count; i++) {
         OS_WinItem* wi = &g_app.wins[i];
@@ -257,6 +259,7 @@ int os_layout_load_from(const wchar_t* path)
                 else if (!strcmp(key, "tree_w")) ld->tree_w = atoi(val);
                 else if (!strcmp(key, "log_h")) ld->log_h = atoi(val);
                 else if (!strcmp(key, "active")) ld->active = atoi(val);
+                else if (!strcmp(key, "theme")) os_theme_set_dark(atoi(val)); /* F20 */
             } else {
                 if (!strcmp(key, "type")) _snprintf(cur->type, sizeof(cur->type), "%s", val);
                 else if (!strcmp(key, "title")) _snprintf(cur->title, sizeof(cur->title), "%s", val);

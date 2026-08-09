@@ -4,6 +4,7 @@
 #include "vartree.h"
 #include "datasrv.h"
 #include "util.h"
+#include "theme.h"
 #include <commctrl.h>
 #include <string.h>
 
@@ -120,6 +121,20 @@ int os_num_is(HWND hwnd)
 {
     OS_NumWin* nw = num_from_hwnd(hwnd);
     return nw ? 1 : 0;
+}
+
+/* F20: 按当前主题刷新数值窗口内部列表颜色 */
+void os_num_apply_theme(HWND hwnd)
+{
+    OS_NumWin* nw = num_from_hwnd(hwnd);
+    if (nw && nw->list && IsWindow(nw->list)) {
+        ListView_SetBkColor(nw->list, os_theme(TH_LOG_BG));
+        ListView_SetTextColor(nw->list, os_theme(TH_LOG_TEXT));
+        ListView_SetTextBkColor(nw->list, os_theme(TH_LOG_BG));
+        os_theme_listview_header(nw->list); /* 列头自绘主题色 */
+        InvalidateRect(nw->list, NULL, TRUE);
+    }
+    if (nw) InvalidateRect(hwnd, NULL, TRUE);
 }
 
 int os_num_var_name(HWND hwnd, int idx, char* out, int cap)
@@ -246,6 +261,7 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         col.pszText = L"数值";
         ListView_InsertColumn(p->list, NUM_COL_VAL, &col);
         SendMessage(p->list, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        os_num_apply_theme(hwnd); /* F20: 应用当前主题颜色 */
         return TRUE;
     }
     case WM_NCDESTROY:
@@ -263,14 +279,14 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         RECT rc;
         HBRUSH br;
         GetClientRect(hwnd, &rc);
-        br = CreateSolidBrush(GetSysColor(COLOR_BTNFACE));
+        br = CreateSolidBrush(os_theme(TH_PANEL));
         FillRect(hdc, &rc, br);
         DeleteObject(br);
-        FrameRect(hdc, &rc, (HBRUSH)GetStockObject(GRAY_BRUSH));
+        FrameRect(hdc, &rc, os_theme_brush(TH_BORDER));
         if (nw) {
             SetBkMode(hdc, TRANSPARENT);
             SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-            SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+            SetTextColor(hdc, os_theme(TH_TEXT));
             RECT tr = { 4, 2, rc.right - 22, 24 };
             DrawTextW(hdc, nw->title, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
             RECT xr = { rc.right - 20, 2, rc.right - 4, 24 };

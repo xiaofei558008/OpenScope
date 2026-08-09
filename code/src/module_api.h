@@ -33,20 +33,21 @@
 #define OS_ERR_CANCELED      -6
 #define OS_ERR_BUSY          -7
 
-/* OS_Module::command 命令号 */
+/* OS_Module::command 命令号
+ * 注：Bug14 已删除 OS_CMD_CONFIGURE（弹芯片配置对话框），连接配置一律由主界面
+ * 控件构造 OS_ConnectCfg 调 OS_CMD_CONNECT，避免"弹窗选择芯片"。 */
 enum {
-    OS_CMD_CONFIGURE    = 1, /* in: HWND parent，打开配置对话框 */
-    OS_CMD_CONNECT      = 2, /* in: OS_ConnectCfg*，out: int* 错误码 */
-    OS_CMD_DISCONNECT   = 3, /* 断开连接 */
-    OS_CMD_IS_CONNECTED = 4, /* out: int* (1/0) */
-    OS_CMD_SCAN         = 5, /* in: OS_ScanReq*，枚举仿真器 */
-    OS_CMD_READ_MEM     = 6, /* in: OS_MemReq*，返回字节数或负错误码 */
-    OS_CMD_WRITE_MEM    = 7, /* in: OS_MemReq*, return 0=OK or negative error */
-    OS_CMD_GET_INFO     = 8, /* out: OS_DriverInfo* */
-    OS_CMD_HALT         = 9,
-    OS_CMD_GO           = 10,
-    OS_CMD_RESET        = 11,
-    OS_CMD_ELF_RELOADED = 12 /* ELF 重新加载后由框架广播，模块应重解析窗口变量 */
+    OS_CMD_CONNECT      = 1, /* in: OS_ConnectCfg*，out: int* 错误码 */
+    OS_CMD_DISCONNECT   = 2, /* 断开连接 */
+    OS_CMD_IS_CONNECTED = 3, /* out: int* (1/0) */
+    OS_CMD_SCAN         = 4, /* in: OS_ScanReq*，枚举仿真器 */
+    OS_CMD_READ_MEM     = 5, /* in: OS_MemReq*，返回字节数或负错误码 */
+    OS_CMD_WRITE_MEM    = 6, /* in: OS_MemReq*, return 0=OK or negative error */
+    OS_CMD_GET_INFO     = 7, /* out: OS_DriverInfo* */
+    OS_CMD_HALT         = 8,
+    OS_CMD_GO           = 9,
+    OS_CMD_RESET        = 10,
+    OS_CMD_ELF_RELOADED = 11 /* ELF 重新加载后由框架广播，模块应重解析窗口变量 */
 };
 
 /* 仿真口类型 */

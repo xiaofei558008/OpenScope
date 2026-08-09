@@ -154,6 +154,14 @@
   - 下载修复：用户反馈"只下载到名为'下载'的文本文件"——根因是 `Content-Disposition: attachment` 未带 `filename=`，且嵌套正则 `^/downloads/([^/]+\.exe)$` 无法匹配 `/downloads/openscope/` 子目录路径。修复为 `Content-Disposition: attachment; filename="$1"` + 正则 `([^/]+\.(?:exe|zip|...))$`（捕获任意层级文件名）。修复后响应头 `Content-Disposition: attachment; filename="OpenScope-Setup-1.8.3.exe"`，SHA256 与本地一致。
   - 操作文档：`RELEASE.md`（一键发布 `python packaging\make_setup.py --publish`）。
   - 注：发布涉及服务器修改（nginx/证书/文件）需 sudo，密码见 request.md；publish.py 走本机免密 scp 无需 sudo。
+- **checkpoint-24（2026-08-09）**：新增特性 20 界面主题（白色默认/黑色，配色参考 IAR / Notepad++）+ Bug14 删除死代码芯片配置弹窗，v1.10.0。
+  - F20 主题架构：新增 `code/src/theme.c/h`——全部自定义绘制（主窗/分隔条/树/日志/波形/数值/对话框）统一走 `os_theme(id)` 取色 + `os_theme_brush()` 缓存实心画刷（切换主题时重建）；调色板 TH_*（背景/面板/文本/边框/编辑框/树/日志/网格/tab/状态栏/波形区）；持久化到 `%LOCALAPPDATA%\OpenScope\layout.ini` 的 `theme` 键（0=白 1=黑），`os_theme_load()` 读回、`os_theme_set_dark()` 运行时切换并即时重绘；「设置」菜单命令 IDM_THEME_DARK=2701 切换 + 写回 layout.ini。
+  - 系统暗色（标题栏/菜单/tab/标准控件）：uxtheme 未文档化序数 SetPreferredAppMode(135)/RefreshImmersiveColorPolicyState(104)/AllowDarkModeForWindow(133)/FlushMenuThemes(136) 用 `LoadLibraryW` 动态加载（`GetModuleHandleW` 对尚未加载的 DLL 返回 NULL）；`SetPreferredAppMode(FORCE)` 必须在 `CreateWindowW` 之前调用（`os_theme_load()` 内提前应用），否则后续创建的公共控件仍按系统浅色渲染；DWM 沉浸式暗色标题栏 `DwmSetWindowAttribute` attr 20（回退 19）。
+  - 标准控件暗色：父窗口 `WM_CTLCOLOR*` 返回主题画刷；按钮/编辑框/tab 用 `SetWindowTheme(hwnd, L"DarkMode_Explorer")`；组合框（设备/接口/速度/仿真）与状态栏完全子类化自绘（DROPDOWNLIST 闭合面与状态栏分栏 SetWindowTheme 无效）；日志/数值窗口列头 SysHeader32 子类化自绘（SetWindowTheme 对 SysHeader32 无效）。新增共享 `os_theme_listview_header()`（按句柄去重，可重复调用）。
+  - Bug14：删除死代码芯片配置弹窗路径（弹窗选芯片不再出现），回归无闪退。
+  - 回归：新增 `tests/ui_theme_dark_drive.ps1`（暗色启动采样树/右栏/日志/状态栏均深色 + 菜单命令运行时切换回亮色 + layout.ini 持久化，PrintWindow+GetPixel 校验；PS1 需带 UTF-8 BOM，否则 PowerShell 5.1 按 GBK 误读中文注释解析失败）；加固 `ui_chart_bug5_drive.ps1` 日志断言（3s 重试，回归负载下日志落盘可能滞后）；纳入 run_regression.sh。全量回归 dev **17/17 ALL PASS**（16 既有 + 新主题脚本），构建 0 error/0 warning。
+  - 版本 1.10.0：`python build.py --quiet` 干净构建，重新打包 `dist/OpenScope-Setup-1.10.0.exe`（10.4MB），静默安装验证版本 1.10.0.0；安装版全量回归 17/17 ALL PASS。
+  - 需求 9：checkpoint-24 提交 git + `git tag v1.10.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -199,10 +207,13 @@
 - [x] 13 波形窗口分析增强：多选添加变量 / 多坐标轴左置 + Ctrl+B 堆叠 / 放大采样点圆点 / 光标 Δ 测量 / 悬停数值 HUD（checkpoint-18）
 - [x] 14 底部消息栏支持上下拉伸（checkpoint-19）
 - [x] 16 tab 和右侧空白处右键新建 tab（波形/数值/示波器窗口）（checkpoint-19）
+- [x] 18 删除示波器功能模块（checkpoint-23）
+- [x] 19 数值窗口右键添加变量：模糊搜索列表 ctrl+a 全选 / ctrl 单击多选 / shift 起止范围多选，批量添加（checkpoint-23）
+- [x] 20 界面主题设置：白色（默认）/黑色（配色参考黑色 IAR / Notepad++）（checkpoint-24，F20）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
@@ -217,6 +228,7 @@
 - [x] Bug8 自动隐藏应归位到左侧 elf 变量树而非菜单栏固定按键（checkpoint-21）
 - [x] Bug9 除4000外速度连接采集到的变量值全为0（checkpoint-21）
 - [x] Bug10 用12000的速度采集数据，一开始就会失败；采集线程退出，读取xxx变量失败（checkpoint-22）
+- [x] Bug14 软件弹窗选择芯片并闪退——删除死代码芯片配置弹窗（checkpoint-24）
 
 ## 总结
 
