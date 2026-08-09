@@ -30,6 +30,7 @@
 #define WM_OS_PICK_TEST_SELECT (WM_APP + 30) /* N13a 测试钩子：变量选择对话框选中范围 [wParam, wParam+lParam) */
 #define WM_OS_SPLIT_V (WM_APP + 11) /* F14: 横向分隔条拖动，wParam=主窗口客户区 y 坐标 */
 #define WM_OS_TREE_TEST_SELECT (WM_APP + 12) /* Bug4 测试钩子：程序化选中树文档序叶子项 [wParam, wParam+lParam)，返回叶子总数 */
+#define WM_OS_LOG (WM_APP + 13) /* Bug7: 日志跨线程安全——非主线程日志经 PostMessage 到主线程插入 ListView（wParam=OS_LogMsg*） */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 

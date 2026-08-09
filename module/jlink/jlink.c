@@ -24,6 +24,7 @@ typedef struct JLinkCtx {
     CRITICAL_SECTION cs;      /* 串行化读写（AD-11） */
     OS_ConnectCfg cfg;        /* 配置对话框保存的连接参数 */
     int connected;
+    ULONGLONG last_reconnect_ms; /* 自动重连节流时间戳 */
     char dll_dir[MAX_PATH];
     OS_DriverInfo info;
 } JLinkCtx;
@@ -211,7 +212,7 @@ static void jlink_refresh_info(void)
     OS_DriverInfo* d = &g_ctx.info;
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
-    _snprintf(d->version, sizeof(d->version), "%s", "1.6.0");
+    _snprintf(d->version, sizeof(d->version), "%s", "1.8.2");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
@@ -301,17 +302,37 @@ static int mod_disconnect(void)
     return OS_ERR_OK;
 }
 
+/* 自动重连节流：掉线后至少间隔这么久才再次重连，避免边缘目标高频重连刷日志 */
+#define OS_JLINK_RECONNECT_MIN_MS 500
+
 static int mod_read(OS_MemReq* req)
 {
     OS_JLinkApi* a = &g_ctx.api;
-    int r;
+    int r, retried = 0;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
     if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-    EnterCriticalSection(&g_ctx.cs);
-    r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
-    LeaveCriticalSection(&g_ctx.cs);
-    /* JLINKARM_ReadMem 成功返回 0（数据已写入缓冲区），失败返回负值 */
-    return r >= 0 ? (int)req->size : OS_ERR_TIMEOUT;
+    for (;;) {
+        EnterCriticalSection(&g_ctx.cs);
+        r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
+        LeaveCriticalSection(&g_ctx.cs);
+        /* JLINKARM_ReadMem 成功返回 0；失败返回正值（未能读取的字节数）或负错误码。
+         * 严禁用 r>=0 判定成功——失败返回 1 会被当成成功，零缓冲被推为有效样本（Bug 9）。 */
+        if (r == 0) return (int)req->size;
+        if (retried) break; /* 已重连重试过，不再重试 */
+        /* 掉线（IsConnected=0）时自动重连一次恢复采集（Bug 9：避免永久全 0） */
+        if (a->is_connected && !a->is_connected() &&
+            (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_ms >= OS_JLINK_RECONNECT_MIN_MS) {
+            if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
+            mod_disconnect();
+            if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
+                g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
+                retried = 1;
+                continue;
+            }
+        }
+        break;
+    }
+    return OS_ERR_TIMEOUT;
 }
 
 static int mod_write(OS_MemReq* req)
@@ -323,8 +344,8 @@ static int mod_write(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     r = a->write_mem((uint32_t)req->address, req->size, (const uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
-    /* JLINKARM_WriteMem 成功返回写入字节数，须与请求大小一致 */
-    return r == (int)req->size ? OS_ERR_OK : OS_ERR_TIMEOUT;
+    /* JLINKARM_WriteMem 成功返回 0（>0 表示未能写入的字节数，负值为错误） */
+    return r == 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
 
 static int mod_command(void* ctx, int cmd, void* in, void* out)
@@ -401,7 +422,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "jlink",
-    "1.6.0",
+    "1.8.2",
     "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
     NULL,
     mod_init,

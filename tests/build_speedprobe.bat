@@ -1,0 +1,13 @@
+@echo off
+call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
+if errorlevel 1 (
+  echo [ERROR] vcvars64.bat failed
+  exit /b 1
+)
+cl /nologo /W2 /utf-8 tests\speedprobe.c ^
+    /Fe:tests\bin\speedprobe.exe
+if errorlevel 1 (
+  echo [ERROR] speedprobe build failed
+  exit /b 1
+)
+echo speedprobe build OK.

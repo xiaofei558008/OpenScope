@@ -1,7 +1,26 @@
-# OpenScope Epics & Stories（v5：request.md 更新版全覆盖）
+# OpenScope Epics & Stories（v6：request.md 更新版全覆盖）
 
-> BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~3、需求 9/10）。
-> 生成日期：2026-08-09。关联 checkpoint-19 基线（v1.8.0，特性 14/16 + Bug4补/Bug5补 已完成）。本轮 Epic 9：需求 10 自动完成语音通知（process/notification，无应用代码改动）。**checkpoint-20（v1.8.1）已完成：Story 9.1 DONE，`tools/notify_done.ps1` 语音脚本验证播报成功，全自动循环末尾已播报"任务执行完毕"，tag v1.8.1 双远端已推送。**
+> BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~9、需求 9/10）。
+> 生成日期：2026-08-09。关联 checkpoint-20 基线（v1.8.1，需求 10 语音通知已完成）。**本轮 Epic 10：Bug 7/8/9 修复 + 选芯片简化（只需核心名）。checkpoint-21（v1.8.2）目标。**
+
+## 本轮根因结论（BMAD 排查，2026-08-09）
+
+### Bug 9（非4000速度采集值全0）— 根因已实测确认
+- J-Link 模块 `mod_read`（jlink.c:314）：`JLINKARM_ReadMem` 失败返回 **1**（正值，SEGGER 约定"未能读取的字节数"），代码用 `r >= 0` 判定成功 → **失败被当成成功，零缓冲被推为有效样本** → UI 显示 0。
+- 实测（tests/speedprobe/read_smoke/rawpoll/dropstate）：边缘目标连接在 connect 后约 25ms **掉线**（`IsConnected`→0，后续读返回 rc=1），非默认速度更易掉；`mod_write` 用 `r == size` 判定成功同样错误（成功返回 0）。
+- 具体芯片名（STM32F103C8/STM32L031/RP2040_M0 等与目标不符）会让 J-Link 连接**挂起**；通用核心名（Cortex-M4/M0/M0+/M3）在所有速度均稳定连接+读取。
+- 修复：`r == 0` 严格成功判定（read/write 两处）+ 掉线自动重连恢复 + 设备列表简化为核心名。
+
+### Bug 7（采集时录制对话框卡死）— 根因
+- `cmd_log_start` 在采集运行中直接 `GetSaveFileNameW`（模态对话框），**未像 `cmd_replay_open` 一样先停采集**；采集线程在读取失败（Bug 9 场景）时经 `os_log → os_mainwin_append_log` 跨线程 `SendMessage(ListView_InsertItem)` 到主线程控件，与模态对话框互相等待 → 卡死。
+- 修复：录制前停采集、选完路径后恢复（与回放对话框一致）；日志回调改为主线程安全（跨线程时 PostMessage WM_OS_LOG）。
+
+### Bug 8（自动隐藏归位到左侧树面板）— 根因
+- 工具栏有固定按钮 `IDC_BTN_PIN`（"钉住变量栏"，菜单栏下方），与树面板顶部 `OSTreePin` 钉图标（N12）重复。用户要求自动隐藏/钉住只属于左侧 elf 变量树。
+- 修复：删除工具栏 `IDC_BTN_PIN` 按钮及布局位，保留树钉图标 `OSTreePin` + 左侧细条 `OSTreeStrip` 为唯一入口。
+
+### 用户新需求（选芯片简化：只需核心名）
+- 回答：纯 SWD/JTAG 标准协议读写内存/读 Flash 地址内容，**不需要知道具体芯片型号**（仅需通用核心名，CoreSight AHB-AP 调试架构一致）。具体芯片名只在烧录 Flash 算法/特殊连接序列时需要。实测核心名全速稳定、错误芯片名会挂起 → 支持用户方案。
 
 ## Requirements Inventory（request.md 全量）
 
@@ -29,6 +48,10 @@
 | B4(补) | 左侧 elf 变量列表：Ctrl 连续选择多变量 + 右键批量添加到窗口（波形/数值/示波器） | ✅ checkpoint-19 DONE | mainwin.c tree |
 | B5(补) | 波形窗口内部文字“波形窗口1”去掉；采样点圆点随录制时间增长全部消失需修复 | ✅ checkpoint-19 DONE | chartwin.c |
 | R10 | 每次 BMAD 执行完全部任务，用 Windows 发出语音"任务执行完毕"提示用户检查 | ✅ checkpoint-20 DONE | tools/notify_done.ps1 |
+| B7 | 采集时点击"记录"，界面卡死在选择录制文件路径对话框 | 🔄 修复 | mainwin.c cmd_log_start |
+| B8 | 自动隐藏功能应归位到左侧 elf 变量列表，而非菜单栏下固定按键 | 🔄 修复 | mainwin.c（删 IDC_BTN_PIN） |
+| B9 | 除 4000 外速度连接，采集到的变量值全为 0 | 🔄 修复 | jlink.c mod_read/mod_write + mainwin.c g_devices |
+| F17 | 跳过选芯片环节：只需选芯片核心（如 Cortex-M0+）；纯内存读写不需知道型号/架构 | 🔄 实现 | mainwin.c g_devices 核心列表 |
 
 ## Epic 5：窗口管理完善（N3 就地重命名 + N6 删关于 + Bug3 全屏）
 
@@ -125,9 +148,35 @@
 - Sprint-9：Story 8.2 → 8.3 → 8.4 → 8.5（F14 → F16 → Bug4补 → Bug5补）→ 全量回归（dev+installed）→ 版本 1.8.0 打包安装 → checkpoint-19 提交 + tag v1.8.0 + 推送双远端 ✅ checkpoint-19 DONE（14 项回归 dev+installed 全部 ALL PASS；tag v1.8.0 已推送 gitee_origin + github_origin）
 - Sprint-10：Story 9.1（需求 10 语音通知）→ 版本 1.8.0→1.8.1 打包安装 → checkpoint-20 提交 + tag v1.8.1 + 推送双远端 → 末尾 Windows 播报"任务执行完毕" ✅ checkpoint-20 DONE（tools/notify_done.ps1 验证播报成功；安装版 1.8.1.0；tag v1.8.1 已推送 gitee_origin + github_origin；末尾已播报"任务执行完毕"）
 
+## Epic 10：Bug 7/8/9 修复 + 选芯片简化（Bug7/8/9 + F17，checkpoint-21）
+
+### Story 10.1 — 采集时录制对话框卡死修复（B7）
+- AC：采集运行中点击"记录"弹出文件选择对话框，界面不卡死；对话框关闭后采集自动恢复；记录正常开始。
+- 文件：mainwin.c（cmd_log_start 先 `os_ds_stop()` 再 GetSaveFileNameW，对话框关闭后按原状态恢复采集）、app.h（WM_OS_LOG）、mainwin.c os_mainwin_append_log（非主线程时 PostMessage WM_OS_LOG，主线程插入 ListView）。
+- 测试：ui_record_dialog_drive.ps1（采集运行 → 发"记录"按钮 → 出现文件对话框 → 关闭 → 采集恢复 + 不崩溃）。
+
+### Story 10.2 — 自动隐藏归位到左侧树面板（B8）
+- AC：工具栏不再有"钉住变量栏/自动隐藏"按钮；树面板顶部 `OSTreePin` 钉图标（金色=钉住/灰=自动隐藏）+ 左侧细条 `OSTreeStrip` 为唯一开关；行为与 N9(d) 一致。
+- 文件：mainwin.c（g_tool_btns 删 IDC_BTN_PIN、layout items 删 IDC_BTN_PIN、#define 删除、update_pin_button → refresh_tree_pin 仅刷新图标）。
+- 测试：ui_features_drive.ps1 既有 N12 钉图标用例保留；新增断言工具栏不再含"钉住变量栏"。
+
+### Story 10.3 — 非4000速度读值为0修复 + 选芯片简化（B9 + F17）
+- AC：`JLINKARM_ReadMem`/`WriteMem` 以 `r == 0` 判定成功（修复失败被当作成功推零样本）；读失败且 `IsConnected==0` 时自动重连一次恢复；设备下拉改为核心名列表（Cortex-M0+/M0/M3/M4/M7/M23/M33/A5 等，默认 Cortex-M4）；纯内存读写不再需要具体芯片型号。
+- 文件：module/jlink/jlink.c（mod_read/mod_write 严格判定 + 掉线重连）、mainwin.c（g_devices 核心列表）。
+- 测试：tests/speed_smoke.c 扩展（核心名全速连接+读取非零）、新增 jlink_retcodes 回归（模块层读返回 rc==0 才成功）。
+
 ## 验收风险
 
-- 就地编辑 EDIT 控件必须覆盖 SysTabControl32 标签文本，避免 Z 序遮挡；Enter 提交后需刷新 TCM_INSERTITEM。
+- mod_write 原 `r == size` 判定在旧 J-Link 版本可能返回字节数？实测 v96600 WriteMem 失败返回 -1、成功返回 0（SEGGER 手册：>0=未能写入字节数），统一 `r == 0` 安全。
+- 自动重连须节流（500ms），避免边缘目标 25ms 掉线导致高频重连刷日志；重连失败仍走 poll_thread fail_count 停止路径。
+- 删除工具栏 PIN 按钮需同步 ui_connect_drive.ps1 按钮文字断言（若存在"钉住变量栏"检查）。
+- 录制暂停采集的间隙不会录数据（用户选路径期间本来就无新样本），可接受。
+
+## Sprint 计划
+
+- Sprint-11：Story 10.1 → 10.2 → 10.3（B7 → B8 → B9+F17）→ 新增回归（ui_record_dialog / ui_features 钉图标保留 / speed_smoke 全速）→ 全量回归 dev+installed → 版本 1.8.1→1.8.2 打包安装 → checkpoint-21 提交 + tag v1.8.2 + 推送双远端 → 末尾 Windows 播报"任务执行完毕"
+
+## 验收风险
 - 删除关于按钮需同步 ui_connect_drive.ps1（其按文字找按钮）与工具栏布局数组。
 - Bug3 全屏复用现有 group_max 机制即可（最大化即填满 tab），注意 group_max 关闭窗口后的复位。
 - Ctrl+B 语义从“单图多 Y 轴”改为“逐行堆叠”，须保留日志“波形多坐标轴: %d”兼容 ui_chartview_drive.ps1。

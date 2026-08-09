@@ -21,7 +21,6 @@
 #define IDC_BTN_REPLAY   2008
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
-#define IDC_BTN_PIN      2015 /* N9(d): 变量栏 自动隐藏/钉住 切换 */
 #define IDM_EXIT         2011
 #define IDM_LAYOUT_SAVE  2021
 #define IDM_LAYOUT_LOAD  2022
@@ -50,11 +49,13 @@
 #define IDC_CFG_EMU      2104
 #define IDC_CFG_REFRESH  2105
 
-/* MCU 型号预置列表（J-Link "Device=" 名称；默认 Cortex-M4，避免空设备令旧版 DLL 崩溃） */
+/* 芯片核心预置列表（J-Link "Device=" 名称）。
+ * F17：纯 SWD/JTAG 内存读写/读 Flash 地址内容只需通用核心名（CoreSight AHB-AP 架构一致），
+ * 不需要具体芯片型号；具体型号仅在烧录 Flash 算法时需要。实测错误的具体型号会让 J-Link 连接挂起。 */
 static const wchar_t* g_devices[] = {
-    L"Cortex-M4", L"Cortex-M3", L"Cortex-M0", L"Cortex-A5",
-    L"STM32L432KB", L"STM32F103C8", L"STM32F407VG", L"STM32F429ZI",
-    L"STM32G431KB", L"nRF52832_xxAA", L"NRF5340_XXAA", L"RP2040_M0"
+    L"Cortex-M4", L"Cortex-M3", L"Cortex-M0+", L"Cortex-M0",
+    L"Cortex-M7", L"Cortex-M23", L"Cortex-M33", L"Cortex-A5",
+    L"Cortex-R4", L"Cortex-A7"
 };
 
 static int g_emu_count = -1; /* 最近一次 J-Link 扫描到的设备数（-1=未扫描） */
@@ -105,7 +106,7 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
     { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
     { IDC_BTN_REPLAYSTOP, L"停止回放" },
-    { IDC_BTN_PIN, L"钉住变量栏" },
+    /* Bug8: 自动隐藏/钉住归位到左侧 elf 变量树（OSTreePin 钉图标），不再放菜单栏下固定按键 */
 };
 
 /* ---------- 工具 ---------- */
@@ -122,7 +123,12 @@ static void set_status_utf8(int part, const char* text)
     set_status(part, w);
 }
 
-void os_mainwin_append_log(int level, const wchar_t* line)
+/* Bug7: 日志跨线程安全。os_log 可能被采集线程/模块线程调用，而 ListView 属于主线程。
+ * 非主线程调用时经 PostMessage(WM_OS_LOG) 交给主线程插入，避免跨线程 SendMessage 与
+ * 模态对话框（如 GetSaveFileNameW）互相等待导致界面卡死。 */
+typedef struct OS_LogMsg { int level; wchar_t text[1024]; } OS_LogMsg;
+
+static void log_insert_now(int level, const wchar_t* line)
 {
     LVITEMW item;
     wchar_t t[64], lvl[16], msg[1024];
@@ -149,6 +155,22 @@ void os_mainwin_append_log(int level, const wchar_t* line)
     ListView_SetItemText(g_app.hLog, item.iItem, 2, msg);
     if (ListView_GetItemCount(g_app.hLog) > 5000)
         ListView_DeleteItem(g_app.hLog, ListView_GetItemCount(g_app.hLog) - 1);
+}
+
+void os_mainwin_append_log(int level, const wchar_t* line)
+{
+    DWORD tid;
+    if (!g_app.hMain || !IsWindow(g_app.hMain)) return;
+    tid = GetWindowThreadProcessId(g_app.hMain, NULL);
+    if (GetCurrentThreadId() != tid) {
+        OS_LogMsg* m = (OS_LogMsg*)malloc(sizeof(OS_LogMsg));
+        if (!m) return;
+        m->level = level;
+        _snwprintf(m->text, 1024, L"%s", line ? line : L"");
+        if (!PostMessageW(g_app.hMain, WM_OS_LOG, (WPARAM)m, 0)) { free(m); return; }
+        return;
+    }
+    log_insert_now(level, line);
 }
 
 void os_fw_log(int level, const char* fmt, ...)
@@ -465,7 +487,6 @@ static void layout(void)
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
-            { IDC_BTN_PIN, 0, 0 },
             { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 }, { IDC_CFG_SPEED, 92, 1 },
             { IDC_CFG_EMU, 240, 1 }, { IDC_CFG_REFRESH, 48, 0 },
         };
@@ -608,11 +629,9 @@ static LRESULT CALLBACK splith_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
 
 static int g_tree_in_ms; /* 光标最后在树区的时间戳 */
 
-static void update_pin_button(void)
+static void refresh_tree_pin(void)
 {
-    HWND b = GetDlgItem(g_app.hMain, IDC_BTN_PIN);
-    if (b) SetWindowTextW(b, g_app.tree_auto ? L"钉住" : L"自动隐藏");
-    /* N12: 变量栏钉图标颜色随状态刷新 */
+    /* Bug8: 自动隐藏/钉住唯一入口是左侧变量树 OSTreePin 钉图标，刷新其颜色（金=钉住/灰=自动隐藏） */
     if (g_app.hTreePin && IsWindow(g_app.hTreePin)) InvalidateRect(g_app.hTreePin, NULL, TRUE);
 }
 
@@ -730,9 +749,9 @@ static LRESULT CALLBACK tree_pin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
     case WM_ERASEBKGND:
         return 1;
     case WM_LBUTTONDOWN:
-        /* 与工具栏“钉住变量栏”同源：切换自动隐藏/钉住 */
+        /* Bug8: 树钉图标是自动隐藏/钉住唯一入口：切换状态并刷新图标颜色 */
         g_app.tree_auto = g_app.tree_auto ? 0 : 1;
-        update_pin_button();
+        refresh_tree_pin();
         layout();
         os_log(OS_LOG_INFO, "变量栏%s", g_app.tree_auto ? "改为自动隐藏（未钉住）" : "已钉住常显");
         return 0;
@@ -867,7 +886,7 @@ static void cmd_connect(void)
     }
     emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
-    /* MCU 型号：从界面下拉读取（预置列表，默认 Cortex-M4；空设备会令旧版 DLL 崩溃） */
+    /* 芯片核心：从界面下拉读取（F17 核心名列表，默认 Cortex-M4；纯内存读写无需具体型号） */
     dci = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
     if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
         char dev8[128];
@@ -1005,6 +1024,13 @@ static void cmd_log_start(void)
 {
     OPENFILENAMEW ofn;
     wchar_t file[MAX_PATH] = L"data.csv";
+    int was_running = 0;
+    /* Bug7: 采集运行中弹文件对话框会与采集线程跨线程日志/模态循环互卡导致界面卡死。
+     * 与 cmd_replay_open 一致：先停采集，对话框关闭后再恢复。 */
+    if (g_app.acq_state == OS_ACQ_RUNNING) {
+        os_ds_stop();
+        was_running = 1;
+    }
     memset(&ofn, 0, sizeof(ofn));
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = g_app.hMain;
@@ -1017,6 +1043,7 @@ static void cmd_log_start(void)
         if (os_datalog_start(file) != 0)
             MessageBoxW(g_app.hMain, L"无法创建记录文件", L"记录", MB_OK | MB_ICONERROR);
     }
+    if (was_running) os_ds_start(); /* 对话框关闭后恢复采集 */
     os_mainwin_update_buttons();
 }
 
@@ -1981,7 +2008,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         SetTimer(hwnd, 1, 2000, NULL);
         SetTimer(hwnd, 3, 200, NULL); /* N9(d): 变量栏自动隐藏轮询 */
         g_app.tree_auto = 0;          /* 默认钉住常显（不影响既有操作） */
-        update_pin_button();
+        refresh_tree_pin();
         os_log_set(os_mainwin_append_log);
         os_log(OS_LOG_INFO, "OpenScope 已启动");
         refresh_status();
@@ -2038,6 +2065,12 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_ds_drain();
         refresh_status();
         return 0;
+    case WM_OS_LOG: {
+        /* Bug7: 非主线程日志在此插入 ListView（主线程上下文） */
+        OS_LogMsg* m = (OS_LogMsg*)wParam;
+        if (m) { log_insert_now(m->level, m->text); free(m); }
+        return 0;
+    }
     case WM_OS_ACQ_STATE:
         refresh_status();
         os_mainwin_update_buttons();
@@ -2131,7 +2164,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_OS_TREE_AUTOHIDE:
         /* N9(d) 测试钩子：wParam=1 开启自动隐藏，0=钉住 */
         g_app.tree_auto = wParam ? 1 : 0;
-        update_pin_button();
+        refresh_tree_pin();
         layout();
         return 0;
     case WM_NOTIFY: {
@@ -2195,7 +2228,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.8.1\n\n"
+                        L"OpenScope v1.8.2\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"

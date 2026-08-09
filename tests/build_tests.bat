@@ -86,10 +86,39 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\bug9_smoke.c ^
+    /Fe:tests\bin\bug9_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] bug9_smoke build failed
+  exit /b 1
+)
+
 echo Running scope smoke...
 tests\bin\scope_smoke.exe
 if errorlevel 1 (
   echo [ERROR] scope_smoke FAILED
+  exit /b 1
+)
+
+echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
+tests\bin\bug9_smoke.exe Cortex-M4 50
+if errorlevel 1 (
+  echo [ERROR] bug9_smoke FAILED speed 50
+  exit /b 1
+)
+tests\bin\bug9_smoke.exe Cortex-M4 400
+if errorlevel 1 (
+  echo [ERROR] bug9_smoke FAILED speed 400
+  exit /b 1
+)
+tests\bin\bug9_smoke.exe Cortex-M4 4000
+if errorlevel 1 (
+  echo [ERROR] bug9_smoke FAILED speed 4000
+  exit /b 1
+)
+tests\bin\bug9_smoke.exe Cortex-M4 12000
+if errorlevel 1 (
+  echo [ERROR] bug9_smoke FAILED speed 12000
   exit /b 1
 )
 

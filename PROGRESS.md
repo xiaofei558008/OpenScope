@@ -122,6 +122,14 @@
   - 该需求为 process/notification 型，无 OpenScope.exe 应用代码改动；语音播报作为全自动循环末尾收尾步骤，提示用户检查。
   - 需求 9：checkpoint-20 提交 git + `git tag v1.8.1` + 推送 `gitee_origin` 与 `github_origin` 双远端。
   - 版本 1.8.1：重新打包 `dist/OpenScope-Setup-1.8.1.exe`（10.4MB），安装版验证版本 1.8.1.0；构建 0 error/0 warning。
+- **checkpoint-21（2026-08-09）**：修复 request.md Bug 7/8/9 + 需求 17（F17 跳过选芯片只选核心）（1.8.2）。
+  - Bug7 采集时点击"记录"界面卡死：根因是 (1) cmd_log_start 采集运行中直接弹 GetSaveFileNameW 模态对话框，未像 cmd_replay_open 先停采集，与采集线程跨线程日志互卡；(2) 采集线程 os_log 跨线程直接 ListView_InsertItem（SendMessage）在模态循环内死锁。修复：cmd_log_start 先 os_ds_stop 停采集、对话框关闭后 os_ds_start 恢复采集；新增 `WM_OS_LOG` 消息（app.h），非主线程日志 PostMessage 到主线程再插入日志 ListView（线程安全）。
+  - Bug8 自动隐藏归位到左侧变量树：删除工具栏"钉住变量栏"按钮（IDC_BTN_PIN=2015）及其 layout 项，唯一入口为左侧树顶部钉图标 OSTreePin（金=钉住常显/灰=自动隐藏）。
+  - Bug9 非4000速度读值全为0：根因是 JLINKARM_ReadMem 失败返回正值(rc=1)而非负数，mod_read 用 `r>=0` 把失败当成功，零缓冲被推为有效样本。修复：成功严格判定 `r==0`；掉线（IsConnected=0）自动重连一次（500ms 节流 last_reconnect_ms）；mod_write 契约改为 `r==0`；设备列表改通用核心名（Cortex-M4/M0+...）消除连接挂起。
+  - F17 跳过选芯片环节：纯 SWD/JTAG 内存/Flash 读取只需核心名（CoreSight AHB-AP 架构一致），无需具体芯片型号；连接配置设备下拉改为 10 项通用核心名，默认 Cortex-M4。
+  - 回归：新增 `tests/bug9_smoke.c`（J-Link 读一致性：每速度至少 1 次成功 + 所有 rc==size 读值一致，直接捕获 r>=0 屏蔽零值 bug；50/400/4000/12000 kHz 四速度 ALL PASS，接入 build_tests.bat 每次构建自动回归）+ `tests/ui_record_dialog_drive.ps1`（Bug7：采集运行中点击记录→保存对话框→取消→进程存活/采集自动恢复/主线程响应）+ `tests/ui_features_drive.ps1` 加 Bug8 断言（工具栏无 2015 按钮）；新增 `tests/run_regression.sh` 全量 UI 回归脚本。
+  - 版本 1.8.2：全量 UI 回归 dev + 安装版 ALL PASS（含 bug9_smoke 4 速度 + Bug7/Bug8 新用例）；重新打包 `dist/OpenScope-Setup-1.8.2.exe`（10.4MB），安装版验证版本 1.8.2.0；构建 0 error/0 warning。
+  - 需求 9：checkpoint-21 提交 git + `git tag v1.8.2` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -172,6 +180,7 @@
 
 - [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
+- [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
 ## Bug（request.md，已修复）
 
@@ -180,6 +189,9 @@
 - [x] Bug3 单窗口全屏/退出全屏（checkpoint-17）
 - [x] Bug4 左侧变量栏自动隐藏/钉住 + Ctrl 多选批量添加到窗口（checkpoint-17 / checkpoint-19）
 - [x] Bug5 去掉波形内部标题"波形窗口1" + 放大采样点圆点录制变长后消失（checkpoint-19）
+- [x] Bug7 采集时点击录制数据界面卡死在选择录制文件路径上（checkpoint-21）
+- [x] Bug8 自动隐藏应归位到左侧 elf 变量树而非菜单栏固定按键（checkpoint-21）
+- [x] Bug9 除4000外速度连接采集到的变量值全为0（checkpoint-21）
 
 ## 总结
 
