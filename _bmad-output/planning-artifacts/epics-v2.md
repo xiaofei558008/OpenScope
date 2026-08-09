@@ -1,7 +1,7 @@
-# OpenScope Epics & Stories（v4：request.md 更新版全覆盖）
+# OpenScope Epics & Stories（v5：request.md 更新版全覆盖）
 
-> BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~3、需求 9）。
-> 生成日期：2026-08-09。关联 checkpoint-18 基线（v1.7.0，特性 13 + 需求9 已完成）。本轮 Epic 8：F14 消息栏拉伸 / F16 右键新建窗口 / Bug4 树 Ctrl 多选批量添加 / Bug5 去波形标题+圆点消失修复。**checkpoint-19（v1.8.0）已完成：Story 8.2~8.5 全部 DONE，全量回归 dev+installed ALL PASS，tag v1.8.0 双远端已推送。**
+> BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~3、需求 9/10）。
+> 生成日期：2026-08-09。关联 checkpoint-19 基线（v1.8.0，特性 14/16 + Bug4补/Bug5补 已完成）。本轮 Epic 9：需求 10 自动完成语音通知（process/notification，无应用代码改动）。**checkpoint-20（v1.8.1）已完成：Story 9.1 DONE，`tools/notify_done.ps1` 语音脚本验证播报成功，全自动循环末尾已播报"任务执行完毕"，tag v1.8.1 双远端已推送。**
 
 ## Requirements Inventory（request.md 全量）
 
@@ -28,6 +28,7 @@
 | F16 | tab 和右侧空白处右键支持新建 tab（波形/数值/示波器窗口） | ✅ checkpoint-19 DONE | mainwin.c |
 | B4(补) | 左侧 elf 变量列表：Ctrl 连续选择多变量 + 右键批量添加到窗口（波形/数值/示波器） | ✅ checkpoint-19 DONE | mainwin.c tree |
 | B5(补) | 波形窗口内部文字“波形窗口1”去掉；采样点圆点随录制时间增长全部消失需修复 | ✅ checkpoint-19 DONE | chartwin.c |
+| R10 | 每次 BMAD 执行完全部任务，用 Windows 发出语音"任务执行完毕"提示用户检查 | ✅ checkpoint-20 DONE | tools/notify_done.ps1 |
 
 ## Epic 5：窗口管理完善（N3 就地重命名 + N6 删关于 + Bug3 全屏）
 
@@ -109,11 +110,20 @@
 - 文件：chartwin.c（chart_draw 删除标题 DrawText；chart_draw_series 圆点判定改用可见点数）。
 - 测试：ui_chart_n13_drive.ps1 扩展（长时间回放放大后圆点仍显示日志/不闪退）。
 
+## Epic 9：自动完成语音通知（需求 10，checkpoint-20）
+
+### Story 9.1 — 每次全自动开发循环结束播报"任务执行完毕"（R10） ✅ checkpoint-20 DONE
+- AC：BMAD 完成全部任务（回归全 PASS + 打包安装 + checkpoint 提交/tag/双远端推送）后，用 Windows TTS 语音播报"任务执行完毕"，提示用户检查；播报脚本可复用、可参数化（文本/语速/音量），在无 .NET System.Speech 环境下回退 SAPI `SpVoice`。
+- 文件：tools/notify_done.ps1（新脚本；非应用代码，不打包进 OpenScope.exe）。
+- 验证：本机语音引擎可用（System.Speech + SAPI 均 OK，含中文 Huihui）；脚本退出码 0；循环末尾实际播报。
+- 说明：需求 10 为 process/notification 型，无 C 应用代码改动；版本 1.8.0→1.8.1 保持 checkpoint↔版本↔tag 三一致，重新打包安装验证版本 1.8.1.0。
+
 ## Sprint 计划
 
 - Sprint-7：Story 7.1 → 7.2/7.3 → 7.4（N13a→N13b/c/d→N13e/f/g）
 - Sprint-8：全量回归（dev+installed）→ 版本 1.7.0 打包安装 → checkpoint-18 提交 + tag v1.7.0 + 推送双远端
 - Sprint-9：Story 8.2 → 8.3 → 8.4 → 8.5（F14 → F16 → Bug4补 → Bug5补）→ 全量回归（dev+installed）→ 版本 1.8.0 打包安装 → checkpoint-19 提交 + tag v1.8.0 + 推送双远端 ✅ checkpoint-19 DONE（14 项回归 dev+installed 全部 ALL PASS；tag v1.8.0 已推送 gitee_origin + github_origin）
+- Sprint-10：Story 9.1（需求 10 语音通知）→ 版本 1.8.0→1.8.1 打包安装 → checkpoint-20 提交 + tag v1.8.1 + 推送双远端 → 末尾 Windows 播报"任务执行完毕" ✅ checkpoint-20 DONE（tools/notify_done.ps1 验证播报成功；安装版 1.8.1.0；tag v1.8.1 已推送 gitee_origin + github_origin；末尾已播报"任务执行完毕"）
 
 ## 验收风险
 

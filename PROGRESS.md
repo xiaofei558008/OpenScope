@@ -117,6 +117,11 @@
   - 测试：新增 `tests/ui_logsplit_drive.ps1`（F14：拖 170→100→220 消息栏高度跟随 + 不闪退）、`tests/ui_rightmenu_drive.ps1`（F16：右侧/tab 空白右键弹出 #32768 菜单 + WM_CANCELMODE 关闭 + 不闪退）、`tests/ui_tree_multisel_drive.ps1`（Bug4：`WM_OS_TREE_TEST_SELECT` 进程内选择测试钩子选 3/2/4 个叶批量添加到波形/数值/示波器 + 逐变量日志核对）、`tests/ui_chart_bug5_drive.ps1`（Bug5：`chart_replay_long.csv` 2000 采样点长回放 + 滚轮放大 15 次 → `波形采样点圆点: 可见 N 点` + 不闪退）；连同既有 ui_rename/ui_windows/ui_chartview/ui_layout/ui_n9_watch/ui_bug2_restore/ui_features/ui_pick_multi/ui_chart_n13/ui_connect 全套回归 dev+installed 全部 ALL PASS；构建 0 error/0 warning。
   - 版本 1.8.0：重新打包 `dist/OpenScope-Setup-1.8.0.exe`（10.4MB），安装版验证版本 1.8.0.0。
   - 需求 9：checkpoint-19 提交 git + `git tag v1.8.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+- **checkpoint-20（2026-08-09）**：完成 request.md 需求 10（BMAD 全自动循环结束 Windows 语音播报"任务执行完毕"）（1.8.1）。
+  - R10 自动完成语音通知：新增 `tools/notify_done.ps1`（可复用、参数化 Text/Rate/Volume），优先 System.Speech（.NET，自动选择中文语音 Microsoft Huihui Desktop），失败回退 SAPI COM `SAPI.SpVoice`；本机验证语音引擎可用（System.Speech + SAPI 均 OK，含 zh-CN 语音），脚本播报退出码 0。
+  - 该需求为 process/notification 型，无 OpenScope.exe 应用代码改动；语音播报作为全自动循环末尾收尾步骤，提示用户检查。
+  - 需求 9：checkpoint-20 提交 git + `git tag v1.8.1` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+  - 版本 1.8.1：重新打包 `dist/OpenScope-Setup-1.8.1.exe`（10.4MB），安装版验证版本 1.8.1.0；构建 0 error/0 warning。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -165,7 +170,8 @@
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送）
+- [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 
 ## Bug（request.md，已修复）
 
