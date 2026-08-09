@@ -23,6 +23,7 @@ typedef struct JLinkCtx {
     CRITICAL_SECTION cs;      /* 串行化读写（AD-11） */
     OS_ConnectCfg cfg;        /* 配置对话框保存的连接参数 */
     int connected;
+    int dll_used;             /* Bug16: 是否已使用过 DLL（首连后置1，后续连接先整库重载防脏会话） */
     ULONGLONG last_reconnect_ms; /* 自动重连节流时间戳 */
     ULONGLONG last_reconnect_log_ms; /* 重连成功日志节流时间戳（Bug10: 5s 一次） */
     char dll_dir[MAX_PATH];
@@ -111,6 +112,33 @@ void os_jlink_unbind(OS_JLinkApi* api)
     }
 }
 
+/* Bug16：高速（12000kHz）采集中掉线/断开后，JLink_x64.dll 的会话内部状态可能损坏，
+ * 表现为后续 JLINKARM_Open 返回垃圾值（用户实测 rc=-488389840，本机实测 rc=-637353168）。
+ * 这种损坏无法靠重试 open 恢复，唯一可靠复位是整库重载：FreeLibrary + LoadLibrary + 重绑符号。 */
+static int jlink_reload(void)
+{
+    char err[256];
+    int rc;
+    /* 用 TryEnter 而非 Enter：若采集线程卡死在 JLINKARM_ReadMem 内（DLL 内部挂起），
+     * 锁被占住——此时绝不能 FreeLibrary 一个仍有活动调用的 DLL（进程会崩），
+     * 干净地失败即可；等卡死的读返回后，下一次连接重载自然成功。 */
+    if (!TryEnterCriticalSection(&g_ctx.cs)) {
+        if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 连接: J-Link 读取疑似卡死，跳过 DLL 重载");
+        return OS_ERR_FAIL;
+    }
+    g_ctx.connected = 0;
+    os_jlink_unbind(&g_ctx.api);
+    rc = os_jlink_bind(&g_ctx.api, err, sizeof(err));
+    LeaveCriticalSection(&g_ctx.cs);
+    if (rc != OS_ERR_OK) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接: 重载 JLink_x64.dll 失败: %s", err);
+        return OS_ERR_FAIL;
+    }
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: JLink_x64.dll 已重载（DLL v%u）",
+                        (unsigned)g_ctx.api.get_dll_version());
+    return OS_ERR_OK;
+}
+
 /* ---------------- 连接/读写实现 ---------------- */
 
 static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
@@ -133,12 +161,38 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接: JLink_x64.dll 未加载");
         return OS_ERR_FAIL;
     }
+    /* Bug16：高速（12000kHz）掉线/采集中断开后，DLL 会话状态可能损坏——open 返回垃圾值
+     * （用户 -488389840、本机 -637353168）甚至挂起。首连用初始绑定；此后每次连接都先整库
+     * 重载（FreeLibrary+LoadLibrary+重绑），保证 open 永远从全新会话开始，杜绝脏会话复用。 */
+    if (g_ctx.dll_used) {
+        if (jlink_reload() != OS_ERR_OK) {
+            if (errbuf) _snprintf(errbuf, errlen, "JLink_x64.dll 重载失败");
+            return OS_ERR_FAIL;
+        }
+        a = &g_ctx.api;
+    }
+    g_ctx.dll_used = 1;
     rc = a->open(NULL);
     if (rc != 0) {
-        if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Open 失败 (rc=%d)", rc);
-        if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接: JLINKARM_Open 失败 rc=%d", rc);
-        return OS_ERR_FAIL;
+        /* 兜底：首连失败或重载后仍失败（硬件/USB 级问题），再重载重试一次 */
+        if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 连接: JLINKARM_Open 失败 rc=%d，重载 JLink DLL 后重试", rc);
+        if (jlink_reload() == OS_ERR_OK) {
+            a = &g_ctx.api; /* 重载后符号指针已重绑 */
+            rc = a->open(NULL);
+            if (rc != 0 && g_fw)
+                g_fw->log(OS_LOG_ERROR, "J-Link 连接: 重载 DLL 后 JLINKARM_Open 仍失败 rc=%d", rc);
+        }
+        if (rc != 0) {
+            if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Open 失败 (rc=%d)", rc);
+            if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接: JLINKARM_Open 失败 rc=%d", rc);
+            return OS_ERR_FAIL;
+        }
     }
+    /* 需求21：open 成功后抑制 DLL 的信息弹窗（如固件更新提示等），并重设设备名兜底 */
+    _snprintf(cmd, sizeof(cmd), "SuppressInfoDialogs = 1");
+    memset(res, 0, sizeof(res));
+    rc = a->exec_cmd(cmd, res, sizeof(res));
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: '%s' rc=%d", cmd, rc);
     if (cfg->serial[0]) {
         unsigned long sn = strtoul(cfg->serial, NULL, 10);
         if (a->emu_select_by_usbsn) {
@@ -157,12 +211,10 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: TIF_Select(%s) rc=%d",
                             cfg->iface == OS_IF_JTAG ? "JTAG" : "SWD", rc);
     }
-    if (cfg->device[0]) {
-        _snprintf(cmd, sizeof(cmd), "Device = %s", cfg->device);
-        memset(res, 0, sizeof(res));
-        rc = a->exec_cmd(cmd, res, sizeof(res));
-        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: '%s' rc=%d -> %s", cmd, rc, res[0] ? res : "(空)");
-    }
+    _snprintf(cmd, sizeof(cmd), "Device = %s", cfg->device[0] ? cfg->device : "Cortex-M4");
+    memset(res, 0, sizeof(res));
+    rc = a->exec_cmd(cmd, res, sizeof(res));
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: '%s' rc=%d -> %s", cmd, rc, res[0] ? res : "(空)");
     /* 时钟速度 */
     if (cfg->speed_khz > 0) {
         rc = a->set_speed(cfg->speed_khz);
@@ -186,7 +238,7 @@ static void jlink_refresh_info(void)
     OS_DriverInfo* d = &g_ctx.info;
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
-    _snprintf(d->version, sizeof(d->version), "%s", "1.11.0");
+    _snprintf(d->version, sizeof(d->version), "%s", "1.12.0");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
@@ -269,7 +321,16 @@ static int mod_connect_ex(char* err, int errlen)
 static int mod_disconnect(void)
 {
     OS_JLinkApi* a = &g_ctx.api;
-    if (a->h && g_ctx.connected) a->close();
+    if (a->h && g_ctx.connected) {
+        /* Bug16：close 与 in-flight 读互斥——采集中点击断开时，采集线程可能正卡在
+         * JLINKARM_ReadMem 内；并发 close 会损坏 DLL 会话（Open 返回垃圾值/内部 AV）。
+         * 用 TryEnter 不阻塞 UI：若读正在执行（锁被占）则跳过 close，交给下一次连接前的
+         * 整库重载清理（jlink_reload 持锁等读返回后才 FreeLibrary，同样安全）。 */
+        if (TryEnterCriticalSection(&g_ctx.cs)) {
+            if (a->h && g_ctx.connected) a->close();
+            LeaveCriticalSection(&g_ctx.cs);
+        }
+    }
     g_ctx.connected = 0;
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已断开");
@@ -304,11 +365,21 @@ static int mod_read(OS_MemReq* req)
                 g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
             }
             mod_disconnect();
-            if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
-                g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
-                retried = 1;
-                continue;
+            /* Bug16：高速掉线后 DLL/USB 会话短暂损坏，open 可能返回垃圾值（-488389840）；
+             * 重载已给全新会话，但 USB 层恢复仍需时间——重试数次（间隔 1.5s），
+             * 任一成功即恢复采集，不轻易让采集线程退出。 */
+            {
+                int attempt;
+                for (attempt = 0; attempt < 3; attempt++) {
+                    if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
+                        g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
+                        retried = 1;
+                        break;
+                    }
+                    if (attempt < 2) Sleep(1500);
+                }
             }
+            if (retried) continue;
         }
         break;
     }
@@ -400,7 +471,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "jlink",
-    "1.11.0",
+    "1.12.0",
     "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
     NULL,
     mod_init,

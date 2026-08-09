@@ -36,7 +36,7 @@ python publish.py --dry-run  # 预演，不实际上传
 1. 开发 → 构建：`python build.py --quiet`（0 error / 0 warning）
 2. 修改 `code/src/version.rc` 版本号（唯一版本来源），同步 `packaging/openscope.iss`
 3. 回归测试 + 打包：`python packaging\make_setup.py --publish`（自动发布）
-4. 提交 git + 打 tag + 推送双远端（gitee/github）：`git tag v1.11.0`，见 PROGRESS.md 惯例
+4. 提交 git + 打 tag + 推送双远端（gitee/github）：`git tag v1.12.0`，见 PROGRESS.md 惯例
 
 ## 五、服务器端结构
 
@@ -44,11 +44,11 @@ python publish.py --dry-run  # 预演，不实际上传
 /var/www/downloads/
 ├── index.html            # 自动生成的下载页（publish.py 每次覆盖）
 └── openscope/
-    └── OpenScope-Setup-1.11.0.exe   # 各版本安装包
+    └── OpenScope-Setup-1.12.0.exe   # 各版本安装包
 ```
 
 nginx：`location ^~ /downloads/` → alias `/var/www/downloads/`，.exe 返回
-`Content-Disposition: attachment; filename="OpenScope-Setup-1.11.0.exe"`（**必须带 filename=**，
+`Content-Disposition: attachment; filename="OpenScope-Setup-1.12.0.exe"`（**必须带 filename=**，
 否则部分浏览器会把下载文件保存为链接文字"下载"）+ `application/x-msdownload`，支持断点续传（Accept-Ranges）。
 > 注意：嵌套 location 的匹配正则要能覆盖子目录（`/downloads/openscope/...`），用
 > `([^/]+\.(exe|zip|...))$` 捕获文件名即可。
@@ -58,4 +58,4 @@ nginx：`location ^~ /downloads/` → alias `/var/www/downloads/`，.exe 返回
 `publish.py` 每次运行结束自动：
 - 校验下载页 `HTTP 200`
 - 校验最新安装包 `HTTP 200` 且字节数与本地一致
-- 可手工核验 SHA256：下载页每行展示，或本地 `python -c "import hashlib;print(hashlib.sha256(open(r'dist\OpenScope-Setup-1.11.0.exe','rb').read()).hexdigest())"`
+- 可手工核验 SHA256：下载页每行展示，或本地 `python -c "import hashlib;print(hashlib.sha256(open(r'dist\OpenScope-Setup-1.12.0.exe','rb').read()).hexdigest())"`

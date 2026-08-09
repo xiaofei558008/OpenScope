@@ -174,6 +174,20 @@
   - 版本 1.11.0：`python build.py --quiet` 干净构建，重新打包 `dist/OpenScope-Setup-1.11.0.exe`（10.4MB），静默安装验证版本 1.11.0.0；发布 `https://www.opendebugger.com/downloads/`（下载页 + v1.11.0 安装包 HTTP 200 + 字节一致 10367047）。
   - 需求 9：checkpoint-25 提交 git + `git tag v1.11.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
+- **checkpoint-26（2026-08-09）**：修复 Bug16（12000kHz 掉线重连 `JLINKARM_Open` 返回垃圾值）+ 新增特性 21（不再触发 "Target device setting" 弹窗），v1.12.0。
+  - Bug16 复现：用户报 12000kHz 采集掉线自动重连时 `JLINKARM_Open 失败 rc=-488389840`（0x1D1C3CD0，两次同值）→ 采集线程退出。本机 12000kHz 采集中断开/重连压测复现同类故障：open 返回垃圾 `rc=-637353168`，甚至 open 挂起数分钟后 JLink DLL 内部 AV（0xC0000005 @ JLink_x64.dll）。
+  - 根因：高速（12000kHz）采集中掉线/断开后，JLink_x64.dll 的会话内部状态损坏（USB 层瞬时故障、close 与 in-flight 读并发），后续 `JLINKARM_Open` 返回垃圾值/挂起，重试 open 无法恢复。
+  - 修复（module/jlink/jlink.c）：
+    - 连接前整库重载：`JLinkCtx` 增 `dll_used`，首连用初始绑定，此后每次连接先 `jlink_reload()`（FreeLibrary+LoadLibrary+重绑）保证 open 从全新会话开始，杜绝脏会话复用；
+    - open 失败兜底：再重载重试一次，仍失败才判连接失败（错误码不再可能是垃圾值）；
+    - 重连重试：`mod_read` 自动重连改重试 3 次（间隔 1.5s），USB 层恢复后采集自动恢复，不轻易让采集线程退出；
+    - close 与读互斥：`mod_disconnect` 的 close 用 `TryEnterCriticalSection`——读在途则跳过 close 交给下次连接前重载清理，避免 UI 阻塞与并发 close/read 损坏 DLL；`jlink_reload` 同样 TryEnter，读卡死时跳过重载、干净失败（绝不 FreeLibrary 一个有活动调用的 DLL）；
+    - 压测验证：10 轮采集中断开/重连 @12000，0 崩溃、19 次成功重连，open 垃圾值经重载+重试全部恢复。
+  - 新增特性 21（不再弹 "Target device setting" 芯片型号框）：曾用 open 前 `ExecCommand("Device = Cortex-M4")` 实现（open 阶段 DLL 已识别设备不再询问），但 **A/B 实测确认该 open 前 Device 是 4000kHz 块读 ret=-5 的元凶**：测试目标 STM32L031 是 Cortex-M0+，open 前按 M4 初始化 SWD → 块读超时（采集速率从 8118 崩到 195 样本/s，连 bug9 smoke 低速 50kHz 也 succ=0）。**最终方案**：`JLINKARM_Open(NULL)` 让 DLL 自动探测核心（可识别目标不弹框）→ open 后无条件 `Device = <核心名，默认 Cortex-M4>` 兜底 + `ExecCommand("SuppressInfoDialogs = 1")` 抑制信息弹窗；`check_target_dialog.ps1` 实测首连与重连（重载 DLL）均无 "Target device setting" 弹窗，4000kHz 采集速率恢复 8118 样本/s。纯内存读写只需核心名，无需具体芯片型号。
+  - 回归：dev+安装版全量回归（--jlink）ALL PASS。
+  - 版本 1.12.0：`python build.py --quiet` 干净构建，打包 `dist/OpenScope-Setup-1.12.0.exe` 并发布 `https://www.opendebugger.com/downloads/`。
+  - 需求 9：checkpoint-26 提交 git + `git tag v1.12.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
   - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
@@ -222,10 +236,11 @@
 - [x] 19 数值窗口右键添加变量：模糊搜索列表 ctrl+a 全选 / ctrl 单击多选 / shift 起止范围多选，批量添加（checkpoint-23）
 - [x] 20 界面主题设置：白色（默认）/黑色（配色参考黑色 IAR / Notepad++）（checkpoint-24，F20）
 - [x] 21 高速采样：自由运行（周期=实际块读耗时）+ 连续地址块读 + UI 刷新节流，采样率 ~50/s → 数千~万/s（checkpoint-25，F21；第二步"目标端 µs 缓冲"待后续版本）
+- [x] 21 避免弹窗设置芯片型号，不触发 "Target device setting" 弹窗：open 前设 Device 会破坏 4000kHz 块读（ret=-5，核心名不匹配时），改为 open 自动探测 + open 后无条件 `Device = 核心名，默认 Cortex-M4` + `SuppressInfoDialogs = 1`；实测首连/重连均无弹窗（checkpoint-26）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
@@ -241,6 +256,7 @@
 - [x] Bug9 除4000外速度连接采集到的变量值全为0（checkpoint-21）
 - [x] Bug10 用12000的速度采集数据，一开始就会失败；采集线程退出，读取xxx变量失败（checkpoint-22）
 - [x] Bug14 软件弹窗选择芯片并闪退——删除死代码芯片配置弹窗（checkpoint-24）
+- [x] Bug16 12000kHz 掉线自动重连时 `JLINKARM_Open` 返回垃圾值（rc=-488389840）导致采集停止——连接前整库重载 DLL + open 失败重载重试 + 自动重连重试 3 次 + close 与读互斥（checkpoint-26）
 
 ## 总结
 
