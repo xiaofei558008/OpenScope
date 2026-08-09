@@ -13,23 +13,124 @@
  * 真死连接（重连失败 connected=0）仍由 IS_CONNECTED 即时捕获。 */
 #define OS_POLL_STALL_MS 3000
 
+/* F21/Step1 高速采集：自由运行 + 连续地址块读 + UI 刷新节流。
+ *  - OS_BATCH_MAX_GAP:  叶间间隔 ≤8 字节视为连续可合并（覆盖对齐填充），一次 J-Link 块读
+ *                       替代多次单叶读（每次读事务 ~50-200µs 开销是采样率的主要瓶颈）。
+ *  - OS_BATCH_MAX_RUN:  单块读上限字节（J-Link 安全块长，避免跨无效地址区间整块失败）。
+ *  - OS_UI_THROTTLE_MS: 主窗口刷新节流（~60Hz）：环内样本全部保留，仅 UI 排空限速，
+ *                       避免高频下 WM_OS_SAMPLES 消息洪泛拖垮消息队列。 */
+#define OS_BATCH_MAX_GAP   8
+#define OS_BATCH_MAX_RUN   512
+#define OS_UI_THROTTLE_MS  16
+
+/* 观测叶按地址排序后的批次项（高速模式收集表） */
+typedef struct {
+    int      idx;    /* g_app.leaves 下标 */
+    uint64_t addr;
+    uint32_t size;   /* 实际读取字节（≤64，与单叶读一致） */
+} WatchLeaf;
+
+static LARGE_INTEGER g_qpc_freq;
+static int           g_qpc_ready;
+
+/* 周期计时用 QPC（µs 级、单调），避免 GetSystemTimeAsFileTime 的粗粒度墙钟误差 */
+static uint64_t qpc_now_us(void)
+{
+    LARGE_INTEGER c;
+    if (!g_qpc_ready) {
+        QueryPerformanceFrequency(&g_qpc_freq);
+        g_qpc_ready = 1;
+    }
+    QueryPerformanceCounter(&c);
+    {
+        uint64_t f = (uint64_t)g_qpc_freq.QuadPart;
+        uint64_t q = (uint64_t)c.QuadPart;
+        uint64_t sec = q / f;
+        uint64_t rem = q % f;
+        return sec * 1000000ULL + rem * 1000000ULL / f;
+    }
+}
+
+static int cmp_watch_leaf(const void* a, const void* b)
+{
+    const WatchLeaf* x = (const WatchLeaf*)a;
+    const WatchLeaf* y = (const WatchLeaf*)b;
+    if (x->addr < y->addr) return -1;
+    if (x->addr > y->addr) return 1;
+    return 0; /* 同址叶（位域/别名/联合成员）：共享字节一次读出 */
+}
+
+/* 一块连续内存一次读回，按叶偏移切分产出样本。
+ * Bug10: 块读瞬时失败（mod_read 自动重连可自愈）只节流记日志，不中断采集；
+ * 成功时更新 last_ok_ms 供停摆判定。 */
+static void read_run(WatchLeaf* wl, int first, int count, uint8_t* buf,
+                     OS_Sample* batch, int* n,
+                     int* fail_count, ULONGLONG* last_ok_ms)
+{
+    uint64_t run_addr = wl[first].addr;
+    uint32_t run_sz = 0;
+    OS_MemReq req;
+    int k, r;
+    for (k = first; k < first + count; k++) {
+        uint32_t end = (uint32_t)(wl[k].addr - run_addr + wl[k].size);
+        if (end > run_sz) run_sz = end;
+    }
+    memset(buf, 0, run_sz);
+    req.address = run_addr;
+    req.size = run_sz;
+    req.data = buf;
+    r = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &req, NULL);
+    if (r != (int)run_sz) {
+        if ((*fail_count)++ < 3)
+            os_log(OS_LOG_ERROR, "块读 @0x%llX 失败 (ret=%d, %d 变量)",
+                   (unsigned long long)run_addr, r, count);
+        return;
+    }
+    *fail_count = 0;
+    *last_ok_ms = GetTickCount64();
+    for (k = first; k < first + count; k++) {
+        OS_Leaf* L = &g_app.leaves[wl[k].idx];
+        OS_Sample* s = &batch[(*n)++];
+        const uint8_t* rawp = buf + (wl[k].addr - run_addr);
+        uint32_t sz = wl[k].size;
+        memset(s, 0, sizeof(*s));
+        s->ts_us = os_time_us();
+        s->var_id = L->id;
+        s->address = L->address;
+        memcpy(s->raw, rawp, sz < 8 ? sz : 8);
+        s->size = sz;
+        os_format_raw(s->text, sizeof(s->text), rawp, sz, L->kind, L->is_signed, L->is_ptr,
+                      L->is_bitfield, L->bit_offset, L->bit_size, &s->value,
+                      L->enums, L->enum_count);
+    }
+}
+
 static DWORD WINAPI poll_thread(LPVOID p)
 {
-    /* Bug1: 480KB 栈数组会耗尽 1MB 线程栈导致无日志崩溃，改用堆 */
+    /* Bug1: 大数组用堆，避免耗尽 1MB 线程栈导致无日志崩溃 */
     OS_Sample* batch = (OS_Sample*)malloc(OS_MAX_LEAVES * sizeof(OS_Sample));
+    WatchLeaf* wl = (WatchLeaf*)malloc(OS_MAX_LEAVES * sizeof(WatchLeaf));
+    uint8_t* buf = (uint8_t*)malloc(OS_BATCH_MAX_RUN + 1);
     int fail_count = 0;          /* Bug10: 仅用于失败日志节流（前 3 次），不再用于中断 */
     ULONGLONG last_ok_ms = GetTickCount64(); /* 最近一次成功读取时间戳（停摆判定起点） */
+    ULONGLONG cycle_us = qpc_now_us();       /* 自计时：本周期起点 */
+    ULONGLONG rate_win_us = cycle_us;        /* 速率统计窗口起点（约每秒一条日志） */
+    LONGLONG  cycle_sum_us = 0;
+    int       cycle_cnt = 0;
+    LONG      rate_samples = 0;
     (void)p;
-    if (!batch) {
+    if (!batch || !wl || !buf) {
         os_log(OS_LOG_ERROR, "采集线程内存分配失败");
+        free(batch); free(wl); free(buf);
         g_app.stop_poll = 0;
         g_app.acq_state = OS_ACQ_STOPPED;
         if (g_app.hMain) PostMessage(g_app.hMain, WM_OS_ACQ_STATE, 0, 0);
         return 1;
     }
     while (!g_app.stop_poll) {
-        int n = 0, i;
+        int n = 0, i, nw = 0, run_first;
         int connected = 0;
+        uint64_t run_addr, run_end;
         if (g_app.driver && g_app.driver->command) {
             g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &connected);
         }
@@ -42,52 +143,78 @@ static DWORD WINAPI poll_thread(LPVOID p)
                    OS_POLL_STALL_MS / 1000);
             break;
         }
-        for (i = 0; i < g_app.leaf_count && n < OS_MAX_LEAVES; i++) {
+        /* 收集观测叶并按地址排序，把连续叶合并成块读（一次读事务） */
+        for (i = 0; i < g_app.leaf_count; i++) {
             OS_Leaf* L = &g_app.leaves[i];
-            uint8_t buf[64];
             uint32_t sz;
-            OS_MemReq req;
-            int r;
-            OS_Sample* s;
             if (!L->watched) continue;
             sz = L->size;
             if (sz > 64) sz = 64;
             if (sz < 1) sz = 1;
-            memset(buf, 0, sizeof(buf));
-            req.address = L->address;
-            req.size = sz;
-            req.data = buf;
-            r = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &req, NULL);
-            if (r != (int)sz) {
-                /* Bug10: 瞬时失败（mod_read 自动重连可自愈），只节流记日志，不中断采集 */
-                if (fail_count++ < 3)
-                    os_log(OS_LOG_ERROR, "读取 %s @0x%llX 失败 (ret=%d)",
-                           L->name, (unsigned long long)L->address, r);
-                continue;
+            wl[nw].idx = i;
+            wl[nw].addr = L->address;
+            wl[nw].size = sz;
+            nw++;
+        }
+        if (nw > 0) {
+            qsort(wl, nw, sizeof(WatchLeaf), cmp_watch_leaf);
+            run_first = 0;
+            run_addr = wl[0].addr;
+            run_end = run_addr + wl[0].size;
+            for (i = 1; i < nw; i++) {
+                uint64_t a = wl[i].addr;
+                uint64_t end = a + wl[i].size;
+                if (a > run_end + OS_BATCH_MAX_GAP ||
+                    end - run_addr > OS_BATCH_MAX_RUN) {
+                    read_run(wl, run_first, i - run_first, buf, batch, &n,
+                             &fail_count, &last_ok_ms);
+                    run_first = i;
+                    run_addr = a;
+                    run_end = end;
+                } else if (end > run_end) {
+                    run_end = end;
+                }
             }
-            fail_count = 0;
-            last_ok_ms = GetTickCount64();
-            s = &batch[n++];
-            memset(s, 0, sizeof(*s));
-            s->ts_us = os_time_us();
-            s->var_id = L->id;
-            s->address = L->address;
-            memcpy(s->raw, buf, sz < 8 ? sz : 8);
-            s->size = sz;
-            os_format_raw(s->text, sizeof(s->text), buf, sz, L->kind, L->is_signed, L->is_ptr,
-                          L->is_bitfield, L->bit_offset, L->bit_size, &s->value,
-                          L->enums, L->enum_count);
+            read_run(wl, run_first, nw - run_first, buf, batch, &n,
+                     &fail_count, &last_ok_ms);
         }
         if (n > 0) {
             os_ds_push_batch(batch, n);
         }
-        Sleep((DWORD)g_app.poll_interval_ms);
+        /* 自计时：poll_interval_ms>0 保持定时补睡，否则自由运行（周期=实际耗时） */
+        if (g_app.poll_interval_ms > 0) {
+            ULONGLONG now = qpc_now_us();
+            ULONGLONG want = (ULONGLONG)g_app.poll_interval_ms * 1000;
+            if (now - cycle_us < want)
+                Sleep((DWORD)((want - (now - cycle_us)) / 1000));
+        } else if (nw == 0) {
+            Sleep(20); /* 全部取消勾选时避免忙等空转 */
+        }
+        /* 速率统计（约每秒一条） */
+        {
+            ULONGLONG now = qpc_now_us();
+            cycle_sum_us += (LONGLONG)(now - cycle_us);
+            cycle_cnt++;
+            rate_samples += n;
+            if (now - rate_win_us >= 1000000ULL) {
+                os_log(OS_LOG_INFO, "采集速率: %ld 样本/s，周期 %.0f µs（%d 个变量）",
+                       rate_samples,
+                       cycle_cnt ? (double)cycle_sum_us / cycle_cnt : 0.0,
+                       g_app.watch_count);
+                rate_win_us = now;
+                cycle_sum_us = 0;
+                cycle_cnt = 0;
+                rate_samples = 0;
+            }
+            cycle_us = now;
+        }
     }
     /* Bug11: 正常停止（stop_poll 置位）为信息级；异常退出（断连/停摆）才是警告 */
     if (g_app.stop_poll)
         os_log(OS_LOG_INFO, "采集线程已退出");
     else
         os_log(OS_LOG_WARN, "采集线程已退出");
+    free(batch); free(wl); free(buf);
     g_app.stop_poll = 0;
     g_app.acq_state = OS_ACQ_STOPPED;
     if (g_app.hMain) PostMessage(g_app.hMain, WM_OS_ACQ_STATE, 0, 0);
@@ -113,8 +240,12 @@ int os_ds_start(void)
         os_log(OS_LOG_ERROR, "创建采集线程失败");
         return -1;
     }
-    os_log(OS_LOG_INFO, "采集已开始（周期 %d ms，%d 个变量）",
-           g_app.poll_interval_ms, g_app.watch_count);
+    if (g_app.poll_interval_ms > 0)
+        os_log(OS_LOG_INFO, "采集已开始（周期 %d ms，%d 个变量）",
+               g_app.poll_interval_ms, g_app.watch_count);
+    else
+        os_log(OS_LOG_INFO, "采集已开始（自由运行高速模式，%d 个变量）",
+               g_app.watch_count);
     return 0;
 }
 
@@ -128,12 +259,14 @@ void os_ds_stop(void)
         g_app.hPoll = NULL;
     }
     g_app.acq_state = OS_ACQ_STOPPED;
+    os_ds_drain(); /* F21/Step1: UI 节流后环内可能残留末批样本，停止时一次性排空 */
     os_log(OS_LOG_INFO, "采集已停止");
 }
 
 void os_ds_push_batch(OS_Sample* samples, int n)
 {
     int i;
+    static ULONGLONG s_last_ui_ms; /* F21/Step1: UI 排空节流（~60Hz），环内样本全收 */
     if (n <= 0 || !samples) return;
     EnterCriticalSection(&g_app.ring_cs);
     for (i = 0; i < n; i++) {
@@ -149,7 +282,13 @@ void os_ds_push_batch(OS_Sample* samples, int n)
     }
     InterlockedAdd(&g_app.total_samples, n);
     if (g_app.log_csv) os_datalog_append();
-    if (g_app.hMain) PostMessage(g_app.hMain, WM_OS_SAMPLES, (WPARAM)n, 0);
+    {
+        ULONGLONG now = GetTickCount64();
+        if (g_app.hMain && now - s_last_ui_ms >= OS_UI_THROTTLE_MS) {
+            s_last_ui_ms = now;
+            PostMessage(g_app.hMain, WM_OS_SAMPLES, (WPARAM)n, 0);
+        }
+    }
 }
 
 void os_ds_drain(void)

@@ -161,11 +161,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_app.hInst = hInstance;
     g_app.tree_w = 340;
     g_app.log_h = 170;
-    g_app.poll_interval_ms = 20;
+    g_app.poll_interval_ms = 0; /* F21/Step1: 0=自由运行高速采集；>0=定时周期（ms） */
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.10.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.11.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;

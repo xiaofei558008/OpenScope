@@ -162,6 +162,17 @@
   - 回归：新增 `tests/ui_theme_dark_drive.ps1`（暗色启动采样树/右栏/日志/状态栏均深色 + 菜单命令运行时切换回亮色 + layout.ini 持久化，PrintWindow+GetPixel 校验；PS1 需带 UTF-8 BOM，否则 PowerShell 5.1 按 GBK 误读中文注释解析失败）；加固 `ui_chart_bug5_drive.ps1` 日志断言（3s 重试，回归负载下日志落盘可能滞后）；纳入 run_regression.sh。全量回归 dev **17/17 ALL PASS**（16 既有 + 新主题脚本），构建 0 error/0 warning。
   - 版本 1.10.0：`python build.py --quiet` 干净构建，重新打包 `dist/OpenScope-Setup-1.10.0.exe`（10.4MB），静默安装验证版本 1.10.0.0；安装版全量回归 17/17 ALL PASS。
   - 需求 9：checkpoint-24 提交 git + `git tag v1.10.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+- **checkpoint-25（2026-08-09）**：新增特性 21（F21 高速采集——软件快速采样：自由运行 + 连续地址块读 + UI 节流），v1.11.0。
+  - F21/Step1 高速采集（µs 级采样的第一步；第二步"目标端 µs 缓冲"留待后续版本）：
+    - 自由运行：`poll_thread` 移除固定 `Sleep(20ms)`，改 QPC 自计时（`poll_interval_ms>0` 补睡保持定时，否则周期=实际块读耗时）；`main.c` 默认 `poll_interval_ms=0`；启动日志区分「周期 %d ms」/「自由运行高速模式」。
+    - 连续地址块读：观测叶按地址排序（qsort），间隔 ≤8 字节 / 单块 ≤512 字节合并为一次 `OS_CMD_READ_MEM` 块读，再按叶偏移切分产出样本（位域/同址别名共享字节）；消除每变量 ~50-200µs 的 J-Link 读事务开销。
+    - UI 刷新节流：`os_ds_push_batch` 的 `WM_OS_SAMPLES` 从"每批一条"改为 ~16ms（60Hz）节流，环内样本全收、UI 限速排空，避免高频消息洪泛；`os_ds_stop` 排空残留环样本。
+    - 速率日志：采集线程每秒输出「采集速率: N 样本/s，周期 X µs（N 变量）」便于观测。
+    - Bug10/11 保护不变：连接检查 + 3s 停摆判定 + 瞬时失败节流日志 + 重连节流。
+  - 实测（STM32L432KB，12000kHz SWD）：单变量 5449 样本/s（周期 184µs）；3 个连续变量（fsin+cnt+ang_rd_error_cnt）合并为一次 7 字节块读 → 12243 样本/s（周期 245µs）。旧 20ms 循环 ~50/s，提速 ~100-240×。
+  - 回归：新增 `tests/ui_speed_verify_drive.ps1`（3 连续变量布局，断言「自由运行高速模式」+ 速率 >2000 样本/s + Bug10 线程存活；默认 4000kHz 实测 ~8.1k/s；12000 高速连接有环境性失败风险由 ui_speed12000 单独覆盖），纳入 run_regression.sh JLINK 组。全量回归 dev+安装版 42 项 ALL PASS（chart_bug5 安装版一次负载下日志落盘偶发失败，单独重跑 PASS，为已知时序竞态）。
+  - 版本 1.11.0：`python build.py --quiet` 干净构建，重新打包 `dist/OpenScope-Setup-1.11.0.exe`（10.4MB），静默安装验证版本 1.11.0.0；发布 `https://www.opendebugger.com/downloads/`（下载页 + v1.11.0 安装包 HTTP 200 + 字节一致 10367047）。
+  - 需求 9：checkpoint-25 提交 git + `git tag v1.11.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -210,10 +221,11 @@
 - [x] 18 删除示波器功能模块（checkpoint-23）
 - [x] 19 数值窗口右键添加变量：模糊搜索列表 ctrl+a 全选 / ctrl 单击多选 / shift 起止范围多选，批量添加（checkpoint-23）
 - [x] 20 界面主题设置：白色（默认）/黑色（配色参考黑色 IAR / Notepad++）（checkpoint-24，F20）
+- [x] 21 高速采样：自由运行（周期=实际块读耗时）+ 连续地址块读 + UI 刷新节流，采样率 ~50/s → 数千~万/s（checkpoint-25，F21；第二步"目标端 µs 缓冲"待后续版本）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
