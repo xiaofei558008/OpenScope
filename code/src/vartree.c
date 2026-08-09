@@ -265,6 +265,38 @@ int os_vartree_set_watch(int id, int on)
     return 0;
 }
 
+static void set_check(HWND tree, HTREEITEM h, int checked); /* 定义在下方 fill_tree 区 */
+
+/* 递归查找 lParam=id+1 的树节点并设置勾选（配合 set_watch 联动左侧勾选框） */
+static int set_check_walk(HWND hTree, HTREEITEM node, int id, int on)
+{
+    HTREEITEM child;
+    TVITEMW item;
+    while (node) {
+        memset(&item, 0, sizeof(item));
+        item.mask = TVIF_PARAM;
+        item.hItem = node;
+        if (TreeView_GetItem(hTree, &item) && item.lParam == (LPARAM)(id + 1)) {
+            set_check(hTree, node, on);
+            return 1;
+        }
+        child = TreeView_GetChild(hTree, node);
+        if (child && set_check_walk(hTree, child, id, on)) return 1;
+        node = TreeView_GetNextSibling(hTree, node);
+    }
+    return 0;
+}
+
+/* 程序化设置某个叶变量在左侧树的勾选状态（lParam=id+1）。
+ * 供“添加变量到窗口”时联动勾选，避免整树重建丢失展开状态。 */
+void os_vartree_set_check_ui(HWND hTree, int id, int on)
+{
+    HTREEITEM root;
+    if (!hTree || !IsWindow(hTree) || id < 0) return;
+    root = TreeView_GetRoot(hTree);
+    if (root) set_check_walk(hTree, root, id, on);
+}
+
 /* ---------- TreeView 填充 ---------- */
 
 static void set_check(HWND tree, HTREEITEM h, int checked)

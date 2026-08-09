@@ -57,6 +57,7 @@ static const COLORREF g_pal[] = {
 #define MENU_CHART_FITALL    3006
 #define MENU_CHART_MULTIAXIS 3007
 #define MENU_CHART_ZOOMRESET 3008
+#define MENU_CHART_REMOVE    3009
 
 static OS_ChartWin* cw_from_hwnd(HWND hwnd)
 {
@@ -101,7 +102,28 @@ void os_chart_add_var(HWND hwnd, int leaf_id)
     cw->series[cw->series_count].leaf_id = leaf_id;
     cw->series[cw->series_count].color = g_pal[cw->series_count % 8];
     cw->series_count++;
-    os_log(OS_LOG_DEBUG, "波形窗口添加变量: id=%d", leaf_id);
+    /* N9(a): 加入窗口的变量自动纳入采集（观测勾选），否则 poll 线程
+     * 只采集 watched 叶子，多变量显示恒为 0。 */
+    os_vartree_set_watch(leaf_id, 1);
+    os_vartree_set_check_ui(g_app.hTree, leaf_id, 1);
+    os_mainwin_refresh_status();
+    os_mainwin_update_buttons();
+    InvalidateRect(hwnd, NULL, TRUE);
+    os_log(OS_LOG_INFO, "波形窗口添加变量: id=%d (观测 %d)", leaf_id, g_app.watch_count);
+}
+
+/* N9(b): 移除第 idx 路变量；若该变量不再被任何窗口引用则自动取消观测 */
+void os_chart_remove_var(HWND hwnd, int idx)
+{
+    OS_ChartWin* cw = cw_from_hwnd(hwnd);
+    int removed_id, k;
+    if (!cw || idx < 0 || idx >= cw->series_count) return;
+    removed_id = cw->series[idx].leaf_id;
+    for (k = idx; k < cw->series_count - 1; k++) cw->series[k] = cw->series[k + 1];
+    cw->series_count--;
+    if (cw->sel >= cw->series_count) cw->sel = cw->series_count - 1;
+    os_log(OS_LOG_INFO, "波形窗口移除变量: id=%d (剩余 %d 路)", removed_id, cw->series_count);
+    os_win_auto_unwatch(removed_id);
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
@@ -109,6 +131,25 @@ int os_chart_is(HWND hwnd)
 {
     OS_ChartWin* cw = cw_from_hwnd(hwnd);
     return cw ? 1 : 0;
+}
+
+/* 图例命中：返回鼠标所指的系列下标（未命中返回 -1） */
+static int chart_legend_hit(OS_ChartWin* cw, int x, int y)
+{
+    RECT rc;
+    int plot_top, plot_bottom, ly, i;
+    if (!cw) return -1;
+    GetClientRect(cw->hwnd, &rc);
+    plot_top = 26;
+    plot_bottom = rc.bottom - 18;
+    if (x < 56 || y < plot_top + 4 || y >= plot_bottom - 8) return -1;
+    ly = plot_top + 4;
+    for (i = 0; i < cw->series_count; i++) {
+        if (y >= ly - 4 && y < ly + 14) return i;
+        ly += 16;
+        if (ly > plot_bottom - 8) break;
+    }
+    return -1;
 }
 
 int os_chart_var_name(HWND hwnd, int idx, char* out, int cap)
@@ -201,14 +242,18 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
 {
     RECT rc, plot;
     int th = 26, lw = 56, xh = 18, i, j;
+    int right_gutter;
     HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
     OS_ChartView v;
     GetClientRect(cw->hwnd, &rc);
+    /* N9(c): 多坐标轴时右侧每路独立 Y 轴，占 (路数 × 42) 宽度 */
+    right_gutter = (cw->multiaxis && cw->series_count > 0)
+                       ? cw->series_count * 42 + 6 : 6;
     plot = rc;
     plot.top += th;
     plot.left += lw;
     plot.bottom -= xh;
-    plot.right -= 6;
+    plot.right -= right_gutter;
     chart_compute_view(cw, &v);
     /* 标题栏 */
     {
@@ -325,6 +370,41 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         SelectObject(hdc, old);
         DeleteObject(pen);
     }
+    /* N9(c): 多坐标轴：右侧每路独立 Y 轴（竖线+刻度值），颜色跟随变量颜色 */
+    if (cw->multiaxis && cw->series_count > 0) {
+        int lane = 42;
+        int gutter = cw->series_count * lane + 6;
+        for (i = 0; i < cw->series_count; i++) {
+            OS_Series* sr = &cw->series[i];
+            double sy0, sy1;
+            int lane_left = rc.right - gutter + i * lane;
+            int ax = lane_left + 6;
+            int k;
+            HPEN pen, old;
+            if (sr->count <= 0) continue;
+            chart_series_range(cw, sr, &sy0, &sy1);
+            pen = CreatePen(PS_SOLID, 1, sr->color);
+            old = (HPEN)SelectObject(hdc, pen);
+            MoveToEx(hdc, ax, plot.top, NULL);
+            LineTo(hdc, ax, plot.bottom);
+            SelectObject(hdc, old);
+            DeleteObject(pen);
+            SetTextColor(hdc, sr->color);
+            for (k = 0; k <= 2; k++) {
+                double val = sy1 - (sy1 - sy0) * k / 2.0;
+                int y = plot.top + (plot.bottom - plot.top) * k / 2;
+                char txt[64];
+                wchar_t wt[128];
+                RECT r;
+                _snprintf(txt, 64, "%.3g", val);
+                os_utf8_to_wide_buf(txt, wt, 128);
+                r.left = ax + 3; r.top = y - 8;
+                r.right = lane_left + lane - 2; r.bottom = y + 8;
+                DrawTextW(hdc, wt, -1, &r, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+    }
+
     /* 无数据提示 */
     {
         int total = 0;
@@ -400,6 +480,17 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     case WM_ERASEBKGND:
         return 1;
+    case WM_SETFOCUS:
+        os_win_mark_active(hwnd); /* N11/Bug3: 登记为“当前窗口” */
+        return 0;
+    case WM_LBUTTONDBLCLK: {
+        /* Bug3: 双击标题栏（非关闭按钮区域）切换全屏 */
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        if ((short)HIWORD(lParam) < 26 && (short)LOWORD(lParam) < rc.right - 22)
+            PostMessage(g_app.hMain, WM_OS_WIN_FULLSCREEN, (WPARAM)hwnd, 0);
+        return 0;
+    }
     case WM_LBUTTONDOWN: {
         if (cw) {
             int x = (short)LOWORD(lParam);
@@ -409,6 +500,14 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)hwnd, 0);
                 return 0;
             }
+            /* N9(b): 点击图例选中对应系列 */
+            {
+                int hit = chart_legend_hit(cw, x, (short)HIWORD(lParam));
+                if (hit >= 0) {
+                    cw->sel = hit;
+                    InvalidateRect(hwnd, NULL, FALSE);
+                }
+            }
             SetFocus(hwnd); /* 便于接收 F / Ctrl+B 快捷键 */
         }
         return 0;
@@ -416,13 +515,25 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     case WM_RBUTTONUP: {
         HMENU m = CreatePopupMenu();
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        int has_sel = 0;
+        if (cw) {
+            int hit = chart_legend_hit(cw, pt.x, pt.y);
+            if (hit >= 0) {
+                cw->sel = hit;
+                InvalidateRect(hwnd, NULL, FALSE);
+                has_sel = 1;
+            } else if (cw->sel >= 0 && cw->sel < cw->series_count) {
+                has_sel = 1;
+            }
+        }
         AppendMenuW(m, MF_STRING, MENU_CHART_ADD, L"添加变量...");
+        AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), MENU_CHART_REMOVE, L"移除选中变量");
         AppendMenuW(m, MF_STRING | (cw && cw->paused ? MF_CHECKED : 0), MENU_CHART_PAUSE, L"暂停刷新");
         AppendMenuW(m, MF_STRING | (cw && cw->multiaxis ? MF_CHECKED : 0), MENU_CHART_MULTIAXIS, L"多坐标轴 (Ctrl+B)");
         AppendMenuW(m, MF_STRING, MENU_CHART_FITALL, L"全局显示 (F)");
         AppendMenuW(m, MF_STRING, MENU_CHART_ZOOMRESET, L"重置缩放");
         AppendMenuW(m, MF_STRING, MENU_CHART_CLEAR, L"清除数据");
-        AppendMenuW(m, MF_STRING, MENU_CHART_WRITE, L"写入值...");
+        AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), MENU_CHART_WRITE, L"写入值...");
         AppendMenuW(m, MF_SEPARATOR, 0, NULL);
         AppendMenuW(m, MF_STRING, MENU_CHART_CLOSE, L"关闭窗口");
         ClientToScreen(hwnd, &pt);
@@ -565,6 +676,11 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case MENU_CHART_WRITE:
             if (cw && cw->series_count > 0) {
                 os_dlg_edit_value(hwnd, cw->series[cw->sel < cw->series_count ? cw->sel : 0].leaf_id);
+            }
+            break;
+        case MENU_CHART_REMOVE:
+            if (cw && cw->sel >= 0 && cw->sel < cw->series_count) {
+                os_chart_remove_var(hwnd, cw->sel);
             }
             break;
         case MENU_CHART_CLOSE:

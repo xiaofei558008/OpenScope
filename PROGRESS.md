@@ -87,7 +87,20 @@
   - 工具栏单行化：打开ELF/连接/断开/开始采集/停止采集/记录/停止记录/离线回放/停止回放/关于 + 接口(SWD/JTAG)/速度/ J-Link 设备/刷新 全部排列在菜单栏正下方一行，布局统一按文字宽度自适应。
   - 回归：连接测试（开发版+安装版）ALL PASS；ui_windows_drive/ui_layout_drive/ui_rename_drive 全部 ALL PASS（layout C 阶段与 rename 增加轮询/等待，消除连续运行竞态）；构建 0 error/0 warning。
   - 版本 1.4.1：重新打包 `dist/OpenScope-Setup-1.4.1.exe`（10.3MB），安装版验证版本 1.4.1.0 + 主界面直连。
-- **checkpoint-16（2026-08-09）**：补齐 request.md 新增特性 4/5/6/7 全部缺口 + M1 完善（1.5.0）。
+- **checkpoint-17（2026-08-09）**：完成 request.md 新增特性 8~12 + Bug 1/2/3 全部 + N3/N6 更新（1.6.0）。
+  - N3(更新)：tab 就地重命名不再弹窗，直接在标签上修改；清空/删除全部字符后回车兜底为 Default；修复焦点检查导致编辑框被过早销毁的 bug（仅当焦点转移到本应用其他窗口时才提交，外部程序/桌面失焦保留编辑框）。
+  - N6(更新)：删除关于按钮/工具栏“关于”，仅保留帮助菜单中的“关于 OpenScope”文档（晶圆上的生物技术开发和提供支持 + 版本号 + www.opendebugger.com）。
+  - N8 速度设置：SWD/JTAG 时钟速度更多预设 + 支持手工输入速度（连接直接读取控件值）。
+  - N9 多变量采集/移除 + CTRL+B 多坐标轴修复 + 左侧变量栏自动隐藏/钉住 + 分隔条调宽。
+  - N10 数值窗口就地写入（值栏直接输入回车写入一次，不再弹窗）+ 变量前“实时”勾选框控制是否实时更新。
+  - N11 窗口最大化填满当前 tab + 一个 tab 可同时放置多个波形/数值窗口（OS_WinItem.group[] 组机制）。
+  - N12 左侧 elf 栏钉图标 OSTreePin + 未钉住自动隐藏（tree_auto_tick 定时检查）。
+  - Bug1 修复：添加 2 个变量后 App 异常退出（repro_bug1_dialog/combos 回归 ALL PASS）。
+  - Bug2 修复：关闭后重开任务栏有图标但窗口不可见（os_mainwin_show + ui_bug2_restore_drive 回归 ALL PASS）。
+  - Bug3 修复：单窗口全屏/退出全屏（SetParent 临时改父为主窗口铺满客户区，退出还原回 tab）。
+  - 测试：新增 `tests/ui_features_drive.ps1`（16 项：N6 无关于按钮 / N11 多窗口+最大化 / Bug3 全屏 / N12 钉图标 / N10 结构 / Ctrl+B 不崩溃），全部回归 dev+installed 两版 ALL PASS。
+  - 版本 1.6.0：重新打包 `dist/OpenScope-Setup-1.6.0.exe`（10.4MB），安装版验证版本 1.6.0.0。
+
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
   - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
@@ -124,6 +137,17 @@
 - [x] 5 连接配置嵌入主界面 + MCU 型号选择（checkpoint-14/15/16）
 - [x] 6 关于框写明“晶圆上的生物技术开发和提供支持”+版本号+www.opendebugger.com（checkpoint-16）
 - [x] 7 波形滚轮缩放 X/Y、停止后整体展示、Ctrl+B 多坐标轴、F 全局显示（checkpoint-16）
+- [x] 8 SWD/JTAG 更多速度设置 + 手工输入时钟速度（checkpoint-17）
+- [x] 9 波形多变量采集 + 变量移除 + CTRL+B 多坐标轴 + 左侧变量栏自动隐藏/钉住/分隔条（checkpoint-17）
+- [x] 10 数值窗口就地写入 + 实时更新勾选框（checkpoint-17）
+- [x] 11 窗口最大化填满 tab + 一个 tab 多窗口（checkpoint-17）
+- [x] 12 左侧 elf 栏钉图标 + 自动隐藏（checkpoint-17）
+
+## Bug（request.md，已修复）
+
+- [x] Bug1 添加 2 个变量后 App 异常退出（checkpoint-17）
+- [x] Bug2 关闭重开任务栏有图标但窗口不可见（checkpoint-17）
+- [x] Bug3 单窗口全屏/退出全屏（checkpoint-17）
 
 ## 总结
 

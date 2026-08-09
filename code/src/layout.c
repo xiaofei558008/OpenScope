@@ -145,7 +145,7 @@ int os_layout_save_to(const wchar_t* path)
             }
             write_utf8_line(f, "vars=%s", count ? vars[0] : "");
             for (k = 1; k < count; k++)
-                write_utf8_line(f, "vars+%s", vars[k]);
+                write_utf8_line(f, "vars+=%s", vars[k]);
         }
     }
     fclose(f);
@@ -204,7 +204,12 @@ typedef struct LayoutData {
 static void parse_key(char* line, char* key, int keycap, char* val, int valcap)
 {
     char* eq = strchr(line, '=');
-    if (!eq) { key[0] = 0; val[0] = 0; return; }
+    if (!eq) {
+        /* 无 '=' 的行：整行作为 key（兼容旧版多变量续行 "vars+name"） */
+        _snprintf(key, keycap, "%s", line);
+        val[0] = 0;
+        return;
+    }
     *eq = 0;
     _snprintf(key, keycap, "%s", line);
     _snprintf(val, valcap, "%s", eq + 1);
@@ -258,9 +263,11 @@ int os_layout_load_from(const wchar_t* path)
                 else if (!strcmp(key, "vars") && val[0]) {
                     if (cur->nvars < MAX_WIN_VARS)
                         _snprintf(cur->vars[cur->nvars++], sizeof(cur->vars[0]), "%s", val);
-                } else if (key[0] == 'v' && strncmp(key, "vars+", 5) == 0 && val[0]) {
-                    if (cur->nvars < MAX_WIN_VARS)
-                        _snprintf(cur->vars[cur->nvars++], sizeof(cur->vars[0]), "%s", val);
+                } else if (key[0] == 'v' && strncmp(key, "vars+", 5) == 0) {
+                    /* 兼容新格式 "vars+=name" 与旧格式 "vars+name"（无 '='） */
+                    const char* nm = val[0] ? val : key + 5;
+                    if (nm[0] && cur->nvars < MAX_WIN_VARS)
+                        _snprintf(cur->vars[cur->nvars++], sizeof(cur->vars[0]), "%s", nm);
                 }
             }
         }
@@ -269,9 +276,32 @@ int os_layout_load_from(const wchar_t* path)
 
     /* 应用：主窗口尺寸/布局参数 */
     if (ld->main_w > 200 && ld->main_h > 120) {
-        SetWindowPos(g_app.hMain, NULL, ld->main_x >= 0 ? ld->main_x : CW_USEDEFAULT,
-                     ld->main_y >= 0 ? ld->main_y : CW_USEDEFAULT,
-                     ld->main_w, ld->main_h, SWP_NOZORDER);
+        /* Bug2 修复：若保存位置在屏幕外（多显示器移除/窗口被拖出屏幕/最小化关闭
+         * 保存的是 -32768 哨兵），直接把主窗口 SetWindowPos 到屏外或传 CW_USEDEFAULT
+         * 都会让重开出现“任务栏有图标但窗口不可见”。只在坐标有效且与任一显示器
+         * 相交时才恢复位置；否则保留 CreateWindow 的默认级联位置、仅恢复尺寸。 */
+        if (ld->main_x >= 0 && ld->main_y >= 0) {
+            RECT rc;
+            rc.left = ld->main_x; rc.top = ld->main_y;
+            rc.right = rc.left + ld->main_w; rc.bottom = rc.top + ld->main_h;
+            if (MonitorFromRect(&rc, MONITOR_DEFAULTTONULL)) {
+                SetWindowPos(g_app.hMain, NULL, ld->main_x, ld->main_y,
+                             ld->main_w, ld->main_h, SWP_NOZORDER);
+            } else {
+                RECT cur;
+                GetWindowRect(g_app.hMain, &cur);
+                SetWindowPos(g_app.hMain, NULL, cur.left, cur.top,
+                             ld->main_w, ld->main_h, SWP_NOZORDER);
+                os_log(OS_LOG_INFO, "布局主窗口位置 (%d,%d) 在屏幕外，回退默认位置",
+                       ld->main_x, ld->main_y);
+            }
+        } else {
+            /* 最小化关闭哨兵或无效负坐标：只恢复尺寸，位置交给系统默认 */
+            RECT cur;
+            GetWindowRect(g_app.hMain, &cur);
+            SetWindowPos(g_app.hMain, NULL, cur.left, cur.top,
+                         ld->main_w, ld->main_h, SWP_NOZORDER);
+        }
     }
     if (ld->tree_w >= 120) g_app.tree_w = ld->tree_w;
     if (ld->log_h >= 60) g_app.log_h = ld->log_h;

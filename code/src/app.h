@@ -12,6 +12,7 @@
 #define OS_RING_CAP          8192
 #define OS_MAX_MODULES       32
 #define OS_MAX_WINS          64
+#define OS_MAX_GROUP         8   /* N11: 一个 tab 最多容纳的窗口数 */
 #define OS_MAX_CHART_SERIES  16
 #define OS_CHART_HIST        8192
 #define OS_MAX_NUM_ROWS      128
@@ -23,6 +24,9 @@
 #define WM_OS_WIN_CLOSED  (WM_APP + 5)
 #define WM_OS_CHART_FITALL (WM_APP + 6) /* 停止采集：波形窗口整体展示全部波形 */
 #define WM_OS_CHART_LIVE  (WM_APP + 7)  /* 开始采集：波形窗口回到跟随最新 */
+#define WM_OS_WIN_MAXIMIZE (WM_APP + 8) /* N11: 窗口最大化/还原填满当前 tab (wParam=HWND) */
+#define WM_OS_TREE_AUTOHIDE (WM_APP + 9) /* N9(d): 变量栏自动隐藏开关 (wParam=0/1，测试钩子) */
+#define WM_OS_WIN_FULLSCREEN (WM_APP + 10) /* Bug3: 单窗口全屏/退出全屏 (wParam=HWND) */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 
@@ -50,7 +54,7 @@ typedef struct OS_Leaf {
     OS_Sample   sample;
 } OS_Leaf;
 
-/* 右侧窗口区的一个窗口 */
+/* 右侧窗口区的一个 tab。N11: 一个 tab 可容纳多个窗口（group[0]==hwnd）。 */
 typedef struct OS_WinItem {
     HWND        hwnd;
     int         is_module;
@@ -58,12 +62,21 @@ typedef struct OS_WinItem {
     void*       mod_ctx;
     wchar_t     title[128];
     int         active;
+    HWND        group[OS_MAX_GROUP];          /* tab 内全部窗口 */
+    int         group_count;                  /* 组内窗口数（含主窗口） */
+    int         group_max;                    /* 最大化窗口下标，-1=平铺 */
+    wchar_t     group_title[OS_MAX_GROUP][128]; /* 各窗口标题（关闭主窗口后提升用） */
 } OS_WinItem;
 
 typedef struct OS_App {
     HINSTANCE hInst;
     HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hBtnBar, hTab;
+    HWND hTreeStrip;       /* N9(d): 变量栏隐藏后左侧细条（悬停展开） */
+    HWND hTreePin;         /* N12: 变量栏顶部钉图标按钮（钉住/自动隐藏） */
     int tree_w, log_h;
+    int tree_auto;         /* N9(d): 1=变量栏自动隐藏，0=钉住常显 */
+    int tree_hidden;       /* 当前变量栏是否已自动隐藏 */
+    HWND fs_win;           /* Bug3: 当前全屏窗口（NULL=无） */
 
     OS_ElfFile* elf;
     wchar_t elf_path[MAX_PATH];

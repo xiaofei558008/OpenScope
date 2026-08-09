@@ -37,9 +37,22 @@ static LONG WINAPI os_crash_filter(EXCEPTION_POINTERS* ep)
         if (hb) cap = (os_capture_stack_fn)GetProcAddress(hb, "CaptureStackBackTrace");
     }
     os_time_iso(os_time_us(), ts, sizeof(ts));
-    crash_write("%s [FATAL] unhandled exception code=0x%08X at 0x%p",
-                ts, ep ? ep->ExceptionRecord->ExceptionCode : 0,
-                ep ? ep->ExceptionRecord->ExceptionAddress : NULL);
+    if (ep && ep->ExceptionRecord) {
+        HMODULE hm = NULL;
+        char mod[260] = "?";
+        DWORD64 off = 0;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)ep->ExceptionRecord->ExceptionAddress, &hm) && hm) {
+            GetModuleFileNameA(hm, mod, sizeof(mod));
+            off = (DWORD64)((BYTE*)ep->ExceptionRecord->ExceptionAddress - (BYTE*)hm);
+        }
+        crash_write("%s [FATAL] unhandled exception code=0x%08X at 0x%p  %s+0x%llX",
+                    ts, ep->ExceptionRecord->ExceptionCode,
+                    ep->ExceptionRecord->ExceptionAddress, mod, (unsigned long long)off);
+    } else {
+        crash_write("%s [FATAL] unhandled exception (no record)", ts);
+    }
     if (cap) {
         PVOID frames[32];
         USHORT n = cap(0, 32, frames, NULL);
@@ -151,7 +164,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.5.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.6.0)");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -188,6 +201,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         if (!no_layout && lsv) os_layout_save_to(lsv);
     }
     while (GetMessage(&msg, NULL, 0, 0)) {
+        /* N3: 就地重命名编辑框的回车/ESC 在分发前拦截（不子类化编辑框） */
+        HWND te = os_tab_edit_hwnd();
+        if (te && msg.message == WM_KEYDOWN && msg.hwnd == te &&
+            (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE)) {
+            os_tab_edit_handle_key(msg.wParam);
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }

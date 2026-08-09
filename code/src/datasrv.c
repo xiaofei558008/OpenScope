@@ -8,9 +8,17 @@
 
 static DWORD WINAPI poll_thread(LPVOID p)
 {
-    OS_Sample batch[OS_MAX_LEAVES];
+    /* Bug1: 480KB 栈数组会耗尽 1MB 线程栈导致无日志崩溃，改用堆 */
+    OS_Sample* batch = (OS_Sample*)malloc(OS_MAX_LEAVES * sizeof(OS_Sample));
     int fail_count = 0;
     (void)p;
+    if (!batch) {
+        os_log(OS_LOG_ERROR, "采集线程内存分配失败");
+        g_app.stop_poll = 0;
+        g_app.acq_state = OS_ACQ_STOPPED;
+        if (g_app.hMain) PostMessage(g_app.hMain, WM_OS_ACQ_STATE, 0, 0);
+        return 1;
+    }
     while (!g_app.stop_poll) {
         int n = 0, i;
         int connected = 0;

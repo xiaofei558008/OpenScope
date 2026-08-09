@@ -16,6 +16,8 @@ int os_vartree_find_by_name(const char* name);
 
 const OS_Leaf* os_vartree_leaf(int id);
 int os_vartree_set_watch(int id, int on);
+/* 程序化设置叶变量在左侧树中的勾选状态（配合 set_watch 联动显示） */
+void os_vartree_set_check_ui(HWND hTree, int id, int on);
 
 /* 重载后未找到的原观测变量（最多 64 个） */
 int os_vartree_missing_count(void);

@@ -21,6 +21,7 @@
 #define IDC_BTN_REPLAY   2008
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
+#define IDC_BTN_PIN      2015 /* N9(d): 变量栏 自动隐藏/钉住 切换 */
 #define IDM_EXIT         2011
 #define IDM_LAYOUT_SAVE  2021
 #define IDM_LAYOUT_LOAD  2022
@@ -37,9 +38,10 @@
 #define IDM_TREE_ADD_SCOPE 2307
 #define IDM_TAB_CLOSE      2501
 #define IDM_TAB_RENAME     2502
-#define IDD_RN_EDIT        2601
-#define IDD_RN_OK          2602
-#define IDD_RN_CANCEL      2603
+#define IDM_TAB_ADD_CHART  2503 /* N11: 在当前 tab 添加波形窗口 */
+#define IDM_TAB_ADD_NUM    2504 /* N11: 在当前 tab 添加数值窗口 */
+#define IDM_TAB_MAXIMIZE   2505 /* N11: 最大化/还原当前窗口 */
+#define IDM_TAB_FULLSCREEN 2506 /* Bug3: 全屏/退出全屏 */
 
 /* 连接配置控件（直接放主界面工具栏，不弹对话框） */
 #define IDC_CFG_DEVICE   2101
@@ -77,11 +79,6 @@ typedef struct EditState {
     wchar_t* text_out;
 } EditState;
 
-typedef struct RenameState {
-    wchar_t* out;
-    int cap;
-} RenameState;
-
 typedef struct ModWinMenuItem {
     OS_Module* mod;
     void* ctx;
@@ -101,7 +98,8 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
     { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
-    { IDC_BTN_REPLAYSTOP, L"停止回放" }, { IDC_BTN_ABOUT, L"关于" },
+    { IDC_BTN_REPLAYSTOP, L"停止回放" },
+    { IDC_BTN_PIN, L"钉住变量栏" },
 };
 
 /* ---------- 工具 ---------- */
@@ -179,7 +177,6 @@ void os_mainwin_update_buttons(void)
     ENB(IDC_BTN_LOGSTOP, g_app.log_csv != NULL);
     ENB(IDC_BTN_REPLAY, !running && !replay);
     ENB(IDC_BTN_REPLAYSTOP, replay);
-    ENB(IDC_BTN_ABOUT, 1);
     ENB(IDC_BTN_OPEN, 1);
 #undef ENB
 }
@@ -202,6 +199,7 @@ static void refresh_status(void)
     switch (g_app.acq_state) {
     case OS_ACQ_RUNNING: set_status(2, L"采集中"); break;
     case OS_ACQ_REPLAY: set_status(2, L"离线回放中"); break;
+    case OS_ACQ_STOPPED: set_status(2, L"已停止"); break;
     default: set_status(2, L"空闲"); break;
     }
     _snwprintf(w, 512, L"观测 %d / 叶子 %d / 样本 %ld",
@@ -209,9 +207,72 @@ static void refresh_status(void)
     set_status(3, w);
 }
 
+/* 供窗口模块调用：观测数变化后刷新状态栏/按钮 */
+void os_mainwin_refresh_status(void)
+{
+    refresh_status();
+}
+
+/* N9(b): 判断 leaf_id 是否仍被任一窗口（含模块窗口）使用 */
+int os_win_leaf_used(int leaf_id)
+{
+    int i, k, g;
+    for (i = 0; i < g_app.win_count; i++) {
+        OS_WinItem* wi = &g_app.wins[i];
+        char nm[300];
+        for (g = 0; g < wi->group_count; g++) {
+            HWND w = wi->group[g];
+            if (!w || !IsWindow(w)) continue;
+            if (wi->is_module) {
+                if (wi->mod && wi->mod->api_version >= 3 && wi->mod->win_enum_var) {
+                    for (k = 0; ; k++) {
+                        if (!wi->mod->win_enum_var(wi->mod_ctx, w, k, nm, sizeof(nm))) break;
+                        if (os_vartree_find_by_name(nm) == leaf_id) return 1;
+                    }
+                }
+            } else {
+                for (k = 0; ; k++) {
+                    if (os_chart_is(w)) {
+                        if (!os_chart_var_name(w, k, nm, sizeof(nm))) break;
+                    } else if (os_num_is(w)) {
+                        if (!os_num_var_name(w, k, nm, sizeof(nm))) break;
+                    } else break;
+                    if (os_vartree_find_by_name(nm) == leaf_id) return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+/* 从窗口移除变量后：若不再被任何窗口引用则自动取消观测（联动左侧勾选框） */
+void os_win_auto_unwatch(int leaf_id)
+{
+    if (leaf_id < 0) return;
+    if (!os_win_leaf_used(leaf_id)) {
+        os_vartree_set_watch(leaf_id, 0);
+        os_vartree_set_check_ui(g_app.hTree, leaf_id, 0);
+        os_mainwin_refresh_status();
+        os_mainwin_update_buttons();
+        os_log(OS_LOG_DEBUG, "变量已从所有窗口移除，取消观测: id=%d", leaf_id);
+    }
+}
+
 /* ---------- 布局（Tab 标签页） ---------- */
 
 static int g_cur_tab = -1; /* 当前激活窗口在 g_app.wins 中的下标 */
+static HWND g_cur_win = NULL; /* N11/Bug3: 最近获得焦点的窗口（菜单“当前窗口”指向） */
+
+/* 子窗口获得焦点时登记，供“最大化/全屏当前窗口”菜单使用 */
+void os_win_mark_active(HWND w)
+{
+    int i, k;
+    for (i = 0; i < g_app.win_count; i++) {
+        for (k = 0; k < g_app.wins[i].group_count; k++) {
+            if (g_app.wins[i].group[k] == w) { g_cur_win = w; return; }
+        }
+    }
+}
 
 static void layout(void);
 static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, const wchar_t* title);
@@ -220,25 +281,57 @@ static void tab_set_title(int idx, const wchar_t* name);
 static void layout_tab_pages(void)
 {
     RECT rc, pr;
-    int i;
+    OS_WinItem* wi;
+    int n, k, col, x, w;
     if (!g_app.hTab || !IsWindow(g_app.hTab)) return;
+    if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) return;
     GetClientRect(g_app.hTab, &rc);
     pr = rc;
     SendMessageW(g_app.hTab, TCM_ADJUSTRECT, FALSE, (LPARAM)&pr);
-    for (i = 0; i < g_app.win_count; i++) {
-        HWND w = g_app.wins[i].hwnd;
-        if (w && IsWindow(w))
-            MoveWindow(w, pr.left, pr.top, pr.right - pr.left, pr.bottom - pr.top, TRUE);
+    wi = &g_app.wins[g_cur_tab];
+    n = wi->group_count;
+    if (n <= 0) return;
+    if (wi->group_max >= 0 && wi->group_max < n) {
+        /* N11 最大化：该窗口填满 tab，其余隐藏 */
+        for (k = 0; k < n; k++) {
+            HWND gw = wi->group[k];
+            if (!gw || !IsWindow(gw)) continue;
+            if (gw == g_app.fs_win) continue; /* 全屏窗口不受平铺/最大化影响 */
+            if (k == wi->group_max) {
+                MoveWindow(gw, pr.left, pr.top, pr.right - pr.left, pr.bottom - pr.top, TRUE);
+                ShowWindow(gw, SW_SHOW);
+            } else {
+                ShowWindow(gw, SW_HIDE);
+            }
+        }
+        return;
+    }
+    /* N11 平铺：n 等分列，每列一个窗口 */
+    col = n;
+    w = (pr.right - pr.left) / col;
+    x = pr.left;
+    for (k = 0; k < n; k++) {
+        HWND gw = wi->group[k];
+        if (!gw || !IsWindow(gw)) continue;
+        if (gw == g_app.fs_win) continue; /* 全屏窗口不受平铺/最大化影响 */
+        MoveWindow(gw, x, pr.top, w, pr.bottom - pr.top, TRUE);
+        ShowWindow(gw, SW_SHOW);
+        x += w;
     }
 }
 
 static void show_tab(int idx)
 {
-    int i;
+    int i, k;
     for (i = 0; i < g_app.win_count; i++) {
-        HWND w = g_app.wins[i].hwnd;
-        if (w) ShowWindow(w, i == idx ? SW_SHOW : SW_HIDE);
+        OS_WinItem* wi = &g_app.wins[i];
+        for (k = 0; k < wi->group_count; k++) {
+            HWND w = wi->group[k];
+            if (w && IsWindow(w) && w != g_app.fs_win)
+                ShowWindow(w, (i == idx) ? SW_SHOW : SW_HIDE);
+        }
     }
+    g_cur_tab = idx;
     layout_tab_pages();
 }
 
@@ -343,7 +436,7 @@ static void layout(void)
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
-            { IDC_BTN_ABOUT, 0, 0 },
+            { IDC_BTN_PIN, 0, 0 },
             { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 }, { IDC_CFG_SPEED, 92, 1 },
             { IDC_CFG_EMU, 240, 1 }, { IDC_CFG_REFRESH, 48, 0 },
         };
@@ -374,8 +467,29 @@ static void layout(void)
             }
         }
     }
+    /* N9(d): 变量栏自动隐藏后，只留左侧细条；右侧窗口区从细条右侧开始 */
+    if (g_app.tree_hidden) {
+        if (g_app.hTreeStrip && IsWindow(g_app.hTreeStrip))
+            MoveWindow(g_app.hTreeStrip, 0, bh, 8, right_h, TRUE);
+        if (IsWindow(g_app.hTree)) ShowWindow(g_app.hTree, SW_HIDE);
+        sw = 8;
+        right_w = bw - sw - 5;
+    } else {
+        if (g_app.hTreeStrip && IsWindow(g_app.hTreeStrip))
+            ShowWindow(g_app.hTreeStrip, SW_HIDE);
+        if (IsWindow(g_app.hTree)) ShowWindow(g_app.hTree, SW_SHOW);
+    }
     MoveWindow(g_app.hSplitV, sw, bh, 5, right_h, TRUE);
-    MoveWindow(g_app.hTree, 0, bh, sw, right_h, TRUE);
+    MoveWindow(g_app.hTree, 0, bh, g_app.tree_w, right_h, TRUE);
+    /* N12: 钉图标浮在变量栏右上角（隐藏时一并隐藏） */
+    if (g_app.hTreePin && IsWindow(g_app.hTreePin)) {
+        if (g_app.tree_hidden) {
+            ShowWindow(g_app.hTreePin, SW_HIDE);
+        } else {
+            MoveWindow(g_app.hTreePin, g_app.tree_w - 34, bh + 4, 30, 22, TRUE);
+            ShowWindow(g_app.hTreePin, SW_SHOW);
+        }
+    }
     MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
@@ -383,6 +497,9 @@ static void layout(void)
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
     SendMessageW(g_app.hStatus, SB_SETPARTS, 4, (LPARAM)parts);
+    /* Bug3: 全屏窗口随主窗口缩放同步铺满整个客户区 */
+    if (g_app.fs_win && IsWindow(g_app.fs_win))
+        MoveWindow(g_app.fs_win, 0, 0, rc.right, rc.bottom, TRUE);
     os_mainwin_tile();
 }
 
@@ -416,6 +533,145 @@ static LRESULT CALLBACK split_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
     case WM_ERASEBKGND:
+        return 1;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* ---------- N9(d) 变量栏自动隐藏/钉住 ---------- */
+
+static int g_tree_in_ms; /* 光标最后在树区的时间戳 */
+
+static void update_pin_button(void)
+{
+    HWND b = GetDlgItem(g_app.hMain, IDC_BTN_PIN);
+    if (b) SetWindowTextW(b, g_app.tree_auto ? L"钉住" : L"自动隐藏");
+    /* N12: 变量栏钉图标颜色随状态刷新 */
+    if (g_app.hTreePin && IsWindow(g_app.hTreePin)) InvalidateRect(g_app.hTreePin, NULL, TRUE);
+}
+
+static void tree_auto_expand(const wchar_t* why)
+{
+    if (!g_app.tree_hidden) return;
+    g_app.tree_hidden = 0;
+    layout();
+    os_log(OS_LOG_INFO, "变量栏展开: %ls", why);
+}
+
+static void tree_auto_tick(void)
+{
+    POINT pt;
+    int x;
+    if (!g_app.hMain || !g_app.hTree) return;
+    GetCursorPos(&pt);
+    ScreenToClient(g_app.hMain, &pt);
+    x = pt.x;
+    if (!g_app.tree_auto) {
+        /* 钉住：始终展开 */
+        tree_auto_expand(L"钉住");
+        return;
+    }
+    if (g_app.tree_hidden) {
+        /* 隐藏态：光标进入左侧细条即展开 */
+        if (x >= 0 && x <= 10) tree_auto_expand(L"悬停细条");
+        return;
+    }
+    /* 展开态：光标仍在树区或分隔条上 → 保持；离开超过 800ms → 自动隐藏 */
+    if (x >= 0 && x <= g_app.tree_w + 12) {
+        g_tree_in_ms = (int)(os_time_us() / 1000);
+        return;
+    }
+    if ((int)(os_time_us() / 1000) - g_tree_in_ms > 800) {
+        g_app.tree_hidden = 1;
+        layout();
+        os_log(OS_LOG_INFO, "变量栏自动隐藏");
+    }
+}
+
+static LRESULT CALLBACK tree_strip_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT rc;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
+        SetBkMode(hdc, TRANSPARENT);
+        SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+        DrawTextW(hdc, L"❯", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_LBUTTONDOWN:
+        tree_auto_expand(L"点击细条");
+        return 0;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+        return 1;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* N12: 变量栏顶部的钉图标按钮（GDI 绘制：钉住=金色，自动隐藏=灰） */
+static void pin_draw(HDC hdc, RECT* rc, int pinned)
+{
+    int cx = (rc->left + rc->right) / 2;
+    int cy = (rc->top + rc->bottom) / 2 + 1;
+    POINT tri[3];
+    HBRUSH br, oldbr;
+    HPEN oldpen;
+    SetBkMode(hdc, TRANSPARENT);
+    br = CreateSolidBrush(pinned ? RGB(212, 175, 55) : RGB(150, 150, 150));
+    oldbr = (HBRUSH)SelectObject(hdc, br);
+    oldpen = (HPEN)SelectObject(hdc, GetStockObject(NULL_PEN));
+    /* 钉头 */
+    Ellipse(hdc, cx - 5, cy - 7, cx + 5, cy + 3);
+    /* 钉尖 */
+    tri[0].x = cx;     tri[0].y = cy + 1;
+    tri[1].x = cx - 6; tri[1].y = cy + 11;
+    tri[2].x = cx + 6; tri[2].y = cy + 11;
+    Polygon(hdc, tri, 3);
+    SelectObject(hdc, oldbr);
+    SelectObject(hdc, oldpen);
+    DeleteObject(br);
+    /* 高光弧线 */
+    {
+        HPEN hp = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+        SelectObject(hdc, hp);
+        SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        Arc(hdc, cx - 5, cy - 7, cx + 5, cy + 3, cx - 3, cy - 5, cx + 1, cy - 8);
+        DeleteObject(hp);
+    }
+}
+
+static LRESULT CALLBACK tree_pin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, (HBRUSH)(COLOR_BTNFACE + 1));
+        pin_draw(hdc, &rc, g_app.tree_auto ? 0 : 1);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_LBUTTONDOWN:
+        /* 与工具栏“钉住变量栏”同源：切换自动隐藏/钉住 */
+        g_app.tree_auto = g_app.tree_auto ? 0 : 1;
+        update_pin_button();
+        layout();
+        os_log(OS_LOG_INFO, "变量栏%s", g_app.tree_auto ? "改为自动隐藏（未钉住）" : "已钉住常显");
+        return 0;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursor(NULL, IDC_HAND));
         return 1;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
@@ -516,8 +772,7 @@ static void cmd_connect(void)
     int rc, c = 0;
     OS_DriverInfo info;
     OS_ConnectCfg cfg;
-    LRESULT ifi, spi, emu, dci;
-    static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
+    LRESULT ifi, emu, dci;
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块（jlink.dll）");
         set_status(0, L"未加载驱动模块");
@@ -534,9 +789,16 @@ static void cmd_connect(void)
     memset(&cfg, 0, sizeof(cfg));
     ifi = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
     cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
-    spi = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_SPEED), CB_GETCURSEL, 0, 0);
-    if (spi < 0 || spi >= (LRESULT)(sizeof(speeds) / sizeof(speeds[0]))) spi = 0;
-    cfg.speed_khz = speeds[spi];
+    /* N8: 速度下拉可手工输入，直接解析输入框文本（"0 (自动)" 或非法输入 -> 0 自动） */
+    {
+        wchar_t sbuf[64];
+        char sb8[64];
+        HWND hs = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
+        SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
+        os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
+        cfg.speed_khz = atoi(sb8);
+        if (cfg.speed_khz < 0) cfg.speed_khz = 0;
+    }
     emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
     /* MCU 型号：从界面下拉读取（预置列表，默认 Cortex-M4；空设备会令旧版 DLL 崩溃） */
@@ -614,7 +876,8 @@ void os_mainwin_cfg_init(void)
 {
     HWND h;
     const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
-    static const int speeds[] = { 0, 100, 400, 1000, 2000, 4000, 5000 };
+    /* N8: 更多速度预置（kHz），下拉可编辑允许手工输入任意值 */
+    static const int speeds[] = { 0, 50, 100, 200, 400, 1000, 2000, 4000, 5000, 8000, 10000, 12000 };
     int i;
     h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
     if (h) {
@@ -629,13 +892,13 @@ void os_mainwin_cfg_init(void)
     }
     h = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
     if (h) {
-        for (i = 0; i < 7; i++) {
+        for (i = 0; i < (int)(sizeof(speeds) / sizeof(speeds[0])); i++) {
             wchar_t b[32];
             if (speeds[i] == 0) _snwprintf(b, 32, L"0 (自动)");
             else _snwprintf(b, 32, L"%d", speeds[i]);
             SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)b);
         }
-        SendMessageW(h, CB_SETCURSEL, 5, 0); /* 默认 4000 */
+        SendMessageW(h, CB_SETCURSEL, 7, 0); /* 默认 4000 */
     }
     cfg_fill_emus();
 }
@@ -739,11 +1002,15 @@ static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, co
     wi = &g_app.wins[g_app.win_count++];
     memset(wi, 0, sizeof(*wi));
     wi->hwnd = hwnd;
+    wi->group[0] = hwnd;
+    wi->group_count = 1;
+    wi->group_max = -1;
     wi->is_module = is_module;
     wi->mod = mod;
     wi->mod_ctx = ctx;
     wi->active = 1;
     _snwprintf(wi->title, 128, L"%s", title ? title : L"");
+    _snwprintf(wi->group_title[0], 128, L"%s", title ? title : L"");
     g_cur_tab = g_app.win_count - 1;
     os_mainwin_tile();
     if (g_app.rename_tab[0] && g_app.win_count == 1)
@@ -756,19 +1023,77 @@ static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, co
     }
 }
 
+/* N11: 在指定 tab 内新建窗口。tab<0 → 新建独立 tab；tab 有效 → 附加到该 tab 组。 */
+HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title)
+{
+    HWND h;
+    int i;
+    /* 创建窗口（父为 tab 页区域），模块/原生分别处理 */
+    if (strcmp(type, "chart") == 0)
+        h = os_chart_create(g_app.hTab, 0, 0, 200, 150, title);
+    else if (strcmp(type, "num") == 0)
+        h = os_num_create(g_app.hTab, 0, 0, 200, 150, title);
+    else {
+        h = NULL;
+        for (i = 0; i < g_modwin_menu_count; i++) {
+            ModWinMenuItem* it = &g_modwin_menu[i];
+            if (it->mod && it->wt && strcmp(it->wt->type, type) == 0) {
+                char title8[256];
+                os_wide_to_utf8_buf(title ? title : L"", title8, sizeof(title8));
+                h = it->mod->create_window(it->ctx, it->wt->type, g_app.hTab,
+                                           0, 0, 200, 150, title8);
+                if (h && tab >= 0 && tab < g_app.win_count) {
+                    /* 模块窗口附加到已有 tab */
+                    OS_WinItem* wi = &g_app.wins[tab];
+                    if (wi->group_count >= OS_MAX_GROUP) { DestroyWindow(h); return NULL; }
+                    wi->group[wi->group_count] = h;
+                    _snwprintf(wi->group_title[wi->group_count], 128, L"%s",
+                               title ? title : L"");
+                    wi->group_count++;
+                    os_mainwin_tile();
+                    return h;
+                }
+                if (h) add_win_item(h, 1, it->mod, it->ctx, title);
+                return h;
+            }
+        }
+        return NULL;
+    }
+    if (!h) return NULL;
+    if (tab >= 0 && tab < g_app.win_count) {
+        /* 附加到已有 tab */
+        OS_WinItem* wi = &g_app.wins[tab];
+        if (wi->group_count >= OS_MAX_GROUP) { DestroyWindow(h); return NULL; }
+        wi->group[wi->group_count] = h;
+        _snwprintf(wi->group_title[wi->group_count], 128, L"%s", title ? title : L"");
+        wi->group_count++;
+        os_log(OS_LOG_INFO, "窗口已附加到当前标签: %ls (tab%d 共%d个)",
+               title ? title : L"", tab, wi->group_count);
+        os_mainwin_tile();
+        return h;
+    }
+    add_win_item(h, 0, NULL, NULL, title);
+    return h;
+}
+
 static void cmd_add_window(int native_chart)
 {
     wchar_t title[128];
-    HWND h;
     static int chart_no = 1, num_no = 1;
-    if (native_chart) {
-        _snwprintf(title, 128, L"波形窗口 %d", chart_no++);
-        h = os_chart_create(g_app.hTab, 0, 0, 200, 150, title);
-    } else {
-        _snwprintf(title, 128, L"数值窗口 %d", num_no++);
-        h = os_num_create(g_app.hTab, 0, 0, 200, 150, title);
-    }
-    if (h) add_win_item(h, 0, NULL, NULL, title);
+    if (native_chart) _snwprintf(title, 128, L"波形窗口 %d", chart_no++);
+    else _snwprintf(title, 128, L"数值窗口 %d", num_no++);
+    os_win_add_to_tab(-1, native_chart ? "chart" : "num", title);
+}
+
+/* N11: 在当前 tab 内附加一个新的波形/数值窗口 */
+static void cmd_add_to_tab(int native_chart)
+{
+    wchar_t title[128];
+    static int tchart_no = 1, tnum_no = 1;
+    if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) { cmd_add_window(native_chart); return; }
+    if (native_chart) _snwprintf(title, 128, L"波形窗口 %d", tchart_no++);
+    else _snwprintf(title, 128, L"数值窗口 %d", tnum_no++);
+    os_win_add_to_tab(g_cur_tab, native_chart ? "chart" : "num", title);
 }
 
 void os_mainwin_rebuild_window_menu(void)
@@ -1193,53 +1518,50 @@ static void tab_context_menu(void)
     show_tab(hit);
     m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, IDM_TAB_RENAME, L"重命名标签");
+    AppendMenuW(m, MF_STRING, IDM_TAB_ADD_CHART, L"在当前标签添加波形窗口");
+    AppendMenuW(m, MF_STRING, IDM_TAB_ADD_NUM, L"在当前标签添加数值窗口");
+    if (g_app.wins[hit].group_count > 1)
+        AppendMenuW(m, MF_STRING, IDM_TAB_MAXIMIZE, L"最大化/还原当前窗口");
+    AppendMenuW(m, MF_STRING, IDM_TAB_FULLSCREEN, L"全屏/退出全屏");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TAB_CLOSE, L"关闭窗口");
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
     DestroyMenu(m);
 }
 
-/* ---------- Tab 重命名 ---------- */
+/* ---------- Tab 就地重命名（N3：不弹窗，直接在标签上编辑） ---------- */
 
-static LRESULT CALLBACK rename_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+static HWND g_tab_edit = NULL;       /* 就地重命名 EDIT 控件 */
+static int g_tab_edit_idx = -1;
+static int g_tab_edit_closing = 0;   /* 防止 DestroyWindow 触发 WM_KILLFOCUS 二次提交 */
+
+static void tab_rename_commit(void);
+static void tab_rename_cancel(void);
+
+/* 编辑框保持原生 EDIT 行为（文本显示/输入/选择）。回车/ESC 由主消息循环在分发前
+   拦截（见 main.c），点击别处导致失焦则由定时器轮询提交——不做窗口过程子类化，
+   避免覆盖 EditWndProc 破坏其内部文本缓冲。 */
+HWND os_tab_edit_hwnd(void)
 {
-    switch (msg) {
-    case WM_CREATE: {
-        CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
-        RenameState* st = cs ? (RenameState*)cs->lpCreateParams : NULL;
-        if (!st) return -1;
-        SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)st);
-        CreateWindowW(L"STATIC", L"标签名称:", WS_CHILD | WS_VISIBLE,
-                      12, 12, 90, 22, dlg, NULL, g_app.hInst, NULL);
-        CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                      100, 10, 280, 24, dlg, (HMENU)IDD_RN_EDIT, g_app.hInst, NULL);
-        CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                      220, 46, 70, 26, dlg, (HMENU)IDD_RN_OK, g_app.hInst, NULL);
-        CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE,
-                      300, 46, 70, 26, dlg, (HMENU)IDD_RN_CANCEL, g_app.hInst, NULL);
-        return 0;
-    }
-    case WM_SETFOCUS:
-        SetFocus(GetDlgItem(dlg, IDD_RN_EDIT));
-        return 0;
-    case WM_COMMAND:
-        switch (LOWORD(wParam)) {
-        case IDD_RN_OK: {
-            RenameState* st = (RenameState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
-            if (st && st->out)
-                GetWindowTextW(GetDlgItem(dlg, IDD_RN_EDIT), st->out, st->cap);
-            DestroyWindow(dlg);
-            return 0;
-        }
-        case IDD_RN_CANCEL:
-            DestroyWindow(dlg);
-            return 0;
-        }
-        return 0;
-    case WM_DESTROY: {
-        return 0;
-    }
-    }
-    return DefWindowProcW(dlg, msg, wParam, lParam);
+    return g_tab_edit;
+}
+
+void os_tab_edit_handle_key(WPARAM key)
+{
+    if (key == VK_RETURN) tab_rename_commit();
+    else if (key == VK_ESCAPE) tab_rename_cancel();
+}
+
+/* 点击别处导致编辑框失焦 → 提交（由主窗口 WM_TIMER 3 周期调用） */
+void os_tab_edit_focus_check(void)
+{
+    HWND f;
+    if (!g_tab_edit || g_tab_edit_closing) return;
+    f = GetFocus();
+    if (!f || f == g_tab_edit) return;           /* 无焦点或仍在编辑框 → 保持 */
+    if (GetAncestor(f, GA_ROOT) == g_app.hMain)
+        tab_rename_commit();                      /* 焦点转到本应用其他窗口 → 提交 */
+    /* 焦点在本应用之外（其他程序/桌面）→ 保留编辑框，避免误提交 */
 }
 
 static void tab_set_title(int idx, const wchar_t* name)
@@ -1256,27 +1578,62 @@ static void tab_set_title(int idx, const wchar_t* name)
     os_log(OS_LOG_INFO, "标签已重命名: %s", name8);
 }
 
+static void tab_rename_commit(void)
+{
+    HWND e = g_tab_edit;
+    wchar_t text[160];
+    wchar_t* p, * q;
+    int idx = g_tab_edit_idx;
+    if (!e || idx < 0 || idx >= g_app.win_count) return;
+    g_tab_edit_closing = 1;
+    GetWindowTextW(e, text, 160);
+    /* 去首尾空白；空名 → 默认名 Default */
+    for (p = text; *p == L' ' || *p == L'\t'; p++) ;
+    q = p + wcslen(p);
+    while (q > p && (q[-1] == L' ' || q[-1] == L'\t')) q--;
+    *q = 0;
+    if (!p[0]) _snwprintf(text, 160, L"Default");
+    else _snwprintf(text, 160, L"%s", p);
+    g_tab_edit = NULL;
+    g_tab_edit_idx = -1;
+    DestroyWindow(e);
+    tab_set_title(idx, text);
+    g_tab_edit_closing = 0;
+}
+
+static void tab_rename_cancel(void)
+{
+    HWND e = g_tab_edit;
+    g_tab_edit_closing = 1;
+    g_tab_edit = NULL;
+    g_tab_edit_idx = -1;
+    if (e) DestroyWindow(e);
+    g_tab_edit_closing = 0;
+}
+
 static void tab_rename(int idx)
 {
-    HWND dlg;
-    RenameState* st;
-    wchar_t text[160];
+    RECT r;
+    HWND e;
     if (idx < 0 || idx >= g_app.win_count) return;
-    st = (RenameState*)calloc(1, sizeof(RenameState));
-    if (!st) return;
-    st->out = text;
-    st->cap = 160;
-    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgRename", L"重命名标签",
-                          WS_POPUP | WS_CAPTION | WS_SYSMENU,
-                          CW_USEDEFAULT, CW_USEDEFAULT, 410, 110,
-                          g_app.hMain, NULL, g_app.hInst, st);
-    if (!dlg) { free(st); return; }
-    SetWindowTextW(GetDlgItem(dlg, IDD_RN_EDIT), g_app.wins[idx].title);
-    run_modal(dlg, g_app.hMain);
-    free(st);
-    if (text[0]) {
-        tab_set_title(idx, text);
+    tab_rename_cancel(); /* 若正在编辑其他标签，先取消 */
+    if (!SendMessageW(g_app.hTab, TCM_GETITEMRECT, idx, (LPARAM)&r)) return;
+    e = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_LEFT,
+                        r.left + 2, r.top + 2, (r.right - r.left) - 4, (r.bottom - r.top) - 2,
+                        g_app.hTab, NULL, g_app.hInst, NULL);
+    if (!e) return;
+    SetWindowTextW(e, g_app.wins[idx].title);
+    SendMessageW(e, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(e, EM_SETSEL, 0, -1); /* 全选，便于直接输入替换 */
+    { /* N3: 记录就地编辑初始文本（供 UI 回归用，跨进程 WM_GETTEXT 对子控件不可靠） */
+        char title8[300];
+        os_wide_to_utf8_buf(g_app.wins[idx].title, title8, sizeof(title8));
+        os_log(OS_LOG_INFO, "就地编辑开始: %s", title8);
     }
+    g_tab_edit = e;
+    g_tab_edit_idx = idx;
+    SetFocus(e);
 }
 
 static void tab_rename_hit(void)
@@ -1331,8 +1688,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
                               650, 5, 62, 120, hwnd, (HMENU)IDC_CFG_IFACE, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                              716, 5, 92, 120, hwnd, (HMENU)IDC_CFG_SPEED, g_app.hInst, NULL);
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWN | WS_TABSTOP,
+                              716, 5, 92, 200, hwnd, (HMENU)IDC_CFG_SPEED, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
                               812, 5, 260, 120, hwnd, (HMENU)IDC_CFG_EMU, g_app.hInst, NULL);
@@ -1357,6 +1714,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                    0, 0, 100, 100, g_app.hRight, NULL, g_app.hInst, NULL);
         SendMessageW(g_app.hTab, TCM_SETITEMSIZE, 0, MAKELPARAM(150, 22));
         SendMessageW(g_app.hTab, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        g_app.hTreeStrip = CreateWindowW(L"OSTreeStrip", L"", WS_CHILD,
+                                         0, 34, 8, 400, hwnd, NULL, g_app.hInst, NULL);
+        g_app.hTreePin = CreateWindowW(L"OSTreePin", L"", WS_CHILD | WS_VISIBLE,
+                                       0, 36, 30, 22, hwnd, NULL, g_app.hInst, NULL);
         g_app.hLog = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                                      WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
                                      0, 500, 800, 170, hwnd, NULL, g_app.hInst, NULL);
@@ -1408,6 +1769,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         SetMenu(hwnd, g_menu);
         os_mainwin_rebuild_window_menu();
         SetTimer(hwnd, 1, 2000, NULL);
+        SetTimer(hwnd, 3, 200, NULL); /* N9(d): 变量栏自动隐藏轮询 */
+        g_app.tree_auto = 0;          /* 默认钉住常显（不影响既有操作） */
+        update_pin_button();
         os_log_set(os_mainwin_append_log);
         os_log(OS_LOG_INFO, "OpenScope 已启动");
         refresh_status();
@@ -1428,6 +1792,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_TIMER:
         if (wParam == 1) check_elf_mtime();
         else if (wParam == 2) os_replay_tick();
+        else if (wParam == 3) { tree_auto_tick(); os_tab_edit_focus_check(); }
         return 0;
     case WM_OS_SAMPLES:
         os_ds_drain();
@@ -1439,22 +1804,96 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     case WM_OS_WIN_CLOSED: {
         HWND w = (HWND)wParam;
-        int i;
-        for (i = 0; i < g_app.win_count; i++) {
-            if (g_app.wins[i].hwnd == w) {
-                OS_WinItem* wi = &g_app.wins[i];
-                if (wi->is_module && wi->mod && wi->mod->destroy_window)
-                    wi->mod->destroy_window(wi->mod_ctx, w);
-                if (IsWindow(w)) DestroyWindow(w);
-                memmove(&g_app.wins[i], &g_app.wins[i + 1],
-                        sizeof(OS_WinItem) * (g_app.win_count - i - 1));
-                g_app.win_count--;
-                break;
+        int i, k, found = 0;
+        if (w == g_app.fs_win) g_app.fs_win = NULL; /* 全屏窗口被关闭 */
+        if (w == g_cur_win) g_cur_win = NULL;
+        for (i = 0; i < g_app.win_count && !found; i++) {
+            OS_WinItem* wi = &g_app.wins[i];
+            for (k = 0; k < wi->group_count; k++) {
+                if (wi->group[k] == w) {
+                    /* 模块窗口销毁回调 */
+                    if (wi->is_module && wi->mod && wi->mod->destroy_window)
+                        wi->mod->destroy_window(wi->mod_ctx, w);
+                    if (IsWindow(w)) DestroyWindow(w);
+                    found = 1;
+                    if (wi->group_count == 1) {
+                        /* tab 内只剩这一个窗口 → 关闭整个 tab */
+                        memmove(&g_app.wins[i], &g_app.wins[i + 1],
+                                sizeof(OS_WinItem) * (g_app.win_count - i - 1));
+                        g_app.win_count--;
+                        if (g_cur_tab >= g_app.win_count) g_cur_tab = g_app.win_count - 1;
+                    } else {
+                        /* N11: 移除组内窗口；若关闭的是主窗口则提升组内下一个 */
+                        int gi;
+                        for (gi = k; gi < wi->group_count - 1; gi++) {
+                            wi->group[gi] = wi->group[gi + 1];
+                            _snwprintf(wi->group_title[gi], 128, L"%s", wi->group_title[gi + 1]);
+                        }
+                        wi->group_count--;
+                        if (k == 0) {
+                            wi->hwnd = wi->group[0];
+                            _snwprintf(wi->title, 128, L"%s", wi->group_title[0]);
+                        }
+                        if (wi->group_max >= wi->group_count) wi->group_max = -1;
+                        if (wi->group_max == k) wi->group_max = -1;
+                    }
+                    break;
+                }
             }
         }
         os_mainwin_tile();
         return 0;
     }
+    case WM_OS_WIN_MAXIMIZE: {
+        /* N11: 最大化/还原：wParam=HWND，所属 tab 内该窗口填满 tab（其余隐藏） */
+        HWND w = (HWND)wParam;
+        int i, k;
+        for (i = 0; i < g_app.win_count; i++) {
+            OS_WinItem* wi = &g_app.wins[i];
+            for (k = 0; k < wi->group_count; k++) {
+                if (wi->group[k] == w) {
+                    if (wi->group_max == k) wi->group_max = -1;   /* 还原平铺 */
+                    else wi->group_max = k;
+                    os_log(OS_LOG_INFO, "窗口%s: tab%d %d/%d",
+                           wi->group_max == k ? "最大化" : "还原", i, k, wi->group_count);
+                    layout_tab_pages();
+                    return 0;
+                }
+            }
+        }
+        return 0;
+    }
+    case WM_OS_WIN_FULLSCREEN: {
+        /* Bug3: 单窗口全屏/退出全屏。全屏时临时改父为主窗口并铺满整个客户区，
+           退出时改回 tab 页并重新平铺。 */
+        HWND w = (HWND)wParam;
+        if (g_app.fs_win == w) {
+            HWND old = g_app.fs_win;
+            g_app.fs_win = NULL;
+            if (old && IsWindow(old)) {
+                SetParent(old, g_app.hTab);
+                ShowWindow(old, SW_SHOW);
+            }
+            layout();
+            os_log(OS_LOG_INFO, "窗口退出全屏");
+        } else if (w && IsWindow(w)) {
+            RECT rc;
+            g_app.fs_win = w;
+            SetParent(w, g_app.hMain);
+            GetClientRect(g_app.hMain, &rc);
+            MoveWindow(w, 0, 0, rc.right, rc.bottom, TRUE);
+            BringWindowToTop(w);
+            SetFocus(w);
+            os_log(OS_LOG_INFO, "窗口全屏");
+        }
+        return 0;
+    }
+    case WM_OS_TREE_AUTOHIDE:
+        /* N9(d) 测试钩子：wParam=1 开启自动隐藏，0=钉住 */
+        g_app.tree_auto = wParam ? 1 : 0;
+        update_pin_button();
+        layout();
+        return 0;
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
         if (h && h->hwndFrom == g_app.hTab) {
@@ -1516,7 +1955,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.5.0\n\n"
+                        L"OpenScope v1.6.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -1569,6 +2008,31 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_TAB_RENAME:
             tab_rename(g_cur_tab);
             break;
+        case IDM_TAB_ADD_CHART: cmd_add_to_tab(1); break;
+        case IDM_TAB_ADD_NUM: cmd_add_to_tab(0); break;
+        case IDM_TAB_MAXIMIZE: {
+            /* 最大化/还原当前 tab 内活动窗口（无活动→首个），填满 tab */
+            OS_WinItem* wi;
+            int k = 0, i;
+            if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) break;
+            wi = &g_app.wins[g_cur_tab];
+            if (g_cur_win) {
+                for (i = 0; i < wi->group_count; i++)
+                    if (wi->group[i] == g_cur_win) { k = i; break; }
+            }
+            if (wi->group_max == k) wi->group_max = -1;
+            else wi->group_max = k;
+            os_log(OS_LOG_INFO, "窗口%s: tab%d %d/%d",
+                   wi->group_max == k ? "最大化" : "还原", g_cur_tab, k, wi->group_count);
+            layout_tab_pages();
+            break;
+        }
+        case IDM_TAB_FULLSCREEN:
+            if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
+                HWND w = g_cur_win ? g_cur_win : g_app.wins[g_cur_tab].hwnd;
+                PostMessage(hwnd, WM_OS_WIN_FULLSCREEN, (WPARAM)w, 0);
+            }
+            break;
         case IDM_TREE_WRITE: {
             HTREEITEM h = TreeView_GetSelection(g_app.hTree);
             if (h) {
@@ -1604,6 +2068,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_DESTROY:
         KillTimer(hwnd, 1);
         KillTimer(hwnd, 2);
+        KillTimer(hwnd, 3);
+        g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */
+        g_tab_edit_idx = -1;
         os_ds_stop();
         os_datalog_stop();
         os_replay_stop();
@@ -1638,6 +2105,18 @@ void os_mainwin_register(void)
     wc.lpszClassName = L"OSSplitter";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = tree_strip_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_SIZEWE);
+    wc.lpszClassName = L"OSTreeStrip";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = tree_pin_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = L"OSTreePin";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = right_panel_proc;
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
@@ -1655,11 +2134,5 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSDlgEdit";
-    RegisterClassW(&wc);
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = rename_proc;
-    wc.hInstance = g_app.hInst;
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = L"OSDlgRename";
     RegisterClassW(&wc);
 }
