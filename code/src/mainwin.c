@@ -414,6 +414,25 @@ HWND os_win_create_by_type(const char* type, const wchar_t* title)
 }
 
 /* 右侧面板：转发子控件（Tab）通知到主窗口 */
+/* F16: tab/右侧空白处右键 -> 新建窗口（新 tab）菜单 */
+static void new_win_context_menu(void)
+{
+    POINT pt;
+    HMENU m = CreatePopupMenu();
+    int i;
+    GetCursorPos(&pt);
+    AppendMenuW(m, MF_STRING, IDM_WIN_CHART, L"新建波形窗口");
+    AppendMenuW(m, MF_STRING, IDM_WIN_NUM, L"新建数值窗口");
+    for (i = 0; i < g_modwin_menu_count; i++) {
+        wchar_t wname[128];
+        os_utf8_to_wide_buf(g_modwin_menu[i].wt->display_name ? g_modwin_menu[i].wt->display_name
+                                                              : g_modwin_menu[i].wt->type, wname, 128);
+        AppendMenuW(m, MF_STRING, IDM_WIN_MODULE_BASE + i, wname);
+    }
+    TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    DestroyMenu(m);
+}
+
 static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     if (msg == WM_NOTIFY) {
@@ -421,6 +440,10 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
             SendMessageW(g_app.hMain, WM_NOTIFY, wp, lp);
             return 0;
         }
+    }
+    if (msg == WM_RBUTTONUP) { /* F16: 右侧空白处右键新建窗口 */
+        if (g_app.hMain) new_win_context_menu();
+        return 0;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
@@ -434,7 +457,7 @@ static void layout(void)
     bw = rc.right;
     sw = g_app.tree_w;
     logh = g_app.log_h;
-    right_h = rc.bottom - bh - logh - 22;
+    right_h = rc.bottom - bh - logh - 22 - 5; /* F14: 5px 横向分隔条（消息栏上下拉伸） */
     right_w = bw - sw - 5;
     /* 工具栏一行（菜单栏正下方）：全部按钮 + 接口/速度/J-Link设备/刷新 */
     {
@@ -499,7 +522,9 @@ static void layout(void)
     MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
-    MoveWindow(g_app.hLog, 0, bh + right_h, bw, logh, TRUE);
+    if (g_app.hSplitH && IsWindow(g_app.hSplitH))
+        MoveWindow(g_app.hSplitH, 0, bh + right_h, bw, 5, TRUE);
+    MoveWindow(g_app.hLog, 0, bh + right_h + 5, bw, logh, TRUE);
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
     SendMessageW(g_app.hStatus, SB_SETPARTS, 4, (LPARAM)parts);
@@ -524,6 +549,41 @@ static LRESULT CALLBACK split_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             GetCursorPos(&pt);
             ScreenToClient(GetParent(hwnd), &pt);
             SendMessage(GetParent(hwnd), WM_OS_SPLIT, (WPARAM)pt.x, 0);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (GetCapture() == hwnd) ReleaseCapture();
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, (HBRUSH)GetStockObject(GRAY_BRUSH));
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* ---------- F14 横向分隔条（消息栏上下拉伸） ---------- */
+
+static LRESULT CALLBACK splith_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_LBUTTONDOWN:
+        SetCapture(hwnd);
+        SetCursor(LoadCursor(NULL, IDC_SIZENS));
+        return 0;
+    case WM_MOUSEMOVE:
+        if (GetCapture() == hwnd) {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(GetParent(hwnd), &pt);
+            SendMessage(GetParent(hwnd), WM_OS_SPLIT_V, (WPARAM)pt.y, 0);
         }
         return 0;
     case WM_LBUTTONUP:
@@ -1462,14 +1522,68 @@ void os_fw_on_elf_reloaded(void)
 
 /* ---------- 主窗口 ---------- */
 
+/* Bug4: 收集全部选中叶变量 id（Ctrl 多选）。首个选中项用 TVGN_NEXTSELECTED + NULL。 */
+static int tree_selected_ids(int* out, int max)
+{
+    HTREEITEM h = TreeView_GetNextItem(g_app.hTree, NULL, TVGN_NEXTSELECTED);
+    int n = 0;
+    while (h && n < max) {
+        TVITEMW item;
+        memset(&item, 0, sizeof(item));
+        item.mask = TVIF_PARAM;
+        item.hItem = h;
+        if (TreeView_GetItem(g_app.hTree, &item) && item.lParam > 0)
+            out[n++] = (int)(item.lParam - 1);
+        h = TreeView_GetNextItem(g_app.hTree, h, TVGN_NEXTSELECTED);
+    }
+    return n;
+}
+
+/* Bug4 测试钩子辅助：深度优先收集全部叶子项（lParam>0）到 out，返回个数。
+ * 跨进程无法用指针式 TVM_SETITEMSTATE/TVM_GETITEM 编组，故叶子枚举必须在进程内完成。 */
+static int tree_collect_leaves(HTREEITEM h, HTREEITEM* out, int max)
+{
+    int n = 0;
+    while (h && n < max) {
+        TVITEMW it;
+        HTREEITEM child;
+        memset(&it, 0, sizeof(it));
+        it.mask = TVIF_PARAM;
+        it.hItem = h;
+        if (TreeView_GetItem(g_app.hTree, &it) && it.lParam > 0)
+            out[n++] = h;
+        child = (HTREEITEM)SendMessageW(g_app.hTree, TVM_GETNEXTITEM, TVGN_CHILD, (LPARAM)h);
+        if (child) n += tree_collect_leaves(child, out + n, max - n);
+        h = (HTREEITEM)SendMessageW(g_app.hTree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)h);
+    }
+    return n;
+}
+
+/* Bug4: 右键命中未选中项 -> 清空多选，单选该项（保持与单选树一致的手感） */
+static void tree_context_select_hit(void)
+{
+    TVHITTESTINFO ht;
+    POINT pt;
+    memset(&ht, 0, sizeof(ht));
+    GetCursorPos(&pt);
+    ScreenToClient(g_app.hTree, &pt);
+    ht.pt = pt;
+    TreeView_HitTest(g_app.hTree, &ht);
+    if (ht.hItem && !(TreeView_GetItemState(g_app.hTree, ht.hItem, TVIS_SELECTED) & TVIS_SELECTED))
+        TreeView_SelectItem(g_app.hTree, ht.hItem);
+}
+
 static void tree_context_menu(HWND hwnd, LPARAM lParam)
 {
-    HTREEITEM h = TreeView_GetSelection(g_app.hTree);
+    HTREEITEM h;
     LPARAM lp = -1;
+    int sel_count;
     HMENU m;
     POINT pt;
     (void)hwnd;
     (void)lParam;
+    tree_context_select_hit();
+    h = TreeView_GetSelection(g_app.hTree);
     if (h) {
         TVITEMW item;
         memset(&item, 0, sizeof(item));
@@ -1477,33 +1591,23 @@ static void tree_context_menu(HWND hwnd, LPARAM lParam)
         item.hItem = h;
         if (TreeView_GetItem(g_app.hTree, &item)) lp = item.lParam;
     }
+    {
+        int tmp[1];
+        sel_count = tree_selected_ids(tmp, 1);
+    }
     m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING, IDM_TREE_ALL, L"全选观测");
     AppendMenuW(m, MF_STRING, IDM_TREE_NONE, L"清除全部观测");
-    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_WRITE, L"写入值...");
+    AppendMenuW(m, MF_STRING | (sel_count == 1 && lp > 0 ? 0 : MF_GRAYED), IDM_TREE_WRITE, L"写入值...");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_CHART, L"添加到波形窗口");
-    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_NUM, L"添加到数值窗口");
-    AppendMenuW(m, MF_STRING | (lp <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_SCOPE, L"添加到示波器窗口");
+    AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_CHART, L"添加到波形窗口");
+    AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_NUM, L"添加到数值窗口");
+    AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_SCOPE, L"添加到示波器窗口");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TREE_RELOAD, L"重新加载 ELF");
     GetCursorPos(&pt);
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
     DestroyMenu(m);
-}
-
-static int tree_selected_leaf_id(void)
-{
-    HTREEITEM h = TreeView_GetSelection(g_app.hTree);
-    if (h) {
-        TVITEMW item;
-        memset(&item, 0, sizeof(item));
-        item.mask = TVIF_PARAM;
-        item.hItem = h;
-        if (TreeView_GetItem(g_app.hTree, &item) && item.lParam > 0)
-            return (int)(item.lParam - 1);
-    }
-    return -1;
 }
 
 static HWND active_win_hwnd(void)
@@ -1513,13 +1617,12 @@ static HWND active_win_hwnd(void)
     return NULL;
 }
 
-/* 添加到原生波形/数值窗口：优先当前激活窗口，否则已有同类型窗口，否则新建 */
+/* Bug4: 添加到原生波形/数值窗口（全部选中变量）：优先当前激活窗口，否则已有同类型窗口，否则新建 */
 static void tree_add_to_native(int chart)
 {
-    int id = tree_selected_leaf_id();
+    int ids[512], n = 0, i;
     HWND w;
-    int i;
-    if (id < 0) return;
+    if ((n = tree_selected_ids(ids, 512)) <= 0) return;
     w = active_win_hwnd();
     if (!w || g_app.wins[g_cur_tab].is_module ||
         (chart ? !os_chart_is(w) : !os_num_is(w))) {
@@ -1535,8 +1638,11 @@ static void tree_add_to_native(int chart)
         }
     }
     if (w) {
-        if (chart) os_chart_add_var(w, id);
-        else os_num_add_var(w, id);
+        for (i = 0; i < n; i++) {
+            if (chart) os_chart_add_var(w, ids[i]);
+            else os_num_add_var(w, ids[i]);
+        }
+        os_log(OS_LOG_INFO, "树右键批量添加变量: %d 个", n);
     }
 }
 
@@ -1550,15 +1656,14 @@ static int module_has_type(const OS_Module* m, const char* type)
     return 0;
 }
 
-/* 添加到示波器（scope.bar）窗口：优先当前激活窗口，否则已有，否则新建 */
+/* Bug4: 添加到示波器（scope.bar）窗口（全部选中变量）：优先当前激活窗口，否则已有，否则新建 */
 static void tree_add_to_scope(void)
 {
-    int id = tree_selected_leaf_id();
+    int ids[512], n = 0, i;
     OS_Module* m = NULL;
     void* ctx = NULL;
     HWND w = NULL;
-    int i;
-    if (id < 0) return;
+    if ((n = tree_selected_ids(ids, 512)) <= 0) return;
     if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
         OS_WinItem* wi = &g_app.wins[g_cur_tab];
         if (wi->is_module && wi->mod && module_has_type(wi->mod, "scope.bar")) {
@@ -1591,8 +1696,10 @@ static void tree_add_to_scope(void)
             }
         }
     }
-    if (m && m->api_version >= 2 && m->win_add_var && w)
-        m->win_add_var(ctx, w, id);
+    if (m && m->api_version >= 2 && m->win_add_var && w) {
+        for (i = 0; i < n; i++) m->win_add_var(ctx, w, ids[i]);
+        os_log(OS_LOG_INFO, "树右键批量添加变量: %d 个", n);
+    }
 }
 
 static void tab_context_menu(void)
@@ -1608,7 +1715,10 @@ static void tab_context_menu(void)
             if (PtInRect(&r, pt)) { hit = i; break; }
         }
     }
-    if (hit < 0) return;
+    if (hit < 0) { /* F16: tab 标签条空白处右键 -> 新建窗口 */
+        new_win_context_menu();
+        return;
+    }
     g_cur_tab = hit;
     SendMessageW(g_app.hTab, TCM_SETCURSEL, hit, 0);
     show_tab(hit);
@@ -1800,6 +1910,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                       0, 34, 340, 400, hwnd, NULL, g_app.hInst, NULL);
         SendMessageW(g_app.hTree, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         TreeView_SetUnicodeFormat(g_app.hTree, TRUE);
+        /* Bug4: 树扩展样式开启多选（Ctrl 单击连续多选 / Shift 起止范围选） */
+        TreeView_SetExtendedStyle(g_app.hTree, TVS_EX_MULTISELECT, 0);
         g_app.hSplitV = CreateWindowW(L"OSSplitter", L"", WS_CHILD | WS_VISIBLE,
                                       340, 34, 5, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hRight = CreateWindowExW(WS_EX_CLIENTEDGE, g_right_class, L"",
@@ -1814,9 +1926,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                          0, 34, 8, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hTreePin = CreateWindowW(L"OSTreePin", L"", WS_CHILD | WS_VISIBLE,
                                        0, 36, 30, 22, hwnd, NULL, g_app.hInst, NULL);
+        g_app.hSplitH = CreateWindowW(L"OSSplitterH", L"", WS_CHILD | WS_VISIBLE,
+                                      0, 500, 800, 5, hwnd, NULL, g_app.hInst, NULL);
         g_app.hLog = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                                      WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL,
-                                     0, 500, 800, 170, hwnd, NULL, g_app.hInst, NULL);
+                                     0, 505, 800, 165, hwnd, NULL, g_app.hInst, NULL);
         ListView_SetExtendedListViewStyle(g_app.hLog, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
         {
             LVCOLUMNW col;
@@ -1885,6 +1999,36 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if ((int)wParam > 120 && (int)wParam < 900) g_app.tree_w = (int)wParam;
         layout();
         return 0;
+    case WM_OS_SPLIT_V: {
+        /* F14: 消息栏上下拉伸：log_h = 主窗口高 - 34(工具行) - 27(状态栏+分隔条) - 分隔条 y */
+        RECT rv;
+        int y = (int)wParam;
+        GetClientRect(hwnd, &rv);
+        g_app.log_h = rv.bottom - 34 - 27 - y;
+        if (g_app.log_h < 40) g_app.log_h = 40;
+        if (g_app.log_h > rv.bottom - 120) g_app.log_h = rv.bottom - 120;
+        layout();
+        return 0;
+    }
+    case WM_OS_TREE_TEST_SELECT: {
+        /* Bug4 测试钩子：程序化选中树文档序叶子项 [start, start+count)（等价 Ctrl 手选）。
+         * 返回实际选中叶子数；调用方可用返回值和后续"批量添加"日志验证多选行为。 */
+        int start = (int)wParam, cnt = (int)lParam, n, i, sel = 0;
+        HTREEITEM items[1024];
+        HTREEITEM root = (HTREEITEM)SendMessageW(g_app.hTree, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+        n = tree_collect_leaves(root, items, 1024);
+        for (i = 0; i < n; i++) {
+            TVITEMW it;
+            memset(&it, 0, sizeof(it));
+            it.mask = TVIF_STATE;
+            it.stateMask = TVIS_SELECTED;
+            it.hItem = items[i];
+            it.state = (i >= start && i < start + cnt) ? TVIS_SELECTED : 0;
+            TreeView_SetItem(g_app.hTree, &it);
+            if (it.state) sel++;
+        }
+        return sel;
+    }
     case WM_TIMER:
         if (wParam == 1) check_elf_mtime();
         else if (wParam == 2) os_replay_tick();
@@ -2051,7 +2195,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.7.0\n\n"
+                        L"OpenScope v1.8.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -2199,6 +2343,12 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_SIZEWE);
     wc.lpszClassName = L"OSSplitter";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = splith_proc;   /* F14: 消息栏上下拉伸分隔条 */
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_SIZENS);
+    wc.lpszClassName = L"OSSplitterH";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = tree_strip_proc;

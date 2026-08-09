@@ -28,6 +28,8 @@
 #define WM_OS_TREE_AUTOHIDE (WM_APP + 9) /* N9(d): 变量栏自动隐藏开关 (wParam=0/1，测试钩子) */
 #define WM_OS_WIN_FULLSCREEN (WM_APP + 10) /* Bug3: 单窗口全屏/退出全屏 (wParam=HWND) */
 #define WM_OS_PICK_TEST_SELECT (WM_APP + 30) /* N13a 测试钩子：变量选择对话框选中范围 [wParam, wParam+lParam) */
+#define WM_OS_SPLIT_V (WM_APP + 11) /* F14: 横向分隔条拖动，wParam=主窗口客户区 y 坐标 */
+#define WM_OS_TREE_TEST_SELECT (WM_APP + 12) /* Bug4 测试钩子：程序化选中树文档序叶子项 [wParam, wParam+lParam)，返回叶子总数 */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 
@@ -71,7 +73,7 @@ typedef struct OS_WinItem {
 
 typedef struct OS_App {
     HINSTANCE hInst;
-    HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hBtnBar, hTab;
+    HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hSplitH, hBtnBar, hTab;
     HWND hTreeStrip;       /* N9(d): 变量栏隐藏后左侧细条（悬停展开） */
     HWND hTreePin;         /* N12: 变量栏顶部钉图标按钮（钉住/自动隐藏） */
     int tree_w, log_h;

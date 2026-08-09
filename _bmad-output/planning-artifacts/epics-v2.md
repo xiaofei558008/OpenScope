@@ -1,7 +1,7 @@
-# OpenScope Epics & Stories（v3：request.md 更新版全覆盖）
+# OpenScope Epics & Stories（v4：request.md 更新版全覆盖）
 
 > BMAD 规划工件。覆盖 request.md 全量需求（含更新后的特性 3/6、新增 8~13、Bug 1~3、需求 9）。
-> 生成日期：2026-08-09。关联 checkpoint-17 基线（v1.6.0，特性 8~12/Bug1~3 已完成，checkpoint-17 起 git tag + 双远端推送）。
+> 生成日期：2026-08-09。关联 checkpoint-18 基线（v1.7.0，特性 13 + 需求9 已完成）。本轮 Epic 8：F14 消息栏拉伸 / F16 右键新建窗口 / Bug4 树 Ctrl 多选批量添加 / Bug5 去波形标题+圆点消失修复。**checkpoint-19（v1.8.0）已完成：Story 8.2~8.5 全部 DONE，全量回归 dev+installed ALL PASS，tag v1.8.0 双远端已推送。**
 
 ## Requirements Inventory（request.md 全量）
 
@@ -24,6 +24,10 @@
 | B3 | 标签页窗口缩放/最大化/最小化未实现；单tab多窗口不支持；**增加单窗口全屏/退出全屏** | 🔄 需补全屏 | mainwin.c N11/Bug3 |
 | F13 | 波形分析增强：变量多选、Ctrl+B 逐行堆叠、多轴左置、采样圆点、光标/Δ/HUD | 🆕 checkpoint-18 | mainwin/chartwin |
 | R9 | 每次开发后填写 checkpoint、提交 git、**添加 tag 并推送 gitee_origin 与 github_origin** | 🆕 checkpoint-18 | 流程 |
+| F14 | 底部消息栏支持上下拉伸，方便调整各区域展示内容 | ✅ checkpoint-19 DONE | mainwin.c |
+| F16 | tab 和右侧空白处右键支持新建 tab（波形/数值/示波器窗口） | ✅ checkpoint-19 DONE | mainwin.c |
+| B4(补) | 左侧 elf 变量列表：Ctrl 连续选择多变量 + 右键批量添加到窗口（波形/数值/示波器） | ✅ checkpoint-19 DONE | mainwin.c tree |
+| B5(补) | 波形窗口内部文字“波形窗口1”去掉；采样点圆点随录制时间增长全部消失需修复 | ✅ checkpoint-19 DONE | chartwin.c |
 
 ## Epic 5：窗口管理完善（N3 就地重命名 + N6 删关于 + Bug3 全屏）
 
@@ -83,10 +87,33 @@
 - AC：每次 checkpoint 完成后：版本号 bump → 打包安装 → 回归 → git 提交并打 tag（`v1.7.0`…）→ 推送 gitee_origin 与 github_origin 两个远端。
 - 文件：无（流程）。`git remote -v` 已确认：gitee_origin=git@gitee.com:xiaofei558008/open-scope.git，github_origin=git@github.com:xiaofei558008/OpenScope.git。
 
+## Epic 8：布局交互完善 + 树多选 + 波形显示修复（F14/F16/Bug4补/Bug5补，checkpoint-19）
+
+### Story 8.2 — 消息栏上下拉伸（F14） ✅ checkpoint-19 DONE
+- AC：右侧窗口区与底部日志栏之间出现横向分隔条；拖动分隔条上下调整日志栏高度（限制 40~400px）；关闭/启动后布局恢复含 log_h。
+- 文件：mainwin.c（新增 hSplitH 横向分隔条 + WM_OS_SPLIT_V 处理，log_h 变更后 layout()）、app.h。
+- 测试：ui_logsplit_drive.ps1（拖动分隔条 -> 日志栏尺寸变化，布局保存恢复）。
+
+### Story 8.3 — tab/右侧空白右键新建窗口（F16） ✅ checkpoint-19 DONE
+- AC：tab 标签条空白处右键弹出菜单：新建波形窗口/数值窗口/示波器窗口（新 tab）；右侧面板空白处右键同样弹出；入口与窗口菜单复用。
+- 文件：mainwin.c（tab_context_menu 空区分支；right_panel_proc 右键转发）。
+- 测试：ui_rightmenu_drive.ps1（右键空白 -> 菜单 -> 新建窗口日志）。
+
+### Story 8.4 — 树 Ctrl 多选 + 右键批量添加（Bug4补） ✅ checkpoint-19 DONE
+- AC：变量树启用 TVS_MULTISELECT（Ctrl 单击连续多选/Shift 范围）；右键选中多项时“添加到波形/数值/示波器窗口”批量添加全部选中叶变量；右键未选中项则单选该项，右键空白保持多选。
+- 文件：mainwin.c（树创建加 TVS_MULTISELECT；tree_context_menu / tree_add_to_native / tree_add_to_scope 遍历 TVGN_NEXTSELECTED）。
+- 测试：ui_tree_multisel_drive.ps1（程序化多选 -> 右键批量添加日志条数==选中数）。
+
+### Story 8.5 — 去波形标题 + 圆点消失修复（Bug5补） ✅ checkpoint-19 DONE
+- AC：波形窗口内部不再绘制“波形窗口 1”标题文字（保留右上 × 与标题栏点击区域）；采样点圆点按“可见时间窗内实际绘制点数（<=120）”判定而非缓冲区总点数，录制时间变长后放大仍显示圆点。
+- 文件：chartwin.c（chart_draw 删除标题 DrawText；chart_draw_series 圆点判定改用可见点数）。
+- 测试：ui_chart_n13_drive.ps1 扩展（长时间回放放大后圆点仍显示日志/不闪退）。
+
 ## Sprint 计划
 
 - Sprint-7：Story 7.1 → 7.2/7.3 → 7.4（N13a→N13b/c/d→N13e/f/g）
 - Sprint-8：全量回归（dev+installed）→ 版本 1.7.0 打包安装 → checkpoint-18 提交 + tag v1.7.0 + 推送双远端
+- Sprint-9：Story 8.2 → 8.3 → 8.4 → 8.5（F14 → F16 → Bug4补 → Bug5补）→ 全量回归（dev+installed）→ 版本 1.8.0 打包安装 → checkpoint-19 提交 + tag v1.8.0 + 推送双远端 ✅ checkpoint-19 DONE（14 项回归 dev+installed 全部 ALL PASS；tag v1.8.0 已推送 gitee_origin + github_origin）
 
 ## 验收风险
 

@@ -109,6 +109,14 @@
   - 测试：新增 `tests/ui_pick_multi_drive.ps1`（N13a：ListView 结构/扩展样式/模糊搜索填充 178 项/范围选中含起止/全选首末项/批量添加 2 个 + 条数核对）与 `tests/ui_chart_n13_drive.ps1`（N13b-g：堆叠切换/滚轮放大/两次点击 Δ 测量/光标 HUD 渲染），dev+installed 两版全部 ALL PASS；连同既有 ui_rename/ui_windows/ui_chartview/ui_layout/ui_n9_watch/ui_bug2_restore/ui_features/ui_connect 全套回归 dev+installed 全部 ALL PASS；构建 0 error/0 warning。
   - 版本 1.7.0：重新打包 `dist/OpenScope-Setup-1.7.0.exe`（10.4MB），安装版验证版本 1.7.0.0。
   - 需求 9：checkpoint-18 提交 git + `git tag v1.7.0` + 推送 `gitee_origin` 与 `github_origin` 双远端（首个 tag，便于 checkpoint 管理）。
+- **checkpoint-19（2026-08-09）**：完成 request.md 新增特性 14/16 + Bug 4/5 补充（1.8.0）。
+  - F14 消息栏上下拉伸：新增横向分隔条 `OSSplitterH`（菜单栏/工具栏与消息栏之间，5px，IDC_SIZENS 光标），拖动发送 `WM_OS_SPLIT_V`（WM_APP+11）按"主窗高 - 34 - 27 - 分隔条 y"实时调整 `log_h`（clamp [40, 窗高-120]），layout() 同时移动消息栏；`log_h` 继续随布局保存/恢复。
+  - F16 tab/右侧空白右键新建窗口：`OSRightPanel` 右键（WM_RBUTTONUP）与 tab 标签条空白处右键（NM_RCLICK → hit<0）均弹"新建波形/数值/示波器窗口"上下文菜单（new_win_context_menu，含全部模块窗口项）。
+  - Bug4 补充 树 Ctrl 多选批量添加：树改 `TVS_EX_MULTISELECT` 扩展样式（`TreeView_SetExtendedStyle`，TVS_MULTISELECT 为不存在的基本样式常量；`TVGN_FIRSTSELECTED` 未定义，用 `TVGN_NEXTSELECTED(NULL)` 取首个选中）；新增 `tree_selected_ids` 收集全部选中叶 id、`tree_context_select_hit`（右键未选中项则单选命中项）；"添加到波形/数值/示波器"全部走批量路径（新增 `tree_add_to_native`/`tree_add_to_scope`，优先当前激活窗口），日志 `树右键批量添加变量: N 个`。
+  - Bug5 补充 波形内部标题 + 圆点消失：chart_draw 移除内部标题文字"波形窗口1"绘制；圆点判定由"缓冲总点数 npts<=120"改为"可见时间窗 [x0,x1] 内实际绘制点数 vis_npts<=120"，录制再长放大后圆点仍显示（状态变化记 `波形采样点圆点: 可见 N 点` 调试日志）。
+  - 测试：新增 `tests/ui_logsplit_drive.ps1`（F14：拖 170→100→220 消息栏高度跟随 + 不闪退）、`tests/ui_rightmenu_drive.ps1`（F16：右侧/tab 空白右键弹出 #32768 菜单 + WM_CANCELMODE 关闭 + 不闪退）、`tests/ui_tree_multisel_drive.ps1`（Bug4：`WM_OS_TREE_TEST_SELECT` 进程内选择测试钩子选 3/2/4 个叶批量添加到波形/数值/示波器 + 逐变量日志核对）、`tests/ui_chart_bug5_drive.ps1`（Bug5：`chart_replay_long.csv` 2000 采样点长回放 + 滚轮放大 15 次 → `波形采样点圆点: 可见 N 点` + 不闪退）；连同既有 ui_rename/ui_windows/ui_chartview/ui_layout/ui_n9_watch/ui_bug2_restore/ui_features/ui_pick_multi/ui_chart_n13/ui_connect 全套回归 dev+installed 全部 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.8.0：重新打包 `dist/OpenScope-Setup-1.8.0.exe`（10.4MB），安装版验证版本 1.8.0.0。
+  - 需求 9：checkpoint-19 提交 git + `git tag v1.8.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -152,16 +160,20 @@
 - [x] 11 窗口最大化填满 tab + 一个 tab 多窗口（checkpoint-17）
 - [x] 12 左侧 elf 栏钉图标 + 自动隐藏（checkpoint-17）
 - [x] 13 波形窗口分析增强：多选添加变量 / 多坐标轴左置 + Ctrl+B 堆叠 / 放大采样点圆点 / 光标 Δ 测量 / 悬停数值 HUD（checkpoint-18）
+- [x] 14 底部消息栏支持上下拉伸（checkpoint-19）
+- [x] 16 tab 和右侧空白处右键新建 tab（波形/数值/示波器窗口）（checkpoint-19）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送）
 
 ## Bug（request.md，已修复）
 
 - [x] Bug1 添加 2 个变量后 App 异常退出（checkpoint-17）
 - [x] Bug2 关闭重开任务栏有图标但窗口不可见（checkpoint-17）
 - [x] Bug3 单窗口全屏/退出全屏（checkpoint-17）
+- [x] Bug4 左侧变量栏自动隐藏/钉住 + Ctrl 多选批量添加到窗口（checkpoint-17 / checkpoint-19）
+- [x] Bug5 去掉波形内部标题"波形窗口1" + 放大采样点圆点录制变长后消失（checkpoint-19）
 
 ## 总结
 

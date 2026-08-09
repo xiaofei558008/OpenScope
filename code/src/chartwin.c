@@ -329,8 +329,32 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
     int start = chart_vis_start(sr, view_all, cw->npoints);
     int npts = sr->count - start;
     int j, first = 1;
+    int vis_npts = 0;
     HPEN pen, old;
-    int dots = (npts > 0 && npts <= 120); /* N13d: 放大后采样点圆点 */
+    int dots;
+    /* Bug5 修复：圆点按“可见时间窗 [x0,x1] 内实际绘制的采样点数”判定，而非缓冲区总点数——
+       否则录制时间越长 npts 越大，放大后圆点也全部消失。 */
+    if (have_t && x1 > x0) {
+        for (j = 0; j < npts; j++) {
+            int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
+            if (idx < 0) idx += OS_CHART_HIST;
+            if (sr->ts[idx] == 0 || sr->ts[idx] == -1) continue;
+            if (sr->ts[idx] < x0 || sr->ts[idx] > x1) continue;
+            vis_npts++;
+        }
+    } else {
+        vis_npts = npts;
+    }
+    dots = (vis_npts > 0 && vis_npts <= 120); /* N13d/Bug5: 放大后采样点圆点 */
+    {
+        static int dots_was = 0; /* 状态变化才记日志，避免每帧刷屏 */
+        if (dots) {
+            if (!dots_was) os_log(OS_LOG_DEBUG, "波形采样点圆点: 可见 %d 点", vis_npts);
+            dots_was = 1;
+        } else {
+            dots_was = 0;
+        }
+    }
     pen = CreatePen(PS_SOLID, 1, sr->color);
     old = (HPEN)SelectObject(hdc, pen);
     for (j = 0; j < npts; j++) {
@@ -418,8 +442,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         SelectObject(hdc, font);
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
-        RECT tr = { 4, 2, rc.right - 22, th - 2 };
-        DrawTextW(hdc, cw->title, -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        /* Bug5: 不再绘制内部标题文字“波形窗口 N”（tab 标签已展示名称），保留右上 × */
         RECT xr = { rc.right - 20, 2, rc.right - 4, th - 2 };
         DrawTextW(hdc, L"×", -1, &xr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         if (cw->stacked) {
