@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/openscope-elf",
+    "crates/openscope-jlink",
+    "crates/openscope-app",
+]
+
+[workspace.package]
+version = "2.0.0"
+edition = "2021"
+license = "Proprietary"
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
+panic = "abort"

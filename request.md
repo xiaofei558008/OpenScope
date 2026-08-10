@@ -19,7 +19,7 @@ BMAD管理和规划整个开发、测试流程；全程自动化，不再需要�
 9、每次开发后填好checkout point，并提交git，添加tag 并推送到远端仓库gitee_origin 和git_hub 远端仓库，便于checkpoint 管理；
 10、每次BMAD执行完全部任务，请用windows 发出语音，“任务执行完毕”，提示我来检查；
 11、软件打包好之后，发布到云服务器上去，www.opendebugger.com，目录为：D:\OpenDebugger，里面包含request.md
-
+12、请用rust 语言重写当前软件，软件版本从2.0.0开始；
 
 ## 新增特性：
 1、关闭软件时，记录软件的页面布局，方便下次启动软件后恢复上次调试界面；

@@ -1,0 +1,8 @@
+[package]
+name = "openscope-jlink"
+version.workspace = true
+edition.workspace = true
+description = "J-Link driver for OpenScope (FFI to JLink_x64.dll)"
+
+[dependencies]
+libloading = "0.8"

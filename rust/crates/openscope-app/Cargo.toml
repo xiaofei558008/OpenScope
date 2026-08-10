@@ -1,0 +1,26 @@
+[package]
+name = "openscope-app"
+version.workspace = true
+edition.workspace = true
+description = "OpenScope 2.x - MCU variable acquisition & calibration (Rust rewrite)"
+
+[dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
+    "Win32_UI_Shell",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_System_Com",
+    "Win32_System_Memory",
+    "Win32_System_Services",
+] }
+openscope-elf = { path = "../openscope-elf" }
+openscope-jlink = { path = "../openscope-jlink" }
+libloading = "0.8"
+
+[build-dependencies]
