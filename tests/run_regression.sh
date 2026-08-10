@@ -24,6 +24,7 @@ NON_JLINK=(
   ui_chart_flicker_drive.ps1
   ui_log_select_drive.ps1
   ui_tree_autohide_drive.ps1
+  ui_tree_toggle_drive.ps1
 )
 JLINK=(
   ui_record_dialog_drive.ps1

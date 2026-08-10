@@ -1,5 +1,5 @@
 # generated: 2026-08-08
-# last_updated: 2026-08-08
+# last_updated: 2026-08-10
 # project: OpenScope
 # project_key: NOKEY
 # tracking_system: file-system
@@ -24,7 +24,7 @@
 #   - done: Retrospective has been completed
 
 generated: 2026-08-08
-last_updated: 2026-08-08
+last_updated: 2026-08-10
 project: OpenScope
 project_key: NOKEY
 tracking_system: file-system
@@ -55,3 +55,6 @@ development_status:
   4-2-variable-fuzzy-search-and-series-management: done
   4-3-realtime-curve-and-value-writeback: done
   epic-4-retrospective: optional
+
+  # request.md 新增特性 20（checkpoint-24, v1.10.0）：左侧 elf 变量栏折叠/展开按钮（Drawer Toggle）
+  feature-20-drawer-toggle: done

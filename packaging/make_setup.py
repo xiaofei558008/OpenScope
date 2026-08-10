@@ -86,7 +86,7 @@ def main():
         r = subprocess.run([sys.executable, publish_py], cwd=ROOT)
         if r.returncode:
             raise SystemExit(f"[make_setup] publish failed rc={r.returncode}")
-        print(f"[make_setup] 发布完成 ✅ https://www.opendebugger.com/downloads/")
+        print("[make_setup] 发布完成 [OK] https://www.opendebugger.com/downloads/")
 
 
 if __name__ == "__main__":

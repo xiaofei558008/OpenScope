@@ -31,6 +31,7 @@
 #define WM_OS_SPLIT_V (WM_APP + 11) /* F14: 横向分隔条拖动，wParam=主窗口客户区 y 坐标 */
 #define WM_OS_TREE_TEST_SELECT (WM_APP + 12) /* Bug4 测试钩子：程序化选中树文档序叶子项 [wParam, wParam+lParam)，返回叶子总数 */
 #define WM_OS_LOG (WM_APP + 13) /* Bug7: 日志跨线程安全——非主线程日志经 PostMessage 到主线程插入 ListView（wParam=OS_LogMsg*） */
+#define WM_OS_TREE_TOGGLE (WM_APP + 14) /* F20 测试钩子：变量栏折叠/展开 (wParam=0 展开 / 1 折叠 / 2 切换) */
 #define WM_OS_LOG_TEST_SELECT (WM_APP + 31) /* Bug13 测试钩子：程序化选中日志 [wParam, wParam+lParam)，返回实际选中数 */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
@@ -78,9 +79,12 @@ typedef struct OS_App {
     HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hSplitH, hBtnBar, hTab;
     HWND hTreeStrip;       /* N9(d): 变量栏隐藏后左侧细条（悬停展开） */
     HWND hTreePin;         /* N12: 变量栏顶部钉图标按钮（钉住/自动隐藏） */
+    HWND hTreeHeader;      /* F20: 变量栏顶部头部栏背景（btnface + "变量" 标签） */
+    HWND hTreeToggle;      /* F20: 变量栏折叠/展开按钮（展开态画 ❮，点击折叠） */
     int tree_w, log_h;
     int tree_auto;         /* N9(d): 1=变量栏自动隐藏，0=钉住常显 */
-    int tree_hidden;       /* 当前变量栏是否已自动隐藏 */
+    int tree_hidden;       /* 当前变量栏是否已隐藏 */
+    int tree_force_hidden; /* F20: 1=用户显式折叠（钉住时 tick 不再强制展开） */
     HWND fs_win;           /* Bug3: 当前全屏窗口（NULL=无） */
 
     OS_ElfFile* elf;

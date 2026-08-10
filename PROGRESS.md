@@ -154,6 +154,14 @@
   - 下载修复：用户反馈"只下载到名为'下载'的文本文件"——根因是 `Content-Disposition: attachment` 未带 `filename=`，且嵌套正则 `^/downloads/([^/]+\.exe)$` 无法匹配 `/downloads/openscope/` 子目录路径。修复为 `Content-Disposition: attachment; filename="$1"` + 正则 `([^/]+\.(?:exe|zip|...))$`（捕获任意层级文件名）。修复后响应头 `Content-Disposition: attachment; filename="OpenScope-Setup-1.8.3.exe"`，SHA256 与本地一致。
   - 操作文档：`RELEASE.md`（一键发布 `python packaging\make_setup.py --publish`）。
   - 注：发布涉及服务器修改（nginx/证书/文件）需 sudo，密码见 request.md；publish.py 走本机免密 scp 无需 sudo。
+- **checkpoint-24（2026-08-10）**：request.md 新增特性 20（左侧 elf 变量栏折叠/展开按钮，Drawer Toggle）+ 需求 11 发布 v1.10.0（1.10.0）。
+  - F20 折叠/展开按钮：主界面左侧变量栏顶部新增头部栏（`OSTreeHeader`，btnface 灰底 + “变量”标签）与折叠/展开按钮（`OSTreeToggle`，展开态画 ❮，点击折叠）。新增状态 `tree_force_hidden`：用户显式折叠后，钉住（tree_auto）模式下 tick 不再强制展开；点击细条/“变量”区域仍可展开。布局：头部栏 (0, bh, tree_w, 24)，折叠按钮靠左 (2, bh+1, 22, 22)，钉住按钮右移到 (tree_w-34, bh+1, 30, 22)，变量树下移 (0, bh+24, tree_w, …)；tree_hidden 时头部栏/按钮/树全部隐藏。窗口类带 `COLOR_BTNFACE` 背景刷，WM_PRINT 支持便于测试截图。
+  - 测试钩子：新增 `WM_OS_TREE_TOGGLE`（WM_APP+14，wParam 0=展开/1=折叠/2=切换）进程内消息钩子，驱动 UI 回归测试。
+  - 回归：新增 `tests/ui_tree_toggle_drive.ps1`（26 项断言：初始展开/折叠按钮可见/点击折叠/钉住保持折叠/细条展开/消息钩子 0/1/2/自动隐藏模式/不闪退，全部 PASS）；`tests/run_regression.sh` 纳入新脚本；全量回归 dev + 安装版 **40/40 ALL PASS**（17 非 J-Link + 3 J-Link × 2 变体）；构建 0 error/0 warning。
+  - 视觉验证：像素级采样确认折叠按钮画 ❮ 字形、头部栏灰底渲染正确（btnface 243）；窗口几何 GetWindowRect 验证（头部 340x24、折叠钮左侧、钉住钮右侧、树在其下无重叠）。
+  - 版本 1.10.0：`version.rc`/`main.c`/`jlink.c`/`openscope.iss`/关于框全部升到 1.10.0；重新打包 `dist/OpenScope-Setup-1.10.0.exe`，安装版验证版本 1.10.0.0 + 启动日志 `OpenScope 启动 (version 1.10.0)` + 40/40 回归全通过。
+  - 需求 11：发布 `dist/OpenScope-Setup-1.10.0.exe`（10364598 bytes）到 www.opendebugger.com（`python packaging\make_setup.py --publish`）；下载页 HTTP 200 + 最新包 HTTP 200 + 本地/远程 SHA256 一致 `ae5f3fd2...`；页面最新版 v1.10.0、历史版本 1.4.1~1.9.0 正常，排除上次会话 rust 实验残留的伪版本 1.11.0~1.13.0（移入 `dist/_stale/`，仅页面下线，服务器文件未删）；修复 make_setup.py 末尾 `✅` 在 GBK 控制台 UnicodeEncodeError → ASCII `[OK]`。
+  - 需求 9：checkpoint-24 提交 git + `git tag v1.10.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
@@ -199,10 +207,11 @@
 - [x] 13 波形窗口分析增强：多选添加变量 / 多坐标轴左置 + Ctrl+B 堆叠 / 放大采样点圆点 / 光标 Δ 测量 / 悬停数值 HUD（checkpoint-18）
 - [x] 14 底部消息栏支持上下拉伸（checkpoint-19）
 - [x] 16 tab 和右侧空白处右键新建 tab（波形/数值/示波器窗口）（checkpoint-19）
+- [x] 20 左侧 elf 变量栏折叠/展开按钮（Drawer Toggle，左右箭头抽屉开关）（checkpoint-24）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 

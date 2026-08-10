@@ -44,6 +44,8 @@
 #define IDM_LOG_COPY    2601 /* Bug13: 复制选中消息到剪贴板 */
 #define IDM_LOG_CLEAR   2602 /* Bug13: 全部清除 */
 
+#define OS_TREE_HDR     24  /* F20: 变量栏顶部头部栏高度（折叠按钮 + 钉按钮 + 标签） */
+
 /* 连接配置控件（直接放主界面工具栏，不弹对话框） */
 #define IDC_CFG_DEVICE   2101
 #define IDC_CFG_IFACE    2102
@@ -598,14 +600,33 @@ static void layout(void)
             ShowWindow(g_app.hTreeStrip, SW_HIDE);
         if (IsWindow(g_app.hTree)) ShowWindow(g_app.hTree, SW_SHOW);
     }
+    /* F20: 变量栏头部栏（btnface 背景 + 标签），内部放折叠按钮（左）与钉按钮（右） */
+    if (g_app.hTreeHeader && IsWindow(g_app.hTreeHeader)) {
+        if (g_app.tree_hidden) {
+            ShowWindow(g_app.hTreeHeader, SW_HIDE);
+        } else {
+            MoveWindow(g_app.hTreeHeader, 0, bh, g_app.tree_w, OS_TREE_HDR, TRUE);
+            ShowWindow(g_app.hTreeHeader, SW_SHOW);
+        }
+    }
+    if (g_app.hTreeToggle && IsWindow(g_app.hTreeToggle)) {
+        if (g_app.tree_hidden) {
+            ShowWindow(g_app.hTreeToggle, SW_HIDE);
+        } else {
+            MoveWindow(g_app.hTreeToggle, 2, bh + 1, 22, OS_TREE_HDR - 2, TRUE);
+            ShowWindow(g_app.hTreeToggle, SW_SHOW);
+        }
+    }
     MoveWindow(g_app.hSplitV, sw, bh, 5, right_h, TRUE);
-    MoveWindow(g_app.hTree, 0, bh, g_app.tree_w, right_h, TRUE);
-    /* N12: 钉图标浮在变量栏右上角（隐藏时一并隐藏） */
+    /* F20: 树下移头部栏高度，避免折叠按钮遮住树首行内容 */
+    MoveWindow(g_app.hTree, 0, bh + (g_app.tree_hidden ? 0 : OS_TREE_HDR),
+               g_app.tree_w, right_h - (g_app.tree_hidden ? 0 : OS_TREE_HDR), TRUE);
+    /* N12+F20: 钉图标在头部栏右侧（隐藏时一并隐藏） */
     if (g_app.hTreePin && IsWindow(g_app.hTreePin)) {
         if (g_app.tree_hidden) {
             ShowWindow(g_app.hTreePin, SW_HIDE);
         } else {
-            MoveWindow(g_app.hTreePin, g_app.tree_w - 34, bh + 4, 30, 22, TRUE);
+            MoveWindow(g_app.hTreePin, g_app.tree_w - 34, bh + 1, 30, OS_TREE_HDR - 2, TRUE);
             ShowWindow(g_app.hTreePin, SW_SHOW);
         }
     }
@@ -708,6 +729,8 @@ static void tree_auto_expand(const wchar_t* why)
 {
     char why8[64];
     if (!g_app.tree_hidden) return;
+    /* F20: 任何展开路径都清除"显式折叠"标志 */
+    g_app.tree_force_hidden = 0;
     g_app.tree_hidden = 0;
     layout();
     /* os_log %ls 在 C locale 下转多字节中文失败（vsnprintf 返回 -1 产生空行），故先转 UTF-8 窄串 */
@@ -724,8 +747,8 @@ static void tree_auto_tick(void)
     ScreenToClient(g_app.hMain, &pt);
     x = pt.x;
     if (!g_app.tree_auto) {
-        /* 钉住：始终展开 */
-        tree_auto_expand(L"钉住");
+        /* 钉住：始终展开；F20 用户显式折叠（tree_force_hidden）时保持收起 */
+        if (!g_app.tree_force_hidden) tree_auto_expand(L"钉住");
         return;
     }
     if (g_app.tree_hidden) {
@@ -826,6 +849,85 @@ static LRESULT CALLBACK tree_pin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         refresh_tree_pin();
         layout();
         os_log(OS_LOG_INFO, "变量栏%s", g_app.tree_auto ? "改为自动隐藏（未钉住）" : "已钉住常显");
+        return 0;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursor(NULL, IDC_HAND));
+        return 1;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* F20: 变量栏头部栏背景（btnface）+ "变量" 标签 */
+static void tree_header_draw(HDC hdc, RECT* rc)
+{
+    RECT tr;
+    FillRect(hdc, rc, (HBRUSH)(COLOR_BTNFACE + 1));
+    SetBkMode(hdc, TRANSPARENT);
+    SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+    SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+    tr = *rc;
+    tr.left = 28; /* 折叠按钮（❮）右侧开始画标签 */
+    DrawTextW(hdc, L"变量", -1, &tr, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
+
+static LRESULT CALLBACK tree_header_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT rc;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        GetClientRect(hwnd, &rc);
+        tree_header_draw(hdc, &rc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_PRINT: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        tree_header_draw((HDC)wParam, &rc);
+        return 0;
+    }
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* F20: 变量栏折叠按钮（展开态画左箭头 ❮，点击显式折叠；折叠态细条负责展开） */
+static void tree_toggle_draw(HDC hdc, RECT* rc)
+{
+    FillRect(hdc, rc, (HBRUSH)(COLOR_BTNFACE + 1));
+    SetBkMode(hdc, TRANSPARENT);
+    SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+    SetTextColor(hdc, GetSysColor(COLOR_BTNTEXT));
+    DrawTextW(hdc, L"❮", -1, rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+static LRESULT CALLBACK tree_toggle_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        RECT rc;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        GetClientRect(hwnd, &rc);
+        tree_toggle_draw(hdc, &rc);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_PRINT: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        tree_toggle_draw((HDC)wParam, &rc);
+        return 0;
+    }
+    case WM_LBUTTONDOWN:
+        /* F20: 显式折叠（即使钉住也收起，直到再次展开） */
+        if (!g_app.tree_hidden) {
+            g_app.tree_hidden = 1;
+            g_app.tree_force_hidden = 1;
+            layout();
+            os_log(OS_LOG_INFO, "变量栏折叠");
+        }
         return 0;
     case WM_SETCURSOR:
         SetCursor(LoadCursor(NULL, IDC_HAND));
@@ -1965,10 +2067,15 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                    0, 0, 100, 100, g_app.hRight, NULL, g_app.hInst, NULL);
         SendMessageW(g_app.hTab, TCM_SETITEMSIZE, 0, MAKELPARAM(150, 22));
         SendMessageW(g_app.hTab, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        /* F20: 变量栏头部栏（btnface 背景 + 标签），先建使其位于按钮之下 */
+        g_app.hTreeHeader = CreateWindowW(L"OSTreeHeader", L"", WS_CHILD | WS_VISIBLE,
+                                          0, 34, 340, OS_TREE_HDR, hwnd, NULL, g_app.hInst, NULL);
         g_app.hTreeStrip = CreateWindowW(L"OSTreeStrip", L"", WS_CHILD,
                                          0, 34, 8, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hTreePin = CreateWindowW(L"OSTreePin", L"", WS_CHILD | WS_VISIBLE,
-                                       0, 36, 30, 22, hwnd, NULL, g_app.hInst, NULL);
+                                       0, 35, 30, OS_TREE_HDR - 2, hwnd, NULL, g_app.hInst, NULL);
+        g_app.hTreeToggle = CreateWindowW(L"OSTreeToggle", L"", WS_CHILD | WS_VISIBLE,
+                                          2, 35, 22, OS_TREE_HDR - 2, hwnd, NULL, g_app.hInst, NULL);
         g_app.hSplitH = CreateWindowW(L"OSSplitterH", L"", WS_CHILD | WS_VISIBLE,
                                       0, 500, 800, 5, hwnd, NULL, g_app.hInst, NULL);
         g_app.hLog = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
@@ -2203,6 +2310,27 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         refresh_tree_pin();
         layout();
         return 0;
+    case WM_OS_TREE_TOGGLE:
+        /* F20 测试钩子：wParam=0 展开 / 1 折叠 / 2 切换（显式折叠即使钉住也保持收起） */
+        {
+            int want_hidden;
+            if ((int)wParam == 0) want_hidden = 0;
+            else if ((int)wParam == 1) want_hidden = 1;
+            else want_hidden = g_app.tree_hidden ? 0 : 1;
+            if (want_hidden != g_app.tree_hidden) {
+                if (want_hidden) {
+                    g_app.tree_hidden = 1;
+                    g_app.tree_force_hidden = 1;
+                    os_log(OS_LOG_INFO, "变量栏折叠");
+                } else {
+                    g_app.tree_force_hidden = 0;
+                    g_app.tree_hidden = 0;
+                    os_log(OS_LOG_INFO, "变量栏展开: 按钮");
+                }
+                layout();
+            }
+        }
+        return 0;
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
         if (h && h->hwndFrom == g_app.hTab) {
@@ -2271,7 +2399,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.9.0\n\n"
+                        L"OpenScope v1.10.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -2438,6 +2566,20 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSTreePin";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = tree_header_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); /* F20: 头部栏默认 btnface 背景 */
+    wc.lpszClassName = L"OSTreeHeader";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = tree_toggle_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_HAND);
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1); /* F20: 折叠按钮默认 btnface 背景 */
+    wc.lpszClassName = L"OSTreeToggle";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = right_panel_proc;
