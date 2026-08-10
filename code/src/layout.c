@@ -119,6 +119,7 @@ int os_layout_save_to(const wchar_t* path)
     write_utf8_line(f, "tree_w=%d", g_app.tree_w);
     write_utf8_line(f, "log_h=%d", g_app.log_h);
     write_utf8_line(f, "log_hidden=%d", g_app.log_hidden); /* F22: 消息栏抽屉收起状态 */
+    write_utf8_line(f, "tree_hidden=%d", g_app.tree_hidden); /* Bug18: 变量栏完全隐藏状态 */
     active = os_mainwin_active_tab();
     write_utf8_line(f, "active=%d", active);
     write_utf8_line(f, "theme=%d", os_theme_dark() ? 1 : 0); /* F20 */
@@ -260,6 +261,7 @@ int os_layout_load_from(const wchar_t* path)
                 else if (!strcmp(key, "tree_w")) ld->tree_w = atoi(val);
                 else if (!strcmp(key, "log_h")) ld->log_h = atoi(val);
                 else if (!strcmp(key, "log_hidden")) g_app.log_hidden = atoi(val); /* F22 */
+                else if (!strcmp(key, "tree_hidden")) g_app.tree_hidden = atoi(val); /* Bug18 */
                 else if (!strcmp(key, "active")) ld->active = atoi(val);
                 else if (!strcmp(key, "theme")) os_theme_set_dark(atoi(val)); /* F20 */
             } else {

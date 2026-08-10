@@ -33,6 +33,7 @@
 #define WM_OS_LOG (WM_APP + 13) /* Bug7: 日志跨线程安全——非主线程日志经 PostMessage 到主线程插入 ListView（wParam=OS_LogMsg*） */
 #define WM_OS_LOG_TEST_SELECT (WM_APP + 31) /* Bug13 测试钩子：程序化选中日志 [wParam, wParam+lParam)，返回实际选中数 */
 #define WM_OS_LOG_HIDE (WM_APP + 32) /* F22: 消息栏抽屉收起/弹出测试钩子 (wParam=1 收起, 0 展开) */
+#define WM_OS_TREE_HIDE (WM_APP + 33) /* Bug18: 变量栏完全隐藏/展开测试钩子 (wParam=1 隐藏, 0 展开) */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 

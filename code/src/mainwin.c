@@ -664,9 +664,20 @@ static void layout(void)
 
 /* ---------- 分割条 ---------- */
 
+/* Bug18: 设置变量栏完全隐藏/展开状态并刷新布局（消息栏 log_set_hidden 同款交互） */
+static void tree_set_hidden(int hidden)
+{
+    g_app.tree_hidden = hidden ? 1 : 0;
+    layout();
+    os_log(OS_LOG_INFO, "变量栏%s", g_app.tree_hidden ? "已完全隐藏" : "已展开");
+}
+
 static LRESULT CALLBACK split_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_LBUTTONDBLCLK: /* Bug18: 双击左侧分隔条 → 变量栏完全隐藏/展开 */
+        tree_set_hidden(g_app.tree_hidden ? 0 : 1);
+        return 0;
     case WM_LBUTTONDOWN:
         SetCapture(hwnd);
         SetCursor(LoadCursor(NULL, IDC_SIZEWE));
@@ -826,14 +837,15 @@ static void tree_auto_tick(void)
     GetCursorPos(&pt);
     ScreenToClient(g_app.hMain, &pt);
     x = pt.x;
+    if (g_app.tree_hidden) {
+        /* 隐藏态（手动完全隐藏或自动隐藏）：光标进入左侧细条即展开。
+         * Bug18: 先判断隐藏态——手动隐藏后即使钉住也不被下面钉住分支强制展开。 */
+        if (x >= 0 && x <= 10) tree_auto_expand(L"悬停细条");
+        return;
+    }
     if (!g_app.tree_auto) {
         /* 钉住：始终展开 */
         tree_auto_expand(L"钉住");
-        return;
-    }
-    if (g_app.tree_hidden) {
-        /* 隐藏态：光标进入左侧细条即展开 */
-        if (x >= 0 && x <= 10) tree_auto_expand(L"悬停细条");
         return;
     }
     /* 展开态：光标仍在树区或分隔条上 → 保持；离开超过 800ms → 自动隐藏 */
@@ -2687,6 +2699,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         /* F22 测试钩子：wParam=1 收起消息栏，0=展开 */
         log_set_hidden(wParam ? 1 : 0);
         return 0;
+    case WM_OS_TREE_HIDE:
+        /* Bug18 测试钩子：wParam=1 变量栏完全隐藏，0=展开 */
+        tree_set_hidden(wParam ? 1 : 0);
+        return 0;
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
         if (h && h->hwndFrom == g_app.hTab) {
@@ -2755,7 +2771,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.14.0\n\n"
+                        L"OpenScope v1.15.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -2908,6 +2924,7 @@ void os_mainwin_register(void)
     wc.lpfnWndProc = split_proc;
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_SIZEWE);
+    wc.style = CS_DBLCLKS; /* Bug18: 需要 CS_DBLCLKS 才能收到 WM_LBUTTONDBLCLK（双击折叠） */
     wc.lpszClassName = L"OSSplitter";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));

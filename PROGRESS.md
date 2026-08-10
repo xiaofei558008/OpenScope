@@ -205,6 +205,15 @@
   - 版本 1.14.0：`python build.py --quiet` 干净构建 0 error/0 warning；打包 `dist/OpenScope-Setup-1.14.0.exe`（10.4MB）并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。本轮重新安装 Inno Setup 6.7.3（`tools/innosetup/ISCC.exe` 此前丢失），UAC 已禁用（EnableLUA=0），本地安装版用文件复制更新。
   - 需求 9：checkpoint-28 提交 git + `git tag v1.14.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
+- **checkpoint-29（2026-08-10）**：新增特性 23（波形丝滑缩放+拖拽平移+框选放大）+ Bug17（安装包版本显示）+ Bug18（变量栏完全隐藏），v1.15.0。
+  - 特性 23：波形窗口鼠标缩放存在跳变，需更丝滑连续的拉伸/拖拽/框选放大。实现（code/src/chartwin.c）：滚轮缩放由 step factor 0.8/1.25 改为连续 `pow(0.8, delta/120.0)` + 平滑动画（CHART_ANIM_TIMER 逐帧插值 vx0/vx1/vylo/vyhi，消除跳变）；左键拖拽平移（DOWN 记录起点+视图快照，MOVE 位移超 36px² 阈值进入平移，UP 结束，fit_x/fit_y=0）；Ctrl+左键框选局部放大（DOWN 记录框选起点、MOVE 更新矩形、UP 应用 X/Y 区间缩放，绘图区实时画框选虚线框）；单击（未拖拽）仍在松开时设置测量锚点（保留 N13e 测量功能）。
+  - Bug17：安装包开始安装时界面仍显示 v1.13.0（安装后关于正确 v1.14.0）。根因：packaging/openscope.iss `AppVerName`/`VersionInfoProductVersion` 为旧版本，make_setup.py 校验只查 `VersionInfoVersion` 与 `OpenScope-Setup-{display}` 漏掉这两处。修复：iss 全部版本字段同步 + make_setup.py 增补 4 项一致性校验（VersionInfoVersion/VersionInfoProductVersion/AppVerName/安装包文件名），杜绝回归。
+  - Bug18：仍未实现"全部隐藏全局变量窗口"。现状：tree_auto_tick 钉住态强制展开已手动隐藏的树、无显式折叠动作、tree_hidden 未持久化。修复（code/src/mainwin.c / layout.c / app.h）：新增 `tree_set_hidden()` + 双击竖向分隔条 OSSplitter（类加 CS_DBLCLKS）完全隐藏（hTree 隐藏、左侧 8px 细条 OSTreeStrip 可见）；tree_auto_tick 先判隐藏态再处理钉住（钉住下保持完全隐藏）；`tree_hidden` 键持久化到 layout.ini（向后兼容）；`WM_OS_TREE_HIDE`（WM_APP+33）测试钩子。
+  - 新增 UI 回归 `tests/ui_chart_f23_drive.ps1`（滚轮连续缩放区间收窄/拖拽平移 X 窗左移/Ctrl 框选区间收窄/进程不闪退）与 `tests/ui_tree_fold_drive.ps1`（双击分隔条折叠→细条可见→点击展开→钉住保持隐藏→钩子隐藏/展开→布局持久化重启恢复），并纳入 run_regression.sh NON_JLINK 数组。修复 F23 引入的回归：N13e 测量标记改单击（DOWN+UP 配对）触发——F23 起测量在松开（未拖拽）时设置，测试原只发 DOWN 改为真实点击语义；修复 F22 抽屉测试会话2 启动竞态——ShowWindow 在 os_layout_load_from 之前、日志 ListView 创建即带 WS_VISIBLE，全量回归负载高时会在 layout 应用前采样到"日志可见"，改为轮询等待目标状态（≤5s）。
+  - 回归：dev + 安装版全量回归（--jlink）48/48 ALL PASS（NON_JLINK 20 + JLINK 4，各两变体）。
+  - 版本 1.15.0：`python build.py --quiet` 干净构建 0 error/0 warning；打包 `dist/OpenScope-Setup-1.15.0.exe` 并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。UAC 已禁用，本地安装版用文件复制更新（新构建 exe + dll/jlink.dll → Program Files）。
+  - 需求 9：checkpoint-29 提交 git + `git tag v1.15.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
   - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
@@ -255,10 +264,11 @@
 - [x] 21 高速采样：自由运行（周期=实际块读耗时）+ 连续地址块读 + UI 刷新节流，采样率 ~50/s → 数千~万/s（checkpoint-25，F21；第二步"目标端 µs 缓冲"待后续版本）
 - [x] 21 避免弹窗设置芯片型号，不触发 "Target device setting" / "Device Selection" 弹窗：open 前设 Device 会破坏 4000kHz 块读（ret=-5，核心名不匹配时），改为 open 自动探测 + open 后无条件 `Device = 核心名，默认 Cortex-M4` + `SuppressInfoDialogs = 1`；EMU_SelectByIndex 移到 open 前（SDK 契约），实测首连/重连均无弹窗（checkpoint-26 / checkpoint-27）
 - [x] 22 变量列表窗口与底部消息窗口的抽屉收起/弹出（类 VSCode 子窗口可调整）：双击横向分隔条收起 → 底部细条点击弹出，`log_hidden` 持久化到布局（checkpoint-28，F22）
+- [x] 23 波形窗口鼠标缩放丝滑连续：滚轮连续缩放（pow factor + 平滑动画消除跳变）+ 左键拖拽平移 + Ctrl+左键框选局部放大，保留测量标记/滚轮缩放等原有功能（checkpoint-29，F23）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送；checkpoint-28：`git tag v1.14.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送；checkpoint-28：`git tag v1.14.0` + 双远端推送；checkpoint-29：`git tag v1.15.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
@@ -276,6 +286,8 @@
 - [x] Bug14 软件弹窗选择芯片并闪退——删除死代码芯片配置弹窗（checkpoint-24）
 - [x] Bug16 12000kHz 掉线自动重连时 `JLINKARM_Open` 返回垃圾值（rc=-488389840）导致采集停止——连接前整库重载 DLL + open 失败重载重试 + 自动重连重试 3 次 + close 与读互斥（checkpoint-26）
 - [x] Bug16 软件添加 6 个变量之后闪退（着重看内存管理）——根因不是内存：`EMU_SelectByIndex` 在 `JLINKARM_Open` 之后调用违反 SDK 契约，open 后选择失败致 DLL 内部 AV（JLink_x64.dll+0x18C36E），与变量个数无关；移到 open 前修复，首连即 Connect rc=0（checkpoint-27）
+- [x] Bug17 安装包开始安装时界面显示 v1.13.0（安装后关于正确）——iss 的 AppVerName/VersionInfoProductVersion 未随版本同步 + make_setup.py 校验漏检，iss 全部版本字段同步 + 校验增补 4 项（checkpoint-29）
+- [x] Bug18 仍未实现全部隐藏全局变量窗口——双击竖向分隔条完全隐藏 + 左侧细条点击展开 + 钉住态保持隐藏（tree_auto_tick 不再强制展开）+ `tree_hidden` 布局持久化（checkpoint-29）
 
 ## 总结
 

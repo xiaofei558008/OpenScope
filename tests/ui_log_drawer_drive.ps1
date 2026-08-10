@@ -217,8 +217,24 @@ if (Test-Path $layout) {
         if ($main2 -ne [IntPtr]::Zero) {
             $lv2 = Find-ChildByClassRetry $main2 "SysListView32"
             $strip2 = Find-ChildByClassRetry $main2 "OSLogStrip"
-            Check (-not [OsLogDrawerUi]::IsWindowVisible($lv2)) "重启后消息栏恢复收起（hLog 隐藏）"
-            Check ($strip2 -ne [IntPtr]::Zero -and [OsLogDrawerUi]::IsWindowVisible($strip2)) "重启后底部细条可见"
+            # F22: 布局加载在 ShowWindow 之后同步应用（main.c 先 ShowWindow 再 os_layout_load_from）。
+            # 会话2 启动时存在极短的竞态窗口：日志 ListView 创建时带 WS_VISIBLE，
+            # 直到 layout() 按 log_hidden=1 隐藏前短暂可见。全量回归系统负载高时可能在此窗口采样。
+            # 因此轮询等待目标状态（至多 5s），而非一次性采样。
+            $hiddenOk = $false
+            $deadline = (Get-Date).AddSeconds(5)
+            while ((Get-Date) -lt $deadline -and -not $hiddenOk) {
+                if (-not [OsLogDrawerUi]::IsWindowVisible($lv2)) { $hiddenOk = $true; break }
+                Start-Sleep -Milliseconds 200
+            }
+            Check $hiddenOk "重启后消息栏恢复收起（hLog 隐藏）"
+            $stripVisible = $false
+            $deadline = (Get-Date).AddSeconds(5)
+            while ((Get-Date) -lt $deadline -and -not $stripVisible) {
+                if ($strip2 -ne [IntPtr]::Zero -and [OsLogDrawerUi]::IsWindowVisible($strip2)) { $stripVisible = $true; break }
+                Start-Sleep -Milliseconds 200
+            }
+            Check $stripVisible "重启后底部细条可见"
             Check (-not $proc2.HasExited) "会话2 进程未闪退"
         }
     }

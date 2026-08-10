@@ -57,10 +57,20 @@ def main():
     full = args.version or read_version()
     display = display_version(full)
     iss = open(ISS, encoding="utf-8", errors="replace").read()
-    if f"VersionInfoVersion={full}" not in iss or f"OpenScope-Setup-{display}" not in iss:
+    # Bug17: 校验全部版本相关字段，避免安装界面/文件属性显示旧版本。
+    missing = []
+    if f"VersionInfoVersion={full}" not in iss:
+        missing.append(f"VersionInfoVersion={full}")
+    if f"VersionInfoProductVersion={full}" not in iss:
+        missing.append(f"VersionInfoProductVersion={full}")
+    if f"AppVerName=OpenScope {display}" not in iss:
+        missing.append(f"AppVerName=OpenScope {display}")
+    if f"OpenScope-Setup-{display}" not in iss:
+        missing.append(f"OpenScope-Setup-{display}")
+    if missing:
         raise SystemExit(
             f"[make_setup] packaging/openscope.iss 版本与 version.rc({full}) 不一致，"
-            "请同步 openscope.iss 后重试。"
+            f"缺少：{'、'.join(missing)}。请同步 openscope.iss 后重试。"
         )
     if not os.path.isfile(ISCC):
         raise SystemExit(f"[make_setup] ISCC not found: {ISCC}\n"
@@ -86,7 +96,7 @@ def main():
         r = subprocess.run([sys.executable, publish_py], cwd=ROOT)
         if r.returncode:
             raise SystemExit(f"[make_setup] publish failed rc={r.returncode}")
-        print(f"[make_setup] 发布完成 ✅ https://www.opendebugger.com/downloads/")
+        print(f"[make_setup] 发布完成 [OK] https://www.opendebugger.com/downloads/")
 
 
 if __name__ == "__main__":

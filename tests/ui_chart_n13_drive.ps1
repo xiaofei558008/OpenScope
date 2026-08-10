@@ -135,15 +135,21 @@ try {
         Start-Sleep -Milliseconds 300
         Check (Log-Has '波形 X 轴缩放') "滚轮放大 X 轴（采样点圆点模式触发）"
 
-        # N13e: 绘图区两次左键 -> 测量标记 + Δ
+        # N13e: 绘图区两次左键(按下+松开=单击) -> 测量标记 + Δ
+        # F23 起测量改为单击：未拖拽时在松开（WM_LBUTTONUP）设置锚点，须发 DOWN+UP 配对（真实点击语义）。
+        # 只发 WM_LBUTTONDOWN 不再设置标记（DOWN 现用于记录拖拽起点/框选起点）。
         $x1 = [int]($pl + ($pr - $pl) * 0.25)
         $x2 = [int]($pl + ($pr - $pl) * 0.75)
         $lp1 = ($x1 -band 0xFFFF) -bor (($midY -band 0xFFFF) -shl 16)
         $lp2 = ($x2 -band 0xFFFF) -bor (($midY -band 0xFFFF) -shl 16)
-        [OsChartN13]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$lp1) | Out-Null  # WM_LBUTTONDOWN MK_LBUTTON
+        [OsChartN13]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$lp1) | Out-Null  # DOWN 位置1
+        Start-Sleep -Milliseconds 60
+        [OsChartN13]::SendMessage($chart, 0x202, [IntPtr]0, [IntPtr]$lp1) | Out-Null  # UP 位置1
         Start-Sleep -Milliseconds 200
         Check (Log-Has '波形测量标记1: t=') "第一击设置测量锚点"
-        [OsChartN13]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$lp2) | Out-Null
+        [OsChartN13]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$lp2) | Out-Null  # DOWN 位置2
+        Start-Sleep -Milliseconds 60
+        [OsChartN13]::SendMessage($chart, 0x202, [IntPtr]0, [IntPtr]$lp2) | Out-Null  # UP 位置2
         Start-Sleep -Milliseconds 200
         Check (Log-Has '波形测量Δ: ΔX=') "第二击计算 XY 向 Δ 值"
 
