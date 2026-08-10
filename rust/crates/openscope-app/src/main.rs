@@ -43,6 +43,8 @@ fn main() -> Result<()> {
         if hwnd.0.is_null() {
             return Err(Error::from_win32());
         }
+        // 快捷键表：Ctrl+O 打开 ELF，F5-F8 连接/断开/开始/停止
+        let haccel = App::create_accelerators()?;
         // CLI 参数：可预加载 ELF 便于自动化测试
         // --autoconnect: 消息循环前直接连接（诊断“wndproc 内阻塞 DLL”死锁）
         let mut selftest = false;
@@ -165,6 +167,10 @@ fn main() -> Result<()> {
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            // 快捷键优先：Ctrl+O / F5-F8 → 菜单/按钮命令
+            if TranslateAcceleratorW(hwnd, haccel, &msg) != 0 {
+                continue;
+            }
             let _ = TranslateMessage(&msg);
             let _ = DispatchMessageW(&msg);
         }

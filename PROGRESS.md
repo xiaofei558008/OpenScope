@@ -209,6 +209,11 @@
   - ISCC 编译 `dist/OpenScope-Setup-2.0.0.exe`（10.3MB）；`/VERYSILENT` 静默安装到干净目录验证 rc=0、文件齐全。
   - 已安装 exe 实测连真实 probe：`Device = Cortex-M4 rc=0 / Connect rc=0`，加载 ELF 后 3 变量 3 秒各 4272 样本，无 Device Selection 弹窗，干净退出。
   - 发布到 `D:\OpenDebugger`：`OpenScope-Setup-2.0.0.exe` + 同步 `request.md`（需求 11）；commit `0e1fadc` + `git tag v2.0.0`（强制更新到该 commit）+ 双远端推送 + Windows 语音通知"任务执行完毕"。
+- **checkpoint-30（2026-08-10）**：修复 request.md "rust开发 bug" 两条 —— Rust 版菜单栏未实现 + elf 按键不能加载 .out/.elf，v2.0.1。
+  - **bug2（elf 按键不能加载）根因**：`openscope-app/src/ffi.rs` 的 `OPENFILENAMEW` 结构体误加 `lpEditInfo`/`lpstrPrompt` 两个扩展成员，lStructSize=168（真实 152），`GetOpenFileNameW` 静默失败 → 点"加载 ELF"根本不弹文件对话框。删 2 个幻影成员后对话框正常。附带修复潜伏 bug：`fill_tree` 的 `TVM_DELETEITEM` 误传 `LPARAM(-1)`（TVI_ROOT 实为 `-0x10000`），重复加载时树叠加（1272=636×2）→ 修正后替换为 elf_sample 的 4 项。
+  - **bug1（菜单栏未实现）**：新增 `create_menu_bar()` 复刻 C 版五菜单（文件(&F) 打开ELF/Ctrl+O+退出；采集(&A) 连接F5/断开F6/开始F7/停止F8；记录/回放(&L) 与 窗口(&W) 功能未移植置灰；帮助(&H) 关于）——复用按钮 ID 2002-2005，`SetMenu` 挂到主窗口；新增快捷键表（Ctrl+O / F5-F8）走 `TranslateAccelerator`。关于对话框复刻 C 版内容（版本号+晶圆+www.opendebugger.com）。
+  - 回归（源构建与已安装 exe 均 ALL PASS）：`tests/ui_rust_elf_drive.ps1`（A 按键弹对话框/bug2；B CLI 载入 636 符号；C 连续加载替换树/TVI_ROOT）与 `tests/ui_rust_menu.ps1`（A 菜单栏存在+5 菜单与 C 一致；B 采集菜单项快捷键；C 关于对话框；D 菜单打开ELF；E 菜单退出）。
+  - 版本 2.0.1（`Cargo.toml` workspace + `app.rs VERSION` + `packaging/openscope-rust.iss` AppVersion 2.0.1.0）；ISCC 编译 `dist/OpenScope-Setup-2.0.1.exe`；`/VERYSILENT` 安装（复用已注册 AppDir=`rust/install_test`）后已安装 exe 双回归 ALL PASS。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。

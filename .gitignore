@@ -25,3 +25,6 @@ tests/data.csv
 tools/
 dist/
 _tmp_*.exe
+
+# Rust 安装验证目录（/VERYSILENT 复用已注册 AppDir 的测试安装位置）
+rust/install_test/

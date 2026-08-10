@@ -136,4 +136,9 @@ https://cloud.tencent.com/developer/article/2232891
 
 3、Jlink驱动安装目录：C:\Program Files\SEGGER\JLink_V966
 
+## rust开发 bug：
+1、没有实现之前C代码实现的菜单栏；
+2、elf 按键不能加载.out/elf 文件；
+3、elf 文件解析之后我看到函数名字也给解析出来了，请只解析全局变量和结构体展开的全局变量；
+
 

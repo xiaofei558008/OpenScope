@@ -51,7 +51,7 @@ dependencies = [
 
 [[package]]
 name = "openscope-app"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "libloading",
  "openscope-elf",
@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "openscope-elf"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "gimli",
  "object",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "openscope-jlink"
-version = "2.0.0"
+version = "2.0.1"
 dependencies = [
  "libloading",
 ]

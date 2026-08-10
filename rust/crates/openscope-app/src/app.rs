@@ -8,6 +8,7 @@ use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::LibraryLoader::*;
 use windows::Win32::UI::Controls::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::acq::{AcqState, LeafBuf, LeafSpec};
@@ -18,7 +19,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 }
 
 pub const WND_MAIN: &str = "OpenScopeMain";
-pub const VERSION: &str = "2.0.0";
+pub const VERSION: &str = "2.0.1";
 pub const CHART_CLASS: PCWSTR = w!("OpenScopeChart");
 
 /// UI 刷新定时器 ID。
@@ -36,10 +37,22 @@ const IDC_LOG: i32 = 2101;
 const IDC_TAB: i32 = 2102;
 const IDC_STATUS: i32 = 2103;
 
-// 菜单 ID
-const IDM_ABOUT: u32 = 9001;
-const IDM_EXIT: u32 = 9002;
-const IDM_OPEN_ELF: u32 = 9003;
+// 菜单 ID（与按钮 ID 同为 i32，WM_COMMAND 的 id 是 (wparam & 0xffff) as i32）
+const IDM_ABOUT: i32 = 9001;
+const IDM_EXIT: i32 = 9002;
+const IDM_OPEN_ELF: i32 = 9003;
+// 布局/主题（与 C 版一致；功能尚未移植，菜单置灰）
+const IDM_LAYOUT_SAVE: i32 = 2021;
+const IDM_LAYOUT_LOAD: i32 = 2022;
+const IDM_THEME_DARK: i32 = 2701;
+// 记录/回放（尚未移植，菜单置灰）
+const IDM_REC_LOGSTART: i32 = 2023;
+const IDM_REC_LOGSTOP: i32 = 2024;
+const IDM_REC_REPLAY: i32 = 2025;
+const IDM_REC_REPLAYSTOP: i32 = 2026;
+// 窗口（尚未移植，菜单置灰）
+const IDM_WIN_CHART: i32 = 2012;
+const IDM_WIN_NUM: i32 = 2013;
 
 const WC_BUTTON: PCWSTR = w!("BUTTON");
 const WC_TREEVIEW: PCWSTR = w!("SysTreeView32");
@@ -138,8 +151,76 @@ impl App {
         )?;
         self.hmain = hwnd;
         self.create_children()?;
+        self.create_menu_bar()?;
         self.layout(1280, 820);
         Ok(hwnd)
+    }
+
+    /// 复刻 C 版菜单栏（文件/采集/记录回放/窗口/帮助，见 code/src/mainwin.c:2363）。
+    /// 已移植的功能菜单项可用；尚未移植（布局、深色模式、CSV记录、回放、窗口管理）
+    /// 置灰，待对应功能落地后点亮。
+    unsafe fn create_menu_bar(&mut self) -> Result<()> {
+        let mfile = CreateMenu()?;
+        let macq = CreateMenu()?;
+        let mlog = CreateMenu()?;
+        let mwin = CreateMenu()?;
+        let mhelp = CreateMenu()?;
+
+        // 文件(&F)
+        AppendMenuW(mfile, MF_STRING, IDM_OPEN_ELF as usize, w!("打开 ELF 文件...\tCtrl+O"))?;
+        AppendMenuW(mfile, MF_STRING | MF_GRAYED, IDM_LAYOUT_SAVE as usize, w!("保存布局为..."))?;
+        AppendMenuW(mfile, MF_STRING | MF_GRAYED, IDM_LAYOUT_LOAD as usize, w!("加载布局..."))?;
+        AppendMenuW(mfile, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(mfile, MF_STRING | MF_GRAYED, IDM_THEME_DARK as usize, w!("深色模式"))?;
+        AppendMenuW(mfile, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(mfile, MF_STRING, IDM_EXIT as usize, w!("退出\tAlt+F4"))?;
+
+        // 采集(&A)：菜单 ID 复用按钮 ID，WM_COMMAND 同一套处理
+        AppendMenuW(macq, MF_STRING, IDC_BTN_CONNECT as usize, w!("连接...\tF5"))?;
+        AppendMenuW(macq, MF_STRING, IDC_BTN_DISCONNECT as usize, w!("断开\tF6"))?;
+        AppendMenuW(macq, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(macq, MF_STRING, IDC_BTN_START as usize, w!("开始采集\tF7"))?;
+        AppendMenuW(macq, MF_STRING, IDC_BTN_STOP as usize, w!("停止采集\tF8"))?;
+
+        // 记录/回放(&L)：CSV 记录/离线回放尚未移植，全部置灰
+        AppendMenuW(mlog, MF_STRING | MF_GRAYED, IDM_REC_LOGSTART as usize, w!("开始 CSV 记录..."))?;
+        AppendMenuW(mlog, MF_STRING | MF_GRAYED, IDM_REC_LOGSTOP as usize, w!("停止记录"))?;
+        AppendMenuW(mlog, MF_SEPARATOR, 0, PCWSTR::null())?;
+        AppendMenuW(mlog, MF_STRING | MF_GRAYED, IDM_REC_REPLAY as usize, w!("离线回放..."))?;
+        AppendMenuW(mlog, MF_STRING | MF_GRAYED, IDM_REC_REPLAYSTOP as usize, w!("停止回放"))?;
+
+        // 窗口(&W)：独立波形/数值窗口尚未移植，置灰
+        AppendMenuW(mwin, MF_STRING | MF_GRAYED, IDM_WIN_CHART as usize, w!("波形窗口"))?;
+        AppendMenuW(mwin, MF_STRING | MF_GRAYED, IDM_WIN_NUM as usize, w!("数值窗口"))?;
+
+        // 帮助(&H)
+        AppendMenuW(mhelp, MF_STRING, IDM_ABOUT as usize, w!("关于 OpenScope"))?;
+
+        let gmenu = CreateMenu()?;
+        AppendMenuW(gmenu, MF_POPUP | MF_STRING, mfile.0 as usize, w!("文件(&F)"))?;
+        AppendMenuW(gmenu, MF_POPUP | MF_STRING, macq.0 as usize, w!("采集(&A)"))?;
+        AppendMenuW(gmenu, MF_POPUP | MF_STRING, mlog.0 as usize, w!("记录/回放(&L)"))?;
+        AppendMenuW(gmenu, MF_POPUP | MF_STRING, mwin.0 as usize, w!("窗口(&W)"))?;
+        AppendMenuW(gmenu, MF_POPUP | MF_STRING, mhelp.0 as usize, w!("帮助(&H)"))?;
+
+        SetMenu(self.hmain, Some(gmenu))?;
+        Ok(())
+    }
+
+    /// 快捷键表：Ctrl+O 打开 ELF；F5-F8 对应采集菜单（ID 复用按钮 ID）。
+    pub unsafe fn create_accelerators() -> Result<HACCEL> {
+        let accel = [
+            ACCEL {
+                fVirt: FVIRTKEY | FCONTROL,
+                key: b'O' as u16,
+                cmd: IDM_OPEN_ELF as u16,
+            },
+            ACCEL { fVirt: FVIRTKEY, key: VK_F5.0, cmd: IDC_BTN_CONNECT as u16 },
+            ACCEL { fVirt: FVIRTKEY, key: VK_F6.0, cmd: IDC_BTN_DISCONNECT as u16 },
+            ACCEL { fVirt: FVIRTKEY, key: VK_F7.0, cmd: IDC_BTN_START as u16 },
+            ACCEL { fVirt: FVIRTKEY, key: VK_F8.0, cmd: IDC_BTN_STOP as u16 },
+        ];
+        CreateAcceleratorTableW(&accel)
     }
 
     unsafe fn create_children(&mut self) -> Result<()> {
@@ -294,11 +375,12 @@ impl App {
 
     /// 把 ELF 顶层变量（以及结构体/数组的子节点）填入左侧树。
     pub unsafe fn fill_tree(&self) {
+        // TVI_ROOT = (HTREEITEM)(ULONG_PTR)-0x10000；传 -1 不是合法句柄，删除会失败导致重复加载时树叠加
         let _ = SendMessageW(
             self.htree,
             TVM_DELETEITEM,
             Some(WPARAM(0)),
-            Some(LPARAM(-1)),
+            Some(LPARAM(-0x10000)),
         );
         let Some(elf) = &self.elf else { return };
         for i in 0..elf.var_count() {
@@ -586,6 +668,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                         app.load_elf_dialog();
                     }
                 }
+                IDM_OPEN_ELF => {
+                    // 菜单/快捷键 Ctrl+O：打开 ELF 文件
+                    if let Some(app) = get_app_mut() {
+                        app.load_elf_dialog();
+                    }
+                }
+                IDM_EXIT => {
+                    let _ = DestroyWindow(hwnd);
+                }
+                IDM_ABOUT => {
+                    show_about(hwnd);
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -662,6 +756,22 @@ pub(crate) fn get_app_mut() -> Option<&'static mut App> {
     } else {
         Some(unsafe { &mut *p })
     }
+}
+
+/// “关于 OpenScope”对话框（内容复刻 C 版 mainwin.c:2661）。
+unsafe fn show_about(owner: HWND) {
+    let text = format!(
+        "OpenScope v{}\n\nMCU 变量采集与标定工具（类 CANape）\nRust + Win32 重写\n\n晶圆上的生物技术开发和提供支持\n网址: www.opendebugger.com",
+        VERSION
+    );
+    let t: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let c: Vec<u16> = "关于".encode_utf16().chain(std::iter::once(0)).collect();
+    let _ = MessageBoxW(
+        Some(owner),
+        PCWSTR(t.as_ptr()),
+        PCWSTR(c.as_ptr()),
+        MB_OK | MB_ICONINFORMATION,
+    );
 }
 
 /// 日志写入（简版：先打印到控制台，UI 日志栏后续接 ListView）。

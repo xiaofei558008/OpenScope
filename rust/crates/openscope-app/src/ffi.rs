@@ -7,6 +7,8 @@ use std::ffi::c_void;
 use windows::Win32::Foundation::HWND;
 
 /// 与 comdlg32 的 OPENFILENAMEW 布局一致（x64，lStructSize=152）。
+/// 注意：末尾只有 pvReserved/dwReserved/FlagsEx 三个扩展成员；
+/// 误加的 lpEditInfo/lpstrPrompt 会令结构体变 168 字节，GetOpenFileNameW 直接失败。
 #[repr(C)]
 #[derive(Clone)]
 pub struct OPENFILENAMEW {
@@ -31,8 +33,6 @@ pub struct OPENFILENAMEW {
     pub lpfnHook: *const c_void,
     pub lpTemplateName: *const c_void,
     // Vista+
-    pub lpEditInfo: *mut c_void,
-    pub lpstrPrompt: *const u16,
     pub pvReserved: *mut c_void,
     pub dwReserved: u32,
     pub FlagsEx: u32,
