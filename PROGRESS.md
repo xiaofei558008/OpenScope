@@ -188,6 +188,15 @@
   - 版本 1.12.0：`python build.py --quiet` 干净构建，打包 `dist/OpenScope-Setup-1.12.0.exe` 并发布 `https://www.opendebugger.com/downloads/`。
   - 需求 9：checkpoint-26 提交 git + `git tag v1.12.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
+- **checkpoint-27（2026-08-10）**：修复新 Bug16（添加 6 个变量后连接闪退）+ 需求 21 补充（"Device Selection" 弹窗同样不触发），v1.13.0。
+  - Bug16 复现：用户报"添加 6 个变量后闪退，着重看内存管理"。`repro_bug16_6vars.ps1`（选 6 叶 → 波形+数值窗口添加 → 连接）复现崩溃 exit -1073740771（0xC0000005）@ `JLink_x64.dll+0x18C36E`；`repro_connect_only.ps1`（`--no-layout`、0 变量、纯连接）3/3 同偏移崩溃 → **与变量个数无关**。JLink.exe（先选设备后连接）正常、DLL 哈希与 SEGGER 官方一致、探针健康 → 排除硬件/DLL 损坏。
+  - 根因：`jlink_do_connect` 在 `JLINKARM_Open(NULL)` **之后**才调用 `EMU_SelectByIndex/EMU_SelectByUSBSN`——违反 J-Link SDK 契约（仿真器选择必须在 open 之前）。open 后选择导致 DLL 内部会话状态不一致：EMU_SelectByIndex 返回 -1 后 DLL 内部 AV（该路径同时正是 DLL 试图弹出设备选择框的路径，呼应需求 21 的 "Device Selection"）。checkpoint-26 的 42/42 能过是因为当时机器/DLL 状态恰好未触发；同样的 v1.12.0 二进制当天即确定性复现（本次回归安装版 v1.12.0 4 个 J-Link 用例全部连接失败即为同一 bug）。
+  - 修复（module/jlink/jlink.c）：把 EMU_SelectByIndex/EMU_SelectByUSBSN 移到 `JLINKARM_Open` **之前**（J-Link SDK 标准顺序：选仿真器 → open → SuppressInfoDialogs → TIF_Select → Device（仍在 open 后，避免 pread 回归）→ SetSpeed → Connect）。修复后 **首次连接即 Connect rc=0 成功**（不再走 -257 → 重载重试路径），EMU_SelectByIndex 返回 -1 变为无害（open(NULL) 自动选中唯一仿真器）。内存审查：变量添加路径（chartwin/numwin 固定数组 + 边界检查）、采集线程堆分配均安全，无内存 bug。
+  - 需求 21 补充：加固 `tests/check_target_dialog.ps1`（严格 PASS/FAIL，标题匹配扩展 "Device Selection|Select"），实测首连+重连均无 "Target device setting"/"Device Selection" 弹窗。`SuppressInfoDialogs = 1` 保留。
+  - 回归：dev v1.13.0 21/21 ALL PASS；安装 v1.12.0（旧二进制）4 个 J-Link 用例连接失败——正是本 bug；安装 v1.13.0 后 4 个 J-Link 用例（ui_connect / ui_record_dialog / ui_speed12000 / ui_speed_verify）+ 弹窗检查 + Bug16 复现全部 ALL PASS，4000kHz 高速采集 6 变量 18k+ 样本/s 无回归。
+  - 版本 1.13.0：`python build.py --quiet` 干净构建，打包 `dist/OpenScope-Setup-1.13.0.exe`（10.4MB）并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。
+  - 需求 9：checkpoint-27 提交 git + `git tag v1.13.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
   - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
@@ -236,11 +245,11 @@
 - [x] 19 数值窗口右键添加变量：模糊搜索列表 ctrl+a 全选 / ctrl 单击多选 / shift 起止范围多选，批量添加（checkpoint-23）
 - [x] 20 界面主题设置：白色（默认）/黑色（配色参考黑色 IAR / Notepad++）（checkpoint-24，F20）
 - [x] 21 高速采样：自由运行（周期=实际块读耗时）+ 连续地址块读 + UI 刷新节流，采样率 ~50/s → 数千~万/s（checkpoint-25，F21；第二步"目标端 µs 缓冲"待后续版本）
-- [x] 21 避免弹窗设置芯片型号，不触发 "Target device setting" 弹窗：open 前设 Device 会破坏 4000kHz 块读（ret=-5，核心名不匹配时），改为 open 自动探测 + open 后无条件 `Device = 核心名，默认 Cortex-M4` + `SuppressInfoDialogs = 1`；实测首连/重连均无弹窗（checkpoint-26）
+- [x] 21 避免弹窗设置芯片型号，不触发 "Target device setting" / "Device Selection" 弹窗：open 前设 Device 会破坏 4000kHz 块读（ret=-5，核心名不匹配时），改为 open 自动探测 + open 后无条件 `Device = 核心名，默认 Cortex-M4` + `SuppressInfoDialogs = 1`；EMU_SelectByIndex 移到 open 前（SDK 契约），实测首连/重连均无弹窗（checkpoint-26 / checkpoint-27）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 
@@ -257,6 +266,7 @@
 - [x] Bug10 用12000的速度采集数据，一开始就会失败；采集线程退出，读取xxx变量失败（checkpoint-22）
 - [x] Bug14 软件弹窗选择芯片并闪退——删除死代码芯片配置弹窗（checkpoint-24）
 - [x] Bug16 12000kHz 掉线自动重连时 `JLINKARM_Open` 返回垃圾值（rc=-488389840）导致采集停止——连接前整库重载 DLL + open 失败重载重试 + 自动重连重试 3 次 + close 与读互斥（checkpoint-26）
+- [x] Bug16 软件添加 6 个变量之后闪退（着重看内存管理）——根因不是内存：`EMU_SelectByIndex` 在 `JLINKARM_Open` 之后调用违反 SDK 契约，open 后选择失败致 DLL 内部 AV（JLink_x64.dll+0x18C36E），与变量个数无关；移到 open 前修复，首连即 Connect rc=0（checkpoint-27）
 
 ## 总结
 

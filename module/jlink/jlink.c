@@ -172,6 +172,23 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
         a = &g_ctx.api;
     }
     g_ctx.dll_used = 1;
+    /* Bug16(新)+需求21：仿真器选择必须在 JLINKARM_Open 之前调用（J-Link SDK 契约）。
+     * 原实现 open 之后才 EMU_SelectByIndex——DLL 内部会话状态不一致，实测该调用返回 -1
+     * 后 DLL 内部 AV 崩溃（JLink_x64.dll+0x18C36E，连接即闪退，与变量个数无关）。
+     * 移到 open 前可正确选中仿真器（rc=0），同时避免 DLL 弹出"Device Selection"设备选择框。 */
+    if (cfg->serial[0]) {
+        unsigned long sn = strtoul(cfg->serial, NULL, 10);
+        if (a->emu_select_by_usbsn) {
+            rc = a->emu_select_by_usbsn((uint32_t)sn);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByUSBSN(%lu) rc=%d", sn, rc);
+        }
+    } else if (cfg->probe_index >= 0) {
+        if (a->emu_select_by_index) {
+            rc = a->emu_select_by_index(cfg->probe_index);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByIndex(%d) rc=%d",
+                                cfg->probe_index, rc);
+        }
+    }
     rc = a->open(NULL);
     if (rc != 0) {
         /* 兜底：首连失败或重载后仍失败（硬件/USB 级问题），再重载重试一次 */
@@ -193,19 +210,6 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
     memset(res, 0, sizeof(res));
     rc = a->exec_cmd(cmd, res, sizeof(res));
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: '%s' rc=%d", cmd, rc);
-    if (cfg->serial[0]) {
-        unsigned long sn = strtoul(cfg->serial, NULL, 10);
-        if (a->emu_select_by_usbsn) {
-            rc = a->emu_select_by_usbsn((uint32_t)sn);
-            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByUSBSN(%lu) rc=%d", sn, rc);
-        }
-    } else if (cfg->probe_index >= 0) {
-        if (a->emu_select_by_index) {
-            rc = a->emu_select_by_index(cfg->probe_index);
-            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByIndex(%d) rc=%d",
-                                cfg->probe_index, rc);
-        }
-    }
     if (a->tif_select) {
         rc = a->tif_select(cfg->iface == OS_IF_JTAG ? 0 : 1);
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: TIF_Select(%s) rc=%d",
@@ -238,7 +242,7 @@ static void jlink_refresh_info(void)
     OS_DriverInfo* d = &g_ctx.info;
     memset(d, 0, sizeof(*d));
     _snprintf(d->name, sizeof(d->name), "%s", "jlink");
-    _snprintf(d->version, sizeof(d->version), "%s", "1.12.0");
+    _snprintf(d->version, sizeof(d->version), "%s", "1.13.0");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
     if (a->get_fw_string && g_ctx.connected) {
@@ -471,7 +475,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "jlink",
-    "1.12.0",
+    "1.13.0",
     "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
     NULL,
     mod_init,

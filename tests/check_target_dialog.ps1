@@ -1,4 +1,6 @@
-﻿# 检查 "Target device setting" 弹窗是否出现：首次连接（全新 DLL）+ 断开重连（重载 DLL）
+﻿# 需求21：连接时不得弹出 "Target device setting" / "Device Selection" 芯片型号设置弹窗。
+# 检查窗口：首次连接（全新 DLL）+ 断开重连（重载 DLL）均无任何 J-Link/设备/型号对话框。
+# 退出码：0 = 无弹窗（通过），非 0 = 检测到弹窗（失败）。
 param([string]$ExePath = "D:/OpenScope/bin/Release/OpenScope.exe")
 $ErrorActionPreference = "Stop"
 Add-Type @"
@@ -35,10 +37,11 @@ function Find-ByClass([int]$ProcId, [string]$Class) {
             if ($sb.ToString() -eq $Class) { $script:hit=$h; return $false } }; return $true }
     [OsDlgW]::EnumWindows($cb,[IntPtr]::Zero)|Out-Null; return $script:hit
 }
-function Is-TargetDialog([int]$ProcId) {
+# 需求21：匹配 "Target device setting" / "Device Selection" / J-Link 目标设置等设备/型号对话框
+function Find-DeviceDialog([int]$ProcId) {
     $ws = Get-WindowsByPid $ProcId
     foreach ($w in $ws) {
-        if ($w.cls -eq "#32770" -and ($w.title -match "Target|Device|J-Link|JLink|Chip")) {
+        if ($w.cls -eq "#32770" -and ($w.title -match "Target|Device|J-Link|JLink|Chip|Select")) {
             return $w
         }
     }
@@ -55,22 +58,25 @@ for ($i = 0; $i -lt 50 -and -not $proc.HasExited; $i++) {
 }
 if ($main -eq [IntPtr]::Zero) { Write-Output "FAIL main window"; if (-not $proc.HasExited) { $proc.Kill() }; exit 1 }
 Start-Sleep -Milliseconds 1500
+$fail = 0
 
 Write-Output "--- 1) 首次连接（全新 DLL，无重载） ---"
 [OsDlgW]::SendMessage($main, 0x111, [IntPtr]2002, [IntPtr]0) | Out-Null   # CONNECT
 Start-Sleep -Milliseconds 3000
-$d1 = Is-TargetDialog $proc.Id
-if ($d1) { Write-Output "DIALOG FIRST-CONNECT: '$($d1.title)' cls=$($d1.cls)" } else { Write-Output "no dialog (first connect)" }
+$d1 = Find-DeviceDialog $proc.Id
+if ($d1) { Write-Output "DIALOG FIRST-CONNECT: '$($d1.title)' cls=$($d1.cls)"; $fail = 1 } else { Write-Output "PASS first connect: no device dialog" }
 
 Write-Output "--- 2) 断开后重连（触发 DLL 重载路径） ---"
 [OsDlgW]::SendMessage($main, 0x111, [IntPtr]2003, [IntPtr]0) | Out-Null   # DISCONNECT
 Start-Sleep -Milliseconds 1500
 [OsDlgW]::SendMessage($main, 0x111, [IntPtr]2002, [IntPtr]0) | Out-Null   # CONNECT
 Start-Sleep -Milliseconds 3000
-$d2 = Is-TargetDialog $proc.Id
-if ($d2) { Write-Output "DIALOG RECONNECT: '$($d2.title)' cls=$($d2.cls)" } else { Write-Output "no dialog (reconnect)" }
+$d2 = Find-DeviceDialog $proc.Id
+if ($d2) { Write-Output "DIALOG RECONNECT: '$($d2.title)' cls=$($d2.cls)"; $fail = 1 } else { Write-Output "PASS reconnect: no device dialog" }
 
 Write-Output "--- windows at end ---"
 Get-WindowsByPid $proc.Id | ForEach-Object { Write-Output ("  {0} | '{1}'" -f $_.cls, $_.title) }
 if (-not $proc.HasExited) { $proc.Kill() }
-Write-Output "DONE"
+if ($fail) { Write-Output "FAIL: device-selection dialog detected"; exit 1 }
+Write-Output "PASS ALL: no Target/Device/Selection dialog on first-connect or reconnect"
+exit 0

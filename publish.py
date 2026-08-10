@@ -78,6 +78,27 @@ def list_installers():
     return items
 
 
+def list_archives():
+    """扫描 dist/ 下的压缩包（*.7z / *.zip，如 OpenScope-Setup.7z），按修改时间新→旧。"""
+    items = []
+    if os.path.isdir(DIST_DIR):
+        for name in os.listdir(DIST_DIR):
+            if not re.search(r"\.(7z|zip)$", name, re.IGNORECASE):
+                continue
+            if re.search(r"OpenScope-Setup-\d.*\.exe$", name):  # 排除 exe 安装包
+                continue
+            path = os.path.join(DIST_DIR, name)
+            st = os.stat(path)
+            items.append({
+                "filename": name,
+                "path": path,
+                "size": st.st_size,
+                "mtime": st.st_mtime,
+            })
+    items.sort(key=lambda x: x["mtime"], reverse=True)
+    return items
+
+
 def sha256_of(path, chunk=1 << 20):
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -101,15 +122,24 @@ def fmt_date(ts):
     return time.strftime("%Y-%m-%d", time.localtime(ts))
 
 
+def dl_url(filename, mtime):
+    """生成带缓存破碎参数的下载链接。
+
+    浏览器会把旧的"下载"文本文件响应缓存到同一 URL 上，导致再次点击仍拿到旧内容；
+    追加 ?v=<文件修改时间戳> 使每次发布后 URL 都是全新的，强制浏览器重新从服务器拉取。
+    """
+    return f"{BASE_URL}/downloads/openscope/{filename}?v={int(mtime)}"
+
+
 # ---------------------------------------------------------------------------
 # 下载页生成
 # ---------------------------------------------------------------------------
-def build_page(items):
-    """生成下载页 HTML。items: 已含 sha256 的安装包信息（新→旧）。"""
+def build_page(items, archives=()):
+    """生成下载页 HTML。items: 已含 sha256 的安装包信息（新→旧）；archives: 已含 sha256 的压缩包列表。"""
     latest = items[0] if items else None
     rows = []
     for i, it in enumerate(items):
-        url = f"{BASE_URL}/downloads/openscope/{it['filename']}"
+        url = dl_url(it['filename'], it['mtime'])
         badge = '<span class="badge">最新版</span>' if i == 0 else ""
         rows.append(f"""
         <tr class="{'latest' if i == 0 else ''}">
@@ -122,7 +152,7 @@ def build_page(items):
 
     latest_card = ""
     if latest:
-        url = f"{BASE_URL}/downloads/openscope/{latest['filename']}"
+        url = dl_url(latest['filename'], latest['mtime'])
         latest_card = f"""
       <div class="latest-card">
         <div>
@@ -132,6 +162,27 @@ def build_page(items):
         </div>
         <a class="btn-big" href="{url}">⬇ 下载 OpenScope v{latest['version']}</a>
       </div>"""
+
+    archive_section = ""
+    if archives:
+        arc_rows = []
+        for a in archives:
+            url = dl_url(a['filename'], a['mtime'])
+            arc_rows.append(f"""
+        <tr>
+          <td class="ver"><b>OpenScope 便携版（7z 压缩包）</b></td>
+          <td>{fmt_size(a['size'])}</td>
+          <td>{a['date']}</td>
+          <td><code class="sha" title="点击复制">{a['sha256']}</code></td>
+          <td><a class="btn" href="{url}">下载</a></td>
+        </tr>""")
+        archive_section = f"""
+    <h3 class="section">便携压缩包</h3>
+    <table>
+      <thead><tr><th>说明</th><th>大小</th><th>发布日期</th><th>SHA256 校验和</th><th></th></tr></thead>
+      <tbody>{''.join(arc_rows)}
+      </tbody>
+    </table>"""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -204,6 +255,8 @@ def build_page(items):
       </tbody>
     </table>
 
+    {archive_section}
+
     <div class="notes">
       <b>安装说明：</b>Windows 10/11 x64。安装包为 Inno Setup 安装程序，双击安装即可；如浏览器提示"未知发布者"，
       请选择"仍要下载/运行"，或右键安装包 → 属性 → 解除阻止。下载后建议核对上表 SHA256 校验和，确保文件完整。
@@ -231,19 +284,25 @@ def main():
     items = list_installers()
     if not items:
         sys.exit("[publish] dist/ 下未找到 OpenScope-Setup-*.exe 安装包")
+    archives = list_archives()
 
-    print(f"[publish] 发现 {len(items)} 个安装包:")
+    print(f"[publish] 发现 {len(items)} 个安装包 + {len(archives)} 个压缩包:")
     for it in items:
         print(f"  - {it['filename']} ({fmt_size(it['size'])})")
+    for a in archives:
+        print(f"  - {a['filename']} ({fmt_size(a['size'])})")
 
     # 1) 计算校验和
     for it in items:
         it["sha256"] = sha256_of(it["path"])
         it["date"] = fmt_date(it["mtime"])
+    for a in archives:
+        a["sha256"] = sha256_of(a["path"])
+        a["date"] = fmt_date(a["mtime"])
 
-    # 2) 上传安装包
+    # 2) 上传安装包 + 压缩包
     if not args.no_upload:
-        for it in items:
+        for it in items + archives:
             remote = REMOTE_DIR + it["filename"]
             remote_file = f"{HOST}:{remote}"
             local = it["path"]
@@ -261,10 +320,10 @@ def main():
             else:
                 run(["scp", "-o", "BatchMode=yes", "-o", "ConnectTimeout=15", local, remote_file])
     else:
-        print("[publish] --no-upload，跳过安装包上传")
+        print("[publish] --no-upload，跳过文件上传")
 
     # 3) 生成并上传下载页
-    page = build_page(items)
+    page = build_page(items, archives)
     local_page = os.path.join(ROOT, "dist", "_downloads_index.html")
     with open(local_page, "w", encoding="utf-8") as f:
         f.write(page)
