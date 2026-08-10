@@ -203,6 +203,12 @@
   - R1.6 波形窗口：GDI 双缓冲，全系列共享 Y 值域（对应 C 版 chart_compute_view），每路调色板颜色，滚轮缩放 X（view_pts）；`--autoselect` 模式连接+登记 4 变量+启动采集截图验证多色曲线（AbsEnc/fsin/cnt/SystemCoreClock）。
   - **关键 bug 修复（"不要有 Device Selection 弹窗"）**：`openscope-jlink/src/dll.rs` 的 `format!("Device = {}\0")` —— Rust String 不保证尾部 NUL，`as_ptr()` 直接传给 C 接口时读到堆中随机字节，`Device = Cortex-M4` 在 GUI 进程随机 `rc=-1`（控制台示例恰好堆布局干净一直 rc=0）；rc!=0 时 DLL 随后 `JLINKARM_Connect` 会弹 "Device Selection" 设备选择框挂起。修复：显式补 NUL + Device 失败即 close 并返回错误（绝不继续到 Connect）。修复后 app 进程 `Device rc=0 / Connect rc=0`，无任何弹窗。
   - 版本 2.0.0（`Cargo.toml` workspace 各 crate version = 2.0.0），对应需求 12 "用 Rust 语言重写当前软件，软件版本从 2.0.0 开始"。
+- **checkpoint-29（2026-08-10）**：Rust 2.0.0 exe 安装包打包完成 + 发布（用户："我没看到exe 安装包打包完成"）。
+  - 新增 `packaging/openscope-rust.iss`（Inno Setup，AppVersion 2.0.0.0 / OutputBaseFilename OpenScope-Setup-2.0.0）：安装 `target/release/openscope-app.exe` → `{app}\OpenScope.exe` + `dll\JLink_x64.dll`；[InstallDelete]/[UninstallDelete] 清理旧 C 版 dll/ 模块残留。
+  - 修复两个打包回归：`main.rs` arg parsing 丢失 `selftest=true`（--selftest 不再跑自测）→ 恢复单独分支；release 目录缺 JLink_x64.dll → 复制后 release selftest exit=0（4833 samples/var）。
+  - ISCC 编译 `dist/OpenScope-Setup-2.0.0.exe`（10.3MB）；`/VERYSILENT` 静默安装到干净目录验证 rc=0、文件齐全。
+  - 已安装 exe 实测连真实 probe：`Device = Cortex-M4 rc=0 / Connect rc=0`，加载 ELF 后 3 变量 3 秒各 4272 样本，无 Device Selection 弹窗，干净退出。
+  - 发布到 `D:\OpenDebugger`：`OpenScope-Setup-2.0.0.exe` + 同步 `request.md`（需求 11）；commit `0e1fadc` + `git tag v2.0.0`（强制更新到该 commit）+ 双远端推送 + Windows 语音通知"任务执行完毕"。
 
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
