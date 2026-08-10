@@ -214,6 +214,20 @@
   - 版本 1.15.0：`python build.py --quiet` 干净构建 0 error/0 warning；打包 `dist/OpenScope-Setup-1.15.0.exe` 并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。UAC 已禁用，本地安装版用文件复制更新（新构建 exe + dll/jlink.dll → Program Files）。
   - 需求 9：checkpoint-29 提交 git + `git tag v1.15.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
+- **checkpoint-30（2026-08-10）**：request.md 特性 23 加"仔细实现"前缀重新仔细实现（波形丝滑缩放/拖拽/框选，消除全部跳变根因），v1.16.0。
+  - 通读 chartwin.c F23 定位 5 个跳变根因并逐一修复：
+    - **A（最严重）滚轮缩放动画从陈旧视图起跳**：live 跟随（fit_x=1）下 vx0/vx1 从不写回（calloc 为 0），首次滚轮缩放把 fit_x 置 0 后动画从 0 起跳，整图先跳到时间 0 再弹回。新增 `chart_sync_manual()` 在缩放/框选前把当前自动视图同步进 vx0/vx1/vylo/vyhi，动画/平移永远从当前实际画面起步。
+    - **B X 轴缩放连带动画 Y**：旧 `chart_anim_to` 把 Y 也纳入插值（向缩放前陈旧 auto 值插值），滚轮 X 缩放破坏手动 Y 缩放、Y 乱动。改为 X/Y 独立目标 `chart_anim_to_x/y`：X 缩放只动 X（fit_y=1 保持自动随数据重算），Y 缩放只动 Y。
+    - **C 拖拽平移无条件改写 Y**：旧代码任何拖拽都 `fit_y=0` 并把 Y 冻结到起点 auto 快照，水平拖拽 Y 即跳变。改为 Y 平移仅在 Y 已手动锁定（fit_y=0）时生效；fit_y=1 时 Y 保持自动。
+    - **D 整数插值永不收敛**：`(target-cur)*3/10` 差值<10 时步进为 0 → 动画永不结束、定时器泄漏、视图卡住。逐帧插值差值过小直接吸附收敛（±1 步进 + 末帧精确贴合）。
+    - **E 框选虚线框白色边框浅色主题不可见**：改亮青 RGB(80,200,255)（绘图区两种主题下均为深色底，清晰可见）。
+  - 架构：抽取 `code/src/chartview.c/h` 纯函数（无 Win32 依赖）——`os_cv_zoom_x/y`（锚点比例保持、1ms 最小窗、full 夹紧）、`os_cv_box_x/y`（框选映射）；chartwin.c 滚轮/框选改用纯函数 + 基础同步 + 平滑动画。
+  - 新增单元测试 `tests/chartview_smoke.c`（20 项：锚点保持/span 收窄/1ms 最小窗/full 夹紧/无变化判定/退化输入 NULL 安全/框选映射），接入 build_tests.bat 每次构建自动回归，ALL PASS。
+  - 强化 UI 回归 `tests/ui_chart_f23_drive.ps1`：新增 **Bug A 回归断言**（首次缩放日志 `起点=[a,b]` 必须落在数据时间窗内、非 0 起跳）与 **Bug B 回归断言**（X 轴滚轮缩放不触发 Y 轴缩放）；保留连续缩放收窄/拖拽平移 X 窗左移/框选缩放收窄/不闪退。
+  - 回归：全量 UI 回归 dev+安装版（--jlink）**48/48 ALL PASS**（NON_JLINK 20 + JLINK 4，各两变体）；chartview_smoke 20/20；bug9_smoke 4 速度 ALL PASS；构建 0 error/0 warning。
+  - 版本 1.16.0：version.rc / openscope.iss / jlink.dll 模块版本同步；`python build.py --quiet` 干净构建；打包 `dist/OpenScope-Setup-1.16.0.exe` 并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。UAC 已禁用，本地安装版用文件复制更新。
+  - 需求 9：checkpoint-30 提交 git + `git tag v1.16.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
   - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
@@ -265,10 +279,11 @@
 - [x] 21 避免弹窗设置芯片型号，不触发 "Target device setting" / "Device Selection" 弹窗：open 前设 Device 会破坏 4000kHz 块读（ret=-5，核心名不匹配时），改为 open 自动探测 + open 后无条件 `Device = 核心名，默认 Cortex-M4` + `SuppressInfoDialogs = 1`；EMU_SelectByIndex 移到 open 前（SDK 契约），实测首连/重连均无弹窗（checkpoint-26 / checkpoint-27）
 - [x] 22 变量列表窗口与底部消息窗口的抽屉收起/弹出（类 VSCode 子窗口可调整）：双击横向分隔条收起 → 底部细条点击弹出，`log_hidden` 持久化到布局（checkpoint-28，F22）
 - [x] 23 波形窗口鼠标缩放丝滑连续：滚轮连续缩放（pow factor + 平滑动画消除跳变）+ 左键拖拽平移 + Ctrl+左键框选局部放大，保留测量标记/滚轮缩放等原有功能（checkpoint-29，F23）
+- [x] 23（仔细实现）消除全部跳变根因：live 模式下缩放动画从陈旧 0 值起跳 → 缩放前同步当前视图（chart_sync_manual）；X/Y 缩放独立动画互不干扰；拖拽仅锁定 Y 时平移 Y；动画差值过小直接吸附收敛；框选边框改亮青两主题可见。缩放/框选数学抽成 chartview.c 纯函数 + 20 项单元测试，UI 回归新增 Bug A/B 断言（checkpoint-30，F23 v1.16.0）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送；checkpoint-28：`git tag v1.14.0` + 双远端推送；checkpoint-29：`git tag v1.15.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送；checkpoint-28：`git tag v1.14.0` + 双远端推送；checkpoint-29：`git tag v1.15.0` + 双远端推送；checkpoint-30：`git tag v1.16.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 

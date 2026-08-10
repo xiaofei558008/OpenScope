@@ -3,6 +3,7 @@
 #include "mainwin.h"
 #include "vartree.h"
 #include "theme.h"
+#include "chartview.h"
 #include <string.h>
 
 #define OS_MAGIC_CHART 0x43484152u /* 'CHAR' */
@@ -49,8 +50,11 @@ typedef struct OS_ChartWin {
     int64_t mt0, mt1;   /* 锚点时间 (us) */
     double mv0, mv1;    /* 锚点值 */
     int mark_sid;       /* 测量所用系列下标 */
-    /* F23: 平滑缩放动画（滚轮目标，逐帧插值消除跳变） */
-    int anim_on;        /* 缩放动画进行中 */
+    /* F23: 平滑缩放动画（X/Y 独立目标，逐帧插值消除跳变）。
+     * X 缩放不动 Y、Y 缩放不动 X：避免滚轮 X 缩放破坏手动 Y 缩放 / 向陈旧 Y 值乱动。 */
+    int anim_on;        /* 动画定时器运行中 */
+    int anim_x_on;      /* X 轴动画进行中 */
+    int anim_y_on;      /* Y 轴动画进行中 */
     int64_t anim_x0, anim_x1;  /* 动画目标 X 时间窗 (us) */
     double anim_y0, anim_y1;   /* 动画目标 Y 值域 */
     /* F23: 左键拖拽平移（超过阈值进入平移，否则视为单击测量标记） */
@@ -65,11 +69,30 @@ typedef struct OS_ChartWin {
 
 #define CHART_ANIM_TIMER 5  /* F23: 平滑缩放动画定时器 id */
 
-/* F23: 启动平滑缩放动画：从当前 vx0/vx1/vylo/vyhi 逐帧插值到目标 */
-static void chart_anim_to(OS_ChartWin* cw, int64_t x0, int64_t x1, double y0, double y1)
+/* F23: 手动视图操作（滚轮缩放/框选）前，把当前“自动视图”同步进 vx0/vx1/vylo/vyhi，
+ * 保证动画/平移从当前实际显示的画面起步，而不是从陈旧的 0 值起跳（跳变根因 A）。 */
+static void chart_sync_manual(OS_ChartWin* cw, const OS_ChartView* v)
+{
+    if (cw->fit_x) { cw->vx0 = v->x0; cw->vx1 = v->x1; }
+    if (cw->fit_y) { cw->vylo = v->ylo; cw->vyhi = v->yhi; }
+}
+
+/* F23: 启动平滑缩放动画——X 轴目标（只动 X，Y 保持自动/手动不被打扰，跳变根因 B）。 */
+static void chart_anim_to_x(OS_ChartWin* cw, int64_t x0, int64_t x1)
 {
     cw->anim_x0 = x0; cw->anim_x1 = x1;
+    cw->anim_x_on = 1;
+    if (!cw->anim_on) {
+        cw->anim_on = 1;
+        SetTimer(cw->hwnd, CHART_ANIM_TIMER, 16, NULL);
+    }
+}
+
+/* F23: 启动平滑缩放动画——Y 轴目标（只动 Y）。 */
+static void chart_anim_to_y(OS_ChartWin* cw, double y0, double y1)
+{
     cw->anim_y0 = y0; cw->anim_y1 = y1;
+    cw->anim_y_on = 1;
     if (!cw->anim_on) {
         cw->anim_on = 1;
         SetTimer(cw->hwnd, CHART_ANIM_TIMER, 16, NULL);
@@ -738,10 +761,11 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
         if (y0 < plot.top) y0 = plot.top;
         if (y1 > plot.bottom) y1 = plot.bottom;
         if (x1 > x0 && y1 > y0) {
-            HPEN pen = CreatePen(PS_DOT, 1, RGB(255, 255, 255));
+            /* 亮青虚线边框 + 主题蓝填充：绘图区在两种主题下均为深色底，
+             * 亮青在白/黑主题都清晰可见（跳变根因 E：原白色边框在浅色主题不可见） */
+            HPEN pen = CreatePen(PS_DOT, 1, RGB(80, 200, 255));
             HPEN old = (HPEN)SelectObject(hdc, pen);
             r.left = x0; r.top = y0; r.right = x1; r.bottom = y1;
-            /* 半透明感：先淡蓝填充再画虚线框 */
             FillRect(hdc, &r, os_theme_brush(TH_TREE_SEL_BG));
             Rectangle(hdc, x0, y0, x1, y1);
             SelectObject(hdc, old);
@@ -848,6 +872,8 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                     OS_ChartView v;
                     chart_compute_view(cw, &v);
                     if (LOWORD(wParam) & MK_CONTROL) {
+                        /* F23: 框选起点同步当前视图，框选映射始终基于此刻画面 */
+                        chart_sync_manual(cw, &v);
                         cw->boxing = 1;
                         cw->box0.x = cw->box1.x = x;
                         cw->box0.y = cw->box1.y = y;
@@ -899,18 +925,21 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (cw->dragging && GetCapture() == hwnd) {
                 int dx = x - cw->drag0.x;
                 int dy = y - cw->drag0.y;
+                /* X 平移始终有效（fit_x 转手动，从拖拽起点快照平移） */
                 if (cw->drag_x1 > cw->drag_x0 && plot.right > plot.left) {
                     double us_px = (double)(cw->drag_x1 - cw->drag_x0) / (plot.right - plot.left);
                     int64_t nx0 = cw->drag_x0 - (int64_t)(dx * us_px);
                     int64_t nx1 = cw->drag_x1 - (int64_t)(dx * us_px);
                     if (nx1 > nx0) { cw->vx0 = nx0; cw->vx1 = nx1; }
                 }
-                if (plot.bottom > plot.top && cw->drag_y1 > cw->drag_y0) {
+                /* Y 平移仅在 Y 已手动锁定（fit_y=0）时有效；fit_y=1 时保持自动、
+                 * 随 X 窗内数据每帧重算——避免水平拖拽把 Y 从自动冻结到起点快照（跳变根因 C） */
+                if (!cw->fit_y && plot.bottom > plot.top && cw->drag_y1 > cw->drag_y0) {
                     double v_px = (cw->drag_y1 - cw->drag_y0) / (plot.bottom - plot.top);
                     cw->vylo = cw->drag_y0 + dy * v_px;
                     cw->vyhi = cw->drag_y1 + dy * v_px;
                 }
-                cw->fit_x = 0; cw->fit_y = 0; cw->view_all = 0;
+                cw->fit_x = 0; cw->view_all = 0;
                 cw->m0.x = cw->m1.x = -1;
                 InvalidateRect(hwnd, NULL, TRUE);
                 return 0;
@@ -930,30 +959,37 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             RECT plot;
             chart_plot_rect(cw, &plot);
             if (cw->boxing && GetCapture() == hwnd) {
-                /* F23: 框选结束——应用到局部缩放 */
+                /* F23: 框选结束——应用到局部缩放（纯函数映射 + 平滑动画） */
                 OS_ChartView v;
                 int x0 = cw->box0.x, x1 = cw->box1.x;
                 int y0 = cw->box0.y, y1 = cw->box1.y;
-                int t, b;
+                int t;
+                int64_t nx0 = 0, nx1 = 0;
+                double nyhi = 0, nylo = 0;
+                int has_x = 0, has_y = 0;
                 if (x0 > x1) { t = x0; x0 = x1; x1 = t; }
                 if (y0 > y1) { t = y0; y0 = y1; y1 = t; }
                 if (x1 - x0 >= 6 && y1 - y0 >= 6 && plot.right > plot.left && plot.bottom > plot.top) {
                     chart_compute_view(cw, &v);
+                    chart_sync_manual(cw, &v);  /* 起点=当前视图，动画从此画面平滑过渡 */
                     if (v.have_t && v.x1 > v.x0) {
-                        double us_px = (double)(v.x1 - v.x0) / (plot.right - plot.left);
-                        int64_t nx0 = v.x0 + (int64_t)((x0 - plot.left) * us_px);
-                        int64_t nx1 = v.x0 + (int64_t)((x1 - plot.left) * us_px);
-                        if (nx1 > nx0) { cw->vx0 = nx0; cw->vx1 = nx1; }
+                        os_cv_box_x(v.x0, v.x1, plot.left, plot.right, x0, x1, &nx0, &nx1);
+                        if (nx1 > nx0) has_x = 1;
                     }
                     if (v.yhi > v.ylo) {
-                        double v_px = (v.yhi - v.ylo) / (plot.bottom - plot.top);
-                        cw->vyhi = v.yhi - (y0 - plot.top) * v_px;
-                        cw->vylo = v.yhi - (y1 - plot.top) * v_px;
+                        os_cv_box_y(v.yhi, v.ylo, plot.top, plot.bottom, y0, y1, &nyhi, &nylo);
+                        if (nyhi > nylo) has_y = 1;
                     }
-                    cw->fit_x = 0; cw->fit_y = 0; cw->view_all = 0;
-                    cw->m0.x = cw->m1.x = -1;
-                    os_log(OS_LOG_INFO, "波形框选缩放: X=[%lld,%lld]us Y=[%g,%g]",
-                           (long long)cw->vx0, (long long)cw->vx1, cw->vylo, cw->vyhi);
+                    if (has_x || has_y) {
+                        if (has_x) chart_anim_to_x(cw, nx0, nx1);
+                        if (has_y) chart_anim_to_y(cw, nylo, nyhi);
+                        cw->fit_x = 0; cw->fit_y = 0; cw->view_all = 0;
+                        cw->m0.x = cw->m1.x = -1;
+                        os_log(OS_LOG_INFO, "波形框选缩放: X=[%lld,%lld]us Y=[%g,%g]",
+                               (long long)(has_x ? nx0 : cw->vx0),
+                               (long long)(has_x ? nx1 : cw->vx1),
+                               has_y ? nylo : cw->vylo, has_y ? nyhi : cw->vyhi);
+                    }
                 }
                 cw->boxing = 0;
                 ReleaseCapture();
@@ -1042,37 +1078,34 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 pt.y >= plot.top && pt.y <= plot.bottom) {
                 chart_compute_view(cw, &v);
                 if (LOWORD(wParam) & MK_CONTROL) {
-                    /* Ctrl+滚轮：Y 轴缩放 */
+                    /* Ctrl+滚轮：Y 轴缩放（只动 Y，X 自动/手动保持不被打扰——跳变根因 B） */
                     if (!v.have_data) return 0;
                     {
                         double f = (double)(plot.bottom - pt.y) / (plot.bottom - plot.top);
+                        double ny0, ny1;
                         if (f < 0.0) f = 0.0;
                         if (f > 1.0) f = 1.0;
-                        double span = (v.yhi - v.ylo) * factor;
-                        if (span < 1e-12) span = 1e-12;
-                        double ny0 = v.ylo + f * ((v.yhi - v.ylo) - span);
-                        double ny1 = ny0 + span;
-                        cw->fit_y = 0;
-                        os_log(OS_LOG_DEBUG, "波形 Y 轴缩放: [%g,%g] (目标)", ny0, ny1);
-                        chart_anim_to(cw, v.x0, v.x1, ny0, ny1);
+                        if (os_cv_zoom_y(v.ylo, v.yhi, f, factor, &ny0, &ny1)) {
+                            chart_sync_manual(cw, &v);  /* 起点=当前自动 Y（若自动），避免起跳 */
+                            cw->fit_y = 0;
+                            os_log(OS_LOG_DEBUG, "波形 Y 轴缩放: [%g,%g] (目标)", ny0, ny1);
+                            chart_anim_to_y(cw, ny0, ny1);
+                        }
                     }
                 } else {
-                    /* X 轴缩放 */
+                    /* X 轴缩放（只动 X：Y 保持自动/手动不被打扰——跳变根因 B） */
                     if (v.have_t && v.x1 > v.x0) {
                         double f = (double)(pt.x - plot.left) / (plot.right - plot.left);
+                        int64_t nx0, nx1;
                         if (f < 0.0) f = 0.0;
                         if (f > 1.0) f = 1.0;
-                        double span = (double)(v.x1 - v.x0) * factor;
-                        if (span < 1000.0) span = 1000.0; /* 不小于 1ms */
-                        int64_t nx0 = v.x0 + (int64_t)(f * ((double)(v.x1 - v.x0) - span));
-                        int64_t nx1 = nx0 + (int64_t)span;
-                        if (v.full0 != INT64_MAX) { if (nx0 < v.full0) nx0 = v.full0; }
-                        if (v.full1 != INT64_MIN) { if (nx1 > v.full1) nx1 = v.full1; }
-                        if (nx1 > nx0) {
+                        if (os_cv_zoom_x(v.x0, v.x1, f, factor, v.full0, v.full1, &nx0, &nx1)) {
+                            chart_sync_manual(cw, &v);  /* 起点=当前自动视图，避免动画从陈旧值起跳 */
                             cw->fit_x = 0;
-                            os_log(OS_LOG_DEBUG, "波形 X 轴缩放: [%lld,%lld] us (目标)",
-                                   (long long)nx0, (long long)nx1);
-                            chart_anim_to(cw, nx0, nx1, v.ylo, v.yhi);
+                            os_log(OS_LOG_DEBUG, "波形 X 轴缩放: [%lld,%lld] us (目标; 起点=[%lld,%lld])",
+                                   (long long)nx0, (long long)nx1,
+                                   (long long)cw->vx0, (long long)cw->vx1);
+                            chart_anim_to_x(cw, nx0, nx1);
                         }
                     }
                 }
@@ -1084,17 +1117,33 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         return 0;
     }
     case WM_TIMER:
-        /* F23: 平滑缩放动画——逐帧向目标插值，消除滚轮缩放跳变 */
+        /* F23: 平滑缩放动画——逐帧向目标插值（X/Y 独立），差值过小直接吸附收敛，
+         * 避免整数插值步进为 0 导致永不收敛/定时器泄漏（跳变根因 D） */
         if (cw && wParam == CHART_ANIM_TIMER && cw->anim_on) {
-            int done = 0;
-            if (cw->vx0 != cw->anim_x0) cw->vx0 += (cw->anim_x0 - cw->vx0) * 3 / 10;
-            if (cw->vx1 != cw->anim_x1) cw->vx1 += (cw->anim_x1 - cw->vx1) * 3 / 10;
-            cw->vylo += (cw->anim_y0 - cw->vylo) * 0.3;
-            cw->vyhi += (cw->anim_y1 - cw->vyhi) * 0.3;
-            if (cw->vx0 == cw->anim_x0 && cw->vx1 == cw->anim_x1 &&
-                cw->vylo == cw->anim_y0 && cw->vyhi == cw->anim_y1) {
-                done = 1;
+            int done_x = 1, done_y = 1;
+            if (cw->anim_x_on) {
+                int64_t d0 = cw->anim_x0 - cw->vx0;
+                int64_t d1 = cw->anim_x1 - cw->vx1;
+                int64_t s0, s1;
+                if (d0 > 1) { s0 = d0 * 3 / 10; if (s0 < 1) s0 = 1; cw->vx0 += s0; done_x = 0; }
+                else if (d0 < -1) { s0 = -d0 * 3 / 10; if (s0 < 1) s0 = 1; cw->vx0 -= s0; done_x = 0; }
+                else cw->vx0 = cw->anim_x0;
+                if (d1 > 1) { s1 = d1 * 3 / 10; if (s1 < 1) s1 = 1; cw->vx1 += s1; done_x = 0; }
+                else if (d1 < -1) { s1 = -d1 * 3 / 10; if (s1 < 1) s1 = 1; cw->vx1 -= s1; done_x = 0; }
+                else cw->vx1 = cw->anim_x1;
+            }
+            if (cw->anim_y_on) {
+                double dy0 = cw->anim_y0 - cw->vylo;
+                double dy1 = cw->anim_y1 - cw->vyhi;
+                if (dy0 > 1e-9 || dy0 < -1e-9) { cw->vylo += dy0 * 0.3; done_y = 0; }
+                else cw->vylo = cw->anim_y0;
+                if (dy1 > 1e-9 || dy1 < -1e-9) { cw->vyhi += dy1 * 0.3; done_y = 0; }
+                else cw->vyhi = cw->anim_y1;
+            }
+            if (done_x && done_y) {
                 cw->anim_on = 0;
+                cw->anim_x_on = 0;
+                cw->anim_y_on = 0;
                 KillTimer(hwnd, CHART_ANIM_TIMER);
             }
             InvalidateRect(hwnd, NULL, TRUE);

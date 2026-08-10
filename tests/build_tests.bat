@@ -72,6 +72,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\chartview_smoke.c code\src\chartview.c ^
+    /Fe:tests\bin\chartview_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] chartview_smoke build failed
+  exit /b 1
+)
+
+echo Running chartview smoke...
+tests\bin\chartview_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] chartview_smoke FAILED
+  exit /b 1
+)
+
 echo Running jlink smoke...
 tests\bin\jlink_smoke.exe
 if errorlevel 1 (

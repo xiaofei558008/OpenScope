@@ -95,6 +95,16 @@ function Log-LastRange([string]$Pattern) {
     return $null
 }
 
+# 提取日志最后一次匹配行的"起点=[a,b]"（F23 日志含 起点=，用于 Bug A 回归断言）
+function Log-LastStart([string]$Pattern) {
+    if (-not (Test-Path $log)) { return $null }
+    $m = Get-Content $log -Encoding UTF8 | Select-String -Pattern $Pattern
+    if ($null -eq $m -or $m.Count -eq 0) { return $null }
+    $line = $m[$m.Count - 1].Line
+    if ($line -match '起点=\[(-?\d+),(-?\d+)\]') { return @([long]$matches[1], [long]$matches[2]) }
+    return $null
+}
+
 $fails = 0
 function Check([bool]$Ok, [string]$What) {
     Write-Output ("{0} {1}" -f ($(if ($Ok) { "PASS" } else { "FAIL" })), $What)
@@ -154,6 +164,20 @@ try {
         if (Log-Has '波形 X 轴缩放.*目标') { $wheelOk = $true }
     }
     Check $wheelOk "滚轮缩放 X 轴（连续目标日志）"
+
+    # Bug A 回归：首次滚轮缩放的"起点"必须是当前数据时间窗（>=数据起点 1000000us），
+    # 而非陈旧 vx0/vx1=0（旧实现 live 跟随模式下动画从 0 起跳导致整图跳变）。
+    $start1 = Log-LastStart '波形 X 轴缩放.*起点='
+    if ($start1 -ne $null) {
+        Check ($start1[0] -gt 500000 -and $start1[1] -gt $start1[0]) "首次缩放起点落在数据时间窗（Bug A 回归，起点 $($start1[0])..$($start1[1])）"
+    } else {
+        Check $false "首次缩放起点可解析"
+    }
+
+    # Bug B 回归：X 轴滚轮缩放不得触发 Y 轴缩放（旧实现把 Y 也纳入动画破坏手动 Y 缩放）
+    $yCount = 0
+    if (Test-Path $log) { $yCount = @(Get-Content $log -Encoding UTF8 | Select-String -Pattern '波形 Y 轴缩放').Count }
+    Check ($yCount -eq 0) "X 轴滚轮缩放不触发 Y 轴缩放（Bug B 回归）"
 
     # 连续缩放：再来一档，验证 X 区间连续收窄（放大后 span 变小）
     $r1 = Log-LastRange '波形 X 轴缩放.*目标'
