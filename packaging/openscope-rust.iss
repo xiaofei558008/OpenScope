@@ -1,12 +1,12 @@
-; OpenScope v2.0.1（Rust 重写版）安装脚本
+; OpenScope v2.0.2（Rust 重写版）安装脚本
 ; 与 C 版共用 AppId 前缀，但版本独立 2.0.0（request.md 需求 12：Rust 重写从 2.0.0 起）。
 ; 源文件：rust/target/release/openscope-app.exe（构建后安装为 OpenScope.exe）。
 
 [Setup]
 AppId={{7D3E1A05-8B2C-4A9F-9D46-OpenScope-2026}
 AppName=OpenScope
-AppVersion=2.0.1.0
-AppVerName=OpenScope 2.0.1
+AppVersion=2.0.2.0
+AppVerName=OpenScope 2.0.2
 AppPublisher=OpenScope
 AppCopyright=Copyright (C) 2026 OpenScope
 DefaultDirName={autopf}\OpenScope
@@ -16,18 +16,18 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 OutputDir=..\dist
-OutputBaseFilename=OpenScope-Setup-2.0.1
+OutputBaseFilename=OpenScope-Setup-2.0.2
 SetupIconFile=..\assets\openscope.ico
 UninstallDisplayIcon={app}\OpenScope.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-VersionInfoVersion=2.0.1.0
+VersionInfoVersion=2.0.2.0
 VersionInfoCompany=OpenScope
 VersionInfoDescription=OpenScope - MCU Variable Acquisition and Calibration
 VersionInfoProductName=OpenScope
-VersionInfoProductVersion=2.0.1.0
-VersionInfoOriginalFileName=OpenScope-Setup-2.0.1.exe
+VersionInfoProductVersion=2.0.2.0
+VersionInfoOriginalFileName=OpenScope-Setup-2.0.2.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

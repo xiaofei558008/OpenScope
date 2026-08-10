@@ -8,6 +8,8 @@ mod acq;
 mod app;
 mod chart;
 mod ffi;
+mod numwin;
+mod winmgr;
 
 use windows::core::*;
 use windows::Win32::Foundation::*;

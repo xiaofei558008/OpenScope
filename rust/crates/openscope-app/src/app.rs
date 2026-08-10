@@ -12,6 +12,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::acq::{AcqState, LeafBuf, LeafSpec};
+use crate::winmgr::{self, OsWin, WinKind};
 
 /// RGB 组合成 COLORREF（0x00BBGGRR）。
 const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
@@ -19,7 +20,7 @@ const fn rgb(r: u8, g: u8, b: u8) -> COLORREF {
 }
 
 pub const WND_MAIN: &str = "OpenScopeMain";
-pub const VERSION: &str = "2.0.1";
+pub const VERSION: &str = "2.0.2";
 pub const CHART_CLASS: PCWSTR = w!("OpenScopeChart");
 
 /// UI 刷新定时器 ID。
@@ -50,9 +51,15 @@ const IDM_REC_LOGSTART: i32 = 2023;
 const IDM_REC_LOGSTOP: i32 = 2024;
 const IDM_REC_REPLAY: i32 = 2025;
 const IDM_REC_REPLAYSTOP: i32 = 2026;
-// 窗口（尚未移植，菜单置灰）
+// 窗口
 const IDM_WIN_CHART: i32 = 2012;
 const IDM_WIN_NUM: i32 = 2013;
+
+// 变量树右键菜单命令
+const IDM_CTX_ADD_CHART: i32 = 9501;
+const IDM_CTX_ADD_NUM: i32 = 9502;
+const IDM_CTX_CHECK_ALL: i32 = 9503;
+const IDM_CTX_UNCHECK_ALL: i32 = 9504;
 
 const WC_BUTTON: PCWSTR = w!("BUTTON");
 const WC_TREEVIEW: PCWSTR = w!("SysTreeView32");
@@ -72,8 +79,8 @@ pub struct App {
     pub btn_start: HWND,
     pub btn_stop: HWND,
     pub btn_load: HWND,
-    /// 图表窗口（右侧 tab 内）。
-    pub hchart: HWND,
+    /// 右侧窗口列表（每窗口一个 tab）。
+    pub wins: Vec<OsWin>,
     /// 已加载的 ELF 解析结果（None=未加载）。
     pub elf: Option<openscope_elf::ElfFile>,
     /// ELF 文件路径（供热加载/重载）。
@@ -102,7 +109,7 @@ impl App {
             btn_start: HWND::default(),
             btn_stop: HWND::default(),
             btn_load: HWND::default(),
-            hchart: HWND::default(),
+            wins: Vec::new(),
             elf: None,
             elf_path: String::new(),
             jlink: None,
@@ -130,8 +137,9 @@ impl App {
             return Err(Error::from_win32());
         }
 
-        // 注册图表窗口类
+        // 注册图表窗口类与数值窗口类
         let _ = crate::chart::register_class(self.hinst)?;
+        let _ = crate::numwin::register_class(self.hinst)?;
 
         let title = format!("OpenScope v{} - MCU 变量采集与标定", VERSION);
         let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
@@ -189,9 +197,9 @@ impl App {
         AppendMenuW(mlog, MF_STRING | MF_GRAYED, IDM_REC_REPLAY as usize, w!("离线回放..."))?;
         AppendMenuW(mlog, MF_STRING | MF_GRAYED, IDM_REC_REPLAYSTOP as usize, w!("停止回放"))?;
 
-        // 窗口(&W)：独立波形/数值窗口尚未移植，置灰
-        AppendMenuW(mwin, MF_STRING | MF_GRAYED, IDM_WIN_CHART as usize, w!("波形窗口"))?;
-        AppendMenuW(mwin, MF_STRING | MF_GRAYED, IDM_WIN_NUM as usize, w!("数值窗口"))?;
+        // 窗口(&W)：波形/数值窗口
+        AppendMenuW(mwin, MF_STRING, IDM_WIN_CHART as usize, w!("波形窗口"))?;
+        AppendMenuW(mwin, MF_STRING, IDM_WIN_NUM as usize, w!("数值窗口"))?;
 
         // 帮助(&H)
         AppendMenuW(mhelp, MF_STRING, IDM_ABOUT as usize, w!("关于 OpenScope"))?;
@@ -205,6 +213,79 @@ impl App {
 
         SetMenu(self.hmain, Some(gmenu))?;
         Ok(())
+    }
+
+    /// 新增一个窗口（波形/数值），作为新 tab 插入右侧并选中显示。
+    unsafe fn add_window(&mut self, kind: WinKind) -> Result<usize> {
+        let idx = self.wins.len();
+        let hwnd = match kind {
+            WinKind::Chart => winmgr::create_chart_hwnd(self.htab, self.hinst, idx)?,
+            WinKind::Number => winmgr::create_number_hwnd(self.htab, self.hinst, idx)?,
+        };
+        let title = match kind {
+            WinKind::Chart => format!("波形{}", idx + 1),
+            WinKind::Number => format!("数值{}", idx + 1),
+        };
+        winmgr::insert_tab_item(self.htab, idx, &title);
+        self.wins.push(OsWin {
+            kind,
+            hwnd,
+            title: title.clone(),
+            series: Vec::new(),
+        });
+        let _ = SendMessageW(self.htab, TCM_SETCURSEL, Some(WPARAM(idx)), None);
+        // 显示新窗口、隐藏其余（直接内联，避免经 get_app_mut 二次可变借用）
+        for (i, w) in self.wins.iter().enumerate() {
+            let _ = ShowWindow(w.hwnd, if i == idx { SW_SHOWNA } else { SW_HIDE });
+        }
+        // 立即铺满 tab 显示区
+        let _ = MoveWindow(hwnd, 0, 22, 1, 1, true);
+        let _ = self.reposition_windows();
+        self.log(&format!(
+            "已添加{}窗口（{}）",
+            if matches!(kind, WinKind::Chart) {
+                "波形"
+            } else {
+                "数值"
+            },
+            title
+        ));
+        Ok(idx)
+    }
+
+    /// 把全部窗口子控件重新铺满 tab 显示区。
+    unsafe fn reposition_windows(&self) -> i32 {
+        let mut rect = RECT::default();
+        let _ = GetClientRect(self.htab, &mut rect);
+        let tab_w = rect.right - rect.left;
+        let tab_h = rect.bottom - rect.top;
+        for w_ in &self.wins {
+            let _ = MoveWindow(w_.hwnd, 0, 22, tab_w, tab_h - 22, true);
+        }
+        tab_h - 22
+    }
+
+    /// 确保 ELF 变量 leaf_idx 已登记为采集叶（不重复），返回其在 acq.leaves 中的下标。
+    pub fn register_leaf(&mut self, leaf_idx: usize) -> Option<usize> {
+        let info = self.elf.as_ref().and_then(|elf| elf.var_at(leaf_idx))?;
+        let name = info.name.clone();
+        let address = info.address;
+        let size = info.symbol_size as u32;
+        let mut is_new = false;
+        let idx = {
+            let mut acq = self.acq.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(p) = acq.leaves.iter().position(|l| l.name == name) {
+                p
+            } else {
+                acq.leaves.push(LeafBuf::from_elf(name.clone(), address, size));
+                is_new = true;
+                acq.leaves.len() - 1
+            }
+        };
+        if is_new {
+            self.log(&format!("已登记变量: {}", name));
+        }
+        Some(idx)
     }
 
     /// 快捷键表：Ctrl+O 打开 ELF；F5-F8 对应采集菜单（ID 复用按钮 ID）。
@@ -264,8 +345,8 @@ impl App {
             Some(self.hinst),
             None,
         )?;
-        // tab 内的波形窗口（v1：单窗口）
-        self.hchart = crate::chart::create(self.htab, self.hinst, 2300)?;
+        // 初始窗口：第一个波形 tab（后续菜单/右键可继续添加）
+        self.add_window(WinKind::Chart)?;
         // 底部日志
         self.hlog = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
@@ -321,23 +402,13 @@ impl App {
         let y0 = btn_h;
         // 按钮已在 create 时绝对定位（顶栏），随宽度自适应可后续做
         let _ = MoveWindow(self.htree, 0, y0, tree_w, h - y0 - log_h - status_h, true);
-        let _ = MoveWindow(
-            self.htab,
-            tree_w + 4,
-            y0,
-            w - tree_w - 8,
-            h - y0 - log_h - status_h,
-            true,
-        );
-        // 波形窗口占据 tab 显示区（tab 行 ~22px）
-        let _ = MoveWindow(
-            self.hchart,
-            0,
-            22,
-            w - tree_w - 8,
-            h - y0 - log_h - status_h - 22,
-            true,
-        );
+        let tab_w = w - tree_w - 8;
+        let tab_h = h - y0 - log_h - status_h;
+        let _ = MoveWindow(self.htab, tree_w + 4, y0, tab_w, tab_h, true);
+        // 每个窗口占据 tab 显示区（tab 行 ~22px）
+        for w_ in &self.wins {
+            let _ = MoveWindow(w_.hwnd, 0, 22, tab_w, tab_h - 22, true);
+        }
         let _ = MoveWindow(
             self.hlog,
             0,
@@ -588,6 +659,172 @@ impl App {
             );
         }
     }
+
+    /// 收集变量树中已勾选节点的 ELF 下标（lParam 编码：idx+1）。
+    fn checked_leaf_idxs(&self) -> Vec<usize> {
+        let mut out = Vec::new();
+        unsafe {
+            let root = SendMessageW(
+                self.htree,
+                TVM_GETNEXTITEM,
+                Some(WPARAM(TVGN_ROOT as usize)),
+                None,
+            )
+            .0;
+            if root == 0 {
+                return out;
+            }
+            let mut cur = root;
+            while cur != 0 {
+                let mut item = TVITEMW::default();
+                item.hItem = HTREEITEM(cur);
+                item.mask = TVIF_PARAM | TVIF_STATE;
+                item.stateMask = TVIS_STATEIMAGEMASK;
+                let r = SendMessageW(self.htree, TVM_GETITEMW, None, Some(LPARAM(&raw mut item as isize)));
+                if r.0 != 0 {
+                    // 勾选 = 状态图索引 2（1=未勾，2=已勾）
+                    let state_img = (item.state.0 & 0xf000) >> 12;
+                    let idx = item.lParam.0 - 1;
+                    if state_img == 2 && idx >= 0 {
+                        out.push(idx as usize);
+                    }
+                }
+                cur = SendMessageW(
+                    self.htree,
+                    TVM_GETNEXTITEM,
+                    Some(WPARAM(TVGN_NEXT as usize)),
+                    Some(LPARAM(cur)),
+                )
+                .0;
+            }
+        }
+        out
+    }
+
+    /// 右键菜单：把勾选变量加到目标窗口（无对应类型窗口时自动新建）。
+    unsafe fn ctx_add_checked_to(&mut self, kind: WinKind) {
+        let checked = self.checked_leaf_idxs();
+        if checked.is_empty() {
+            self.log("请先在变量树勾选要添加的变量");
+            return;
+        }
+        // 目标窗口：优先当前选中 tab（类型匹配时），否则该类型最近一个，否则新建
+        let cur = winmgr::current_tab(self.htab);
+        let mut win_idx = self.wins.get(cur).filter(|w| w.kind == kind).map(|_| cur);
+        if win_idx.is_none() {
+            win_idx = self.wins.iter().rposition(|w| w.kind == kind);
+        }
+        let win_idx = match win_idx {
+            Some(i) => i,
+            None => match self.add_window(kind) {
+                Ok(i) => i,
+                Err(e) => {
+                    self.log(&format!("创建窗口失败: {}", e));
+                    return;
+                }
+            },
+        };
+        // 登记变量（acq.leaves 去重）并加入窗口系列（去重）
+        let mut added = 0usize;
+        for &idx in &checked {
+            if let Some(leaf) = self.register_leaf(idx) {
+                let series = &mut self.wins[win_idx].series;
+                if !series.contains(&leaf) {
+                    series.push(leaf);
+                    added += 1;
+                }
+            }
+        }
+        let title = self.wins[win_idx].title.clone();
+        let _ = InvalidateRect(Some(self.wins[win_idx].hwnd), None, false);
+        self.log(&format!("已添加 {} 个变量到 {}", added, title));
+    }
+
+    /// 右键菜单：全部勾选/全部取消勾选，并同步采集列表。
+    unsafe fn ctx_check_all(&mut self, check: bool) {
+        let root = SendMessageW(
+            self.htree,
+            TVM_GETNEXTITEM,
+            Some(WPARAM(TVGN_ROOT as usize)),
+            None,
+        )
+        .0;
+        if root == 0 {
+            return;
+        }
+        let mut cur = root;
+        let mut set = TVITEMW::default();
+        set.mask = TVIF_STATE | TVIF_HANDLE;
+        set.stateMask = TVIS_STATEIMAGEMASK;
+        // 勾选 = 状态图索引 2，取消 = 1（TVIS_STATEIMAGEMASK 高 12 位）
+        set.state = TREE_VIEW_ITEM_STATE_FLAGS(if check { 2 << 12 } else { 1 << 12 });
+        while cur != 0 {
+            // 读取 lParam（更新 state 后 set 会覆盖 hItem，需单独取）
+            let mut get = TVITEMW::default();
+            get.hItem = HTREEITEM(cur);
+            get.mask = TVIF_PARAM;
+            let _ = SendMessageW(self.htree, TVM_GETITEMW, None, Some(LPARAM(&raw mut get as isize)));
+            set.hItem = HTREEITEM(cur);
+            let _ = SendMessageW(self.htree, TVM_SETITEMW, None, Some(LPARAM(&raw mut set as isize)));
+            let idx = get.lParam.0 - 1;
+            if idx >= 0 {
+                self.toggle_leaf(idx as usize, check);
+            }
+            cur = SendMessageW(
+                self.htree,
+                TVM_GETNEXTITEM,
+                Some(WPARAM(TVGN_NEXT as usize)),
+                Some(LPARAM(cur)),
+            )
+            .0;
+        }
+        self.log(if check {
+            "已全部勾选变量"
+        } else {
+            "已全部取消勾选变量"
+        });
+    }
+
+    /// WM_CONTEXTMENU：在变量树显示右键菜单（添加变量到窗口/全选/取消全选）。
+    unsafe fn show_tree_context_menu(&mut self, hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+        // wparam 是被点控件（键盘触发 Shift+F10 时也是焦点控件句柄）
+        let ctl = HWND(wparam.0 as *mut c_void);
+        if ctl != self.htree {
+            return;
+        }
+        let mut pt = POINT::default();
+        if (lparam.0 as usize) == 0xffff_ffff {
+            // 键盘触发：用鼠标位置
+            let _ = GetCursorPos(&mut pt);
+        } else {
+            pt.x = (lparam.0 & 0xffff) as i32;
+            pt.y = ((lparam.0 >> 16) & 0xffff) as i32;
+        }
+        let Ok(menu) = CreatePopupMenu() else { return };
+        let _ = AppendMenuW(menu, MF_STRING, IDM_CTX_ADD_CHART as usize, w!("添加变量到波形窗口"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_CTX_ADD_NUM as usize, w!("添加变量到数值窗口"));
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let _ = AppendMenuW(menu, MF_STRING, IDM_CTX_CHECK_ALL as usize, w!("全部勾选"));
+        let _ = AppendMenuW(menu, MF_STRING, IDM_CTX_UNCHECK_ALL as usize, w!("全部取消勾选"));
+        let sel = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_LEFTALIGN,
+            pt.x,
+            pt.y,
+            None,
+            hwnd,
+            None,
+        );
+        let _ = DestroyMenu(menu);
+        // TPM_RETURNCMD：返回值即被选菜单项 ID（0=未选）
+        match sel.0 as i32 {
+            IDM_CTX_ADD_CHART => self.ctx_add_checked_to(WinKind::Chart),
+            IDM_CTX_ADD_NUM => self.ctx_add_checked_to(WinKind::Number),
+            IDM_CTX_CHECK_ALL => self.ctx_check_all(true),
+            IDM_CTX_UNCHECK_ALL => self.ctx_check_all(false),
+            _ => {}
+        }
+    }
 }
 
 unsafe fn make_button(
@@ -680,7 +917,43 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 IDM_ABOUT => {
                     show_about(hwnd);
                 }
+                IDM_WIN_CHART => {
+                    if let Some(app) = get_app_mut() {
+                        let _ = app.add_window(WinKind::Chart);
+                    }
+                }
+                IDM_WIN_NUM => {
+                    if let Some(app) = get_app_mut() {
+                        let _ = app.add_window(WinKind::Number);
+                    }
+                }
+                IDM_CTX_ADD_CHART | IDM_CTX_ADD_NUM => {
+                    // 右键菜单：把勾选的变量加到目标窗口
+                    let kind = if id == IDM_CTX_ADD_CHART {
+                        WinKind::Chart
+                    } else {
+                        WinKind::Number
+                    };
+                    if let Some(app) = get_app_mut() {
+                        app.ctx_add_checked_to(kind);
+                    }
+                }
+                IDM_CTX_CHECK_ALL | IDM_CTX_UNCHECK_ALL => {
+                    let check = id == IDM_CTX_CHECK_ALL;
+                    if let Some(app) = get_app_mut() {
+                        app.ctx_check_all(check);
+                    }
+                }
                 _ => {}
+            }
+            LRESULT(0)
+        }
+        WM_CONTEXTMENU => {
+            // 变量树右键菜单
+            let htree = (lparam.0 as usize == 0xffff_ffff) as bool;
+            let _ = htree;
+            if let Some(app) = get_app_mut() {
+                app.show_tree_context_menu(hwnd, wparam, lparam);
             }
             LRESULT(0)
         }
@@ -706,6 +979,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                             app.toggle_leaf(idx as usize, checked);
                         }
                     }
+                } else if hdr.idFrom == IDC_TAB as usize && hdr.code == TCN_SELCHANGE {
+                    // 切换 tab → 切换激活窗口
+                    if let Some(app) = get_app_mut() {
+                        let sel = winmgr::current_tab(app.htab);
+                        winmgr::switch_win(sel);
+                    }
                 }
             }
             LRESULT(0)
@@ -713,7 +992,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TIMER => {
             if wparam.0 == TIMER_UI_REFRESH {
                 if let Some(app) = get_app_mut() {
-                    let _ = InvalidateRect(Some(app.hchart), None, false);
+                    // 刷新所有波形/数值窗口
+                    for w_ in &app.wins {
+                        let _ = InvalidateRect(Some(w_.hwnd), None, false);
+                    }
                 }
             } else if wparam.0 == 777 {
                 // 诊断定时器：首次触发即发起连接（验证 wndproc 内 DLL 调用）

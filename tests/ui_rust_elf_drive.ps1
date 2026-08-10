@@ -3,8 +3,9 @@
 #   GetOpenFileNameW 直接失败 -> 点"加载 ELF"根本不弹文件对话框。
 #   A. 点"加载 ELF"按键 -> 弹出文件对话框(#32770)，取消后关闭（校验对话框路径可用）
 #   B. 命令行加载 linix_stm32l031_v1.2.out -> 树 636 个符号（校验解析+填充管线）
-#   C. 命令行连续加载 linix.out 与 elf_sample.out -> 树被替换为 elf_sample 的 4 个符号
-#      （校验 fill_tree 的 TVI_ROOT 清树；此前传 LPARAM(-1) 删不掉导致叠加）
+#   C. 命令行连续加载 linix.out 与 elf_sample.out -> 树被替换为 elf_sample 的 3 个全局变量
+#      （校验 fill_tree 的 TVI_ROOT 清树；此前传 LPARAM(-1) 删不掉导致叠加 + bug3 过滤函数）
+#   注：elf_sample.out 的 main(STT_FUNC) 与无名符号被 bug3 过滤，仅剩 3 个全局变量。
 param(
     [string]$OutFile = "D:/OpenScope/tests/linix_stm32l031_v1.2.out",
     [string]$ElfFile = "D:/OpenScope/tests/elf_sample.out",
@@ -148,7 +149,9 @@ try {
     $c2 = TreeCount $tree
     Write-Output ("C 连续加载后树数量 = " + $c2)
     Check ($c2 -gt 0) "C1 连续加载后树仍有内容"
-    Check ($c2 -eq 4) "C2 树被替换为 elf_sample 的 4 个符号（fill_tree TVI_ROOT 清树生效）"
+    # elf_sample.out 共 5 符号：3 个全局变量(g_counter/g_cfg/g_raw) + main(STT_FUNC) + 无名NOTYPE。
+    # bug3 只解析全局变量 → 树应为 3 项（main 函数被过滤）；同时验证 fill_tree TVI_ROOT 清树生效。
+    Check ($c2 -eq 3) "C2 树被替换为 elf_sample 的 3 个全局变量（bug3 过滤函数 + fill_tree TVI_ROOT 清树）"
 } finally { if (-not $proc.HasExited) { $proc.Kill() } }
 
 Write-Output ("ALL " + $(if ($fails -eq 0) { "PASS" } else { "FAILURES: $fails" }))

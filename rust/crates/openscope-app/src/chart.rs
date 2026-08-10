@@ -12,6 +12,7 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::acq::RING_CAP;
 use crate::app::{get_app_mut, CHART_CLASS};
+use crate::winmgr;
 
 /// 系列调色板（与 C 版一致的常见颜色）。
 const PALETTE: [COLORREF; 8] = [
@@ -118,6 +119,52 @@ unsafe extern "system" fn chart_wndproc(
             let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
+        WM_CONTEXTMENU => {
+            // 右键：列出本窗口系列，选择移除
+            let id = GetDlgCtrlID(hwnd);
+            let Some(win_idx) = winmgr::win_index_from_id(id) else {
+                return LRESULT(0);
+            };
+            let mut names: Vec<String> = Vec::new();
+            if let Some(app) = get_app_mut() {
+                if let Some(w) = app.wins.get(win_idx) {
+                    let acq = app.acq.lock().unwrap_or_else(|e| e.into_inner());
+                    for &si in &w.series {
+                        if let Some(l) = acq.leaves.get(si) {
+                            names.push(l.name.clone());
+                        }
+                    }
+                }
+            }
+            if names.is_empty() {
+                return LRESULT(0);
+            }
+            let menu = CreatePopupMenu();
+            let Ok(menu) = menu else { return LRESULT(0) };
+            for (i, nm) in names.iter().enumerate() {
+                let label = format!("移除系列: {}", nm);
+                let wl: Vec<u16> = label.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = AppendMenuW(menu, MF_STRING, (3000 + i) as usize, PCWSTR(wl.as_ptr()));
+            }
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            let sel = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                pt.x,
+                pt.y,
+                None,
+                hwnd,
+                None,
+            );
+            let _ = DestroyMenu(menu);
+            let c = sel.0 as i32;
+            let idx = c - 3000;
+            if idx >= 0 {
+                winmgr::remove_series_from_win(win_idx, idx as usize);
+            }
+            LRESULT(0)
+        }
         WM_DESTROY => {
             let p = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut ChartView;
             if !p.is_null() {
@@ -129,7 +176,7 @@ unsafe extern "system" fn chart_wndproc(
     }
 }
 
-/// 双缓冲绘制。
+/// 双缓冲绘制。只画本窗口所属系列（app.wins[win_idx].series）。
 unsafe fn paint(hwnd: HWND, view_pts: usize) {
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
@@ -146,79 +193,123 @@ unsafe fn paint(hwnd: HWND, view_pts: usize) {
     let _ = FillRect(mem, &rc, bg);
     let _ = DeleteObject(HGDIOBJ(bg.0));
 
-    // 从共享采集状态取数据
-    if let Some(app) = get_app_mut() {
-        let acq = app.acq.lock().unwrap_or_else(|e| e.into_inner());
-        let nseries = acq.leaves.len().min(PALETTE.len());
-
-        // 全系列共享一个 Y 值域（与 C 版 chart_compute_view 一致）：先遍历所有叶子求
-        // 全局 ymin/ymax，再统一映射。若每路各自 autoscale，常量值会全挤到窗口中部重叠。
-        let (mut vmin, mut vmax) = (f32::INFINITY, f32::NEG_INFINITY);
-        let mut have_data = false;
-        for si in 0..nseries {
-            let leaf = &acq.leaves[si];
-            let start = if leaf.count >= view_pts {
-                (leaf.head + RING_CAP - view_pts) % RING_CAP
-            } else {
-                0
-            };
-            let n = leaf.count.min(view_pts);
-            for k in 0..n {
-                let v = leaf.samples[(start + k) % RING_CAP];
-                if v.is_finite() {
-                    vmin = vmin.min(v);
-                    vmax = vmax.max(v);
-                    have_data = true;
+    let mut nseries = 0usize;
+    // 本窗口系列（从控制 ID 反查窗口下标）
+    let id = GetDlgCtrlID(hwnd);
+    let mut series: Vec<usize> = Vec::new();
+    let mut name: Vec<String> = Vec::new();
+    if let Some(win_idx) = winmgr::win_index_from_id(id) {
+        if let Some(app) = get_app_mut() {
+            if let Some(w) = app.wins.get(win_idx) {
+                series = w.series.clone();
+            }
+            let acq = app.acq.lock().unwrap_or_else(|e| e.into_inner());
+            for &si in &series {
+                if let Some(l) = acq.leaves.get(si) {
+                    name.push(l.name.clone());
                 }
             }
-        }
-        if !have_data {
-            vmin = -1.0;
-            vmax = 1.0;
-        }
-        if vmax - vmin < 1e-12 {
-            vmax += 1.0;
-            vmin -= 1.0;
-        }
-        let pad = (vmax - vmin) * 0.08;
-        vmin -= pad;
-        vmax += pad;
-        if vmax - vmin < 1e-12 {
-            vmax = vmin + 1.0;
-        }
+            nseries = series.len().min(PALETTE.len());
 
-        for si in 0..nseries {
-            let leaf = &acq.leaves[si];
-            let n = leaf.count.min(view_pts);
-            if n < 2 {
-                continue;
-            }
-            let start = if leaf.count >= view_pts {
-                (leaf.head + RING_CAP - view_pts) % RING_CAP
-            } else {
-                0
-            };
-
-            let pen = CreatePen(PS_SOLID, 1, PALETTE[si]);
-            let old_pen = SelectObject(mem, HGDIOBJ(pen.0));
-            let mut first = true;
-            for k in 0..n {
-                let v = leaf.samples[(start + k) % RING_CAP];
-                let x = (k as f32 / (n - 1) as f32 * (w - 1) as f32) as i32;
-                let y = (h as f32
-                    - (v - vmin) / (vmax - vmin) * (h - 1) as f32) as i32;
-                let y = y.clamp(0, h - 1);
-                if first {
-                    let _ = MoveToEx(mem, x, y, None);
-                    first = false;
+            // 本窗口全系列共享一个 Y 值域（与 C 版 chart_compute_view 一致）
+            let (mut vmin, mut vmax) = (f32::INFINITY, f32::NEG_INFINITY);
+            let mut have_data = false;
+            for &si in &series[..nseries] {
+                let Some(leaf) = acq.leaves.get(si) else { continue };
+                let start = if leaf.count >= view_pts {
+                    (leaf.head + RING_CAP - view_pts) % RING_CAP
                 } else {
-                    let _ = LineTo(mem, x, y);
+                    0
+                };
+                let n = leaf.count.min(view_pts);
+                for k in 0..n {
+                    let v = leaf.samples[(start + k) % RING_CAP];
+                    if v.is_finite() {
+                        vmin = vmin.min(v);
+                        vmax = vmax.max(v);
+                        have_data = true;
+                    }
                 }
             }
-            let _ = SelectObject(mem, old_pen);
-            let _ = DeleteObject(HGDIOBJ(pen.0));
+            if !have_data {
+                vmin = -1.0;
+                vmax = 1.0;
+            }
+            if vmax - vmin < 1e-12 {
+                vmax += 1.0;
+                vmin -= 1.0;
+            }
+            let pad = (vmax - vmin) * 0.08;
+            vmin -= pad;
+            vmax += pad;
+            if vmax - vmin < 1e-12 {
+                vmax = vmin + 1.0;
+            }
+
+            for (pi, &si) in series[..nseries].iter().enumerate() {
+                let Some(leaf) = acq.leaves.get(si) else { continue };
+                let n = leaf.count.min(view_pts);
+                if n < 2 {
+                    continue;
+                }
+                let start = if leaf.count >= view_pts {
+                    (leaf.head + RING_CAP - view_pts) % RING_CAP
+                } else {
+                    0
+                };
+
+                let pen = CreatePen(PS_SOLID, 1, PALETTE[pi]);
+                let old_pen = SelectObject(mem, HGDIOBJ(pen.0));
+                let brush = CreateSolidBrush(PALETTE[pi]);
+                let old_brush = SelectObject(mem, HGDIOBJ(brush.0));
+                // 点数少/放大时画采样点圆点（>3px 间距即可见）
+                let dots = n <= 300;
+                let mut first = true;
+                for k in 0..n {
+                    let v = leaf.samples[(start + k) % RING_CAP];
+                    let x = (k as f32 / (n - 1) as f32 * (w - 1) as f32) as i32;
+                    let y = (h as f32
+                        - (v - vmin) / (vmax - vmin) * (h - 1) as f32) as i32;
+                    let y = y.clamp(0, h - 1);
+                    if first {
+                        let _ = MoveToEx(mem, x, y, None);
+                        first = false;
+                    } else {
+                        let _ = LineTo(mem, x, y);
+                    }
+                    if dots {
+                        let _ = Ellipse(mem, x - 2, y - 2, x + 2, y + 2);
+                    }
+                }
+                let _ = SelectObject(mem, old_brush);
+                let _ = DeleteObject(HGDIOBJ(brush.0));
+                let _ = SelectObject(mem, old_pen);
+                let _ = DeleteObject(HGDIOBJ(pen.0));
+            }
+            drop(acq);
         }
-        drop(acq);
+    }
+
+    // 空窗口提示：在变量树右键添加变量
+    if nseries == 0 {
+        let mut label: Vec<u16> = "（右键变量树 → 添加变量到波形窗口）"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+        let _ = SetTextColor(mem, COLORREF(0x00686868));
+        let _ = TextOutW(mem, 12, 12, &label);
+    } else if !name.is_empty() {
+        // 左上角画系列名图例
+        for (pi, nm) in name.iter().enumerate().take(nseries) {
+            let brush = CreateSolidBrush(PALETTE[pi]);
+            let old_brush = SelectObject(mem, HGDIOBJ(brush.0));
+            let _ = Rectangle(mem, 10, 8 + pi as i32 * 16, 22, 20 + pi as i32 * 16);
+            let _ = SelectObject(mem, old_brush);
+            let _ = DeleteObject(HGDIOBJ(brush.0));
+            let mut wl: Vec<u16> = nm.encode_utf16().chain(std::iter::once(0)).collect();
+            let _ = SetTextColor(mem, COLORREF(0x00C8C8C8));
+            let _ = TextOutW(mem, 26, 6 + pi as i32 * 16, &wl);
+        }
     }
 
     let _ = BitBlt(hdc, 0, 0, w, h, Some(mem), 0, 0, SRCCOPY);

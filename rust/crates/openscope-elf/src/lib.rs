@@ -5,7 +5,7 @@
 
 pub mod types;
 
-use object::{Object, ObjectSymbol};
+use object::{Object, ObjectSymbol, SymbolKind};
 use types::Variable;
 use std::path::Path;
 
@@ -18,23 +18,32 @@ pub fn open_elf(path: &Path) -> Result<ElfFile, String> {
     }
     let mut vars: Vec<Variable> = Vec::new();
     for sym in obj.symbols() {
-        if !sym.is_definition() || sym.is_undefined() {
+        if sym.is_undefined() {
+            continue;
+        }
+        // bug3：只解析全局变量（与 C 版 elf.c:1536 一致）——STT_OBJECT + GLOBAL/WEAK + 有大小。
+        // 函数（STT_FUNC）与其它符号一律排除，避免变量树出现函数名。
+        if sym.kind() != SymbolKind::Data {
+            continue;
+        }
+        if !sym.is_global() {
+            continue;
+        }
+        if sym.size() == 0 {
             continue;
         }
         let name = match sym.name() {
             Ok(n) if !n.is_empty() => n,
             _ => continue,
         };
-        let section = sym.section_index();
-        // 只关心已分配节（全局数据/函数之外的变量区），且是全局/弱符号
-        if let Some(_sect) = section {
-            // 先收集全部具名定义符号，DWARF 层再过滤为数据变量
-            vars.push(Variable {
-                name: name.to_string(),
-                address: sym.address(),
-                symbol_size: sym.size(),
-            });
+        if name.starts_with('$') {
+            continue;
         }
+        vars.push(Variable {
+            name: name.to_string(),
+            address: sym.address(),
+            symbol_size: sym.size(),
+        });
     }
     Ok(ElfFile { vars })
 }
