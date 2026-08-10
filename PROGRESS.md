@@ -197,6 +197,14 @@
   - 版本 1.13.0：`python build.py --quiet` 干净构建，打包 `dist/OpenScope-Setup-1.13.0.exe`（10.4MB）并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。
   - 需求 9：checkpoint-27 提交 git + `git tag v1.13.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
+- **checkpoint-28（2026-08-10）**：新增特性 22（F22 消息栏抽屉收起/弹出，与左侧变量树对称），v1.14.0。
+  - 需求 22："elf 解析后的变量列表窗口需要实现抽屉缩起来和弹出；类似 VSCode 各个子窗口都可以调整，下面的消息窗口也是类似，需要能全部调整缩起来和拉出"。底部消息窗口此前只有上下拉伸（F14），无抽屉；本版本实现与左侧变量树一致的抽屉行为。
+  - 实现（code/src/app.h / mainwin.c / layout.c）：`log_hidden` 状态 + `hLogStrip`（底部 10px 细条 `OSLogStrip`，点击弹出）；双击横向分隔条 `OSSplitterH`（类加 `CS_DBLCLKS`）收起/弹出；收起时隐藏 `hLog`/`hSplitH`、右侧窗口区占满、仅留底部细条；`WM_OS_LOG_HIDE`（WM_APP+32）测试钩子（wParam=1 收起 / 0 展开）；`log_hidden` 键持久化到 layout.ini（旧布局无此键默认展开，向后兼容）。
+  - 新增 UI 回归 `tests/ui_log_drawer_drive.ps1`（双击收起→细条可见→点击弹出→钩子收起/展开→布局持久化重启恢复→进程不闪退），并纳入 `tests/run_regression.sh` NON_JLINK 数组。修复时序坑：`CreateWindow` 返回后窗口句柄即存在，但 `ShowWindow` 在 `os_modmgr_load`（jlink 扫描）之后才执行，Find 到主窗口时 `WS_VISIBLE` 可能尚未设置 → 断言前先 `Wait-MainVisible`（轮询 + `ShowWindow(SW_SHOW)` 兜底）；会话2 恢复布局不能用 `--no-layout`（该参数会同时跳过 `--layout-load`）。
+  - 回归：dev + 安装版全量回归（--jlink）44/44 ALL PASS（NON_JLINK 18 + JLINK 4，各两变体）。
+  - 版本 1.14.0：`python build.py --quiet` 干净构建 0 error/0 warning；打包 `dist/OpenScope-Setup-1.14.0.exe`（10.4MB）并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。本轮重新安装 Inno Setup 6.7.3（`tools/innosetup/ISCC.exe` 此前丢失），UAC 已禁用（EnableLUA=0），本地安装版用文件复制更新。
+  - 需求 9：checkpoint-28 提交 git + `git tag v1.14.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+
   - N4 应用图标：`version.rc` 加载 `icon\OpenScope.ico`（IDI_APP=1），主窗口类改 `WNDCLASSEXW` + hIcon/hIconSm，任务栏/窗口标题图标生效。
   - N5 MCU 型号选择：主界面新增 MCU 型号下拉（ID 2101，Cortex-M4/M3/M0/A5 + STM32L432KB/F103C8/F407VG/F429ZI/G431KB/nRF52832/NRF5340/RP2040 共 12 项），默认 Cortex-M4；连接直接读取下拉文本传入 `OS_ConnectCfg.device`，不弹窗。
   - N6 关于框：新增“晶圆上的生物技术开发和提供支持” + 版本号 v1.5.0 + 网址 www.opendebugger.com。
@@ -246,10 +254,11 @@
 - [x] 20 界面主题设置：白色（默认）/黑色（配色参考黑色 IAR / Notepad++）（checkpoint-24，F20）
 - [x] 21 高速采样：自由运行（周期=实际块读耗时）+ 连续地址块读 + UI 刷新节流，采样率 ~50/s → 数千~万/s（checkpoint-25，F21；第二步"目标端 µs 缓冲"待后续版本）
 - [x] 21 避免弹窗设置芯片型号，不触发 "Target device setting" / "Device Selection" 弹窗：open 前设 Device 会破坏 4000kHz 块读（ret=-5，核心名不匹配时），改为 open 自动探测 + open 后无条件 `Device = 核心名，默认 Cortex-M4` + `SuppressInfoDialogs = 1`；EMU_SelectByIndex 移到 open 前（SDK 契约），实测首连/重连均无弹窗（checkpoint-26 / checkpoint-27）
+- [x] 22 变量列表窗口与底部消息窗口的抽屉收起/弹出（类 VSCode 子窗口可调整）：双击横向分隔条收起 → 底部细条点击弹出，`log_hidden` 持久化到布局（checkpoint-28，F22）
 
 ## 需求（request.md 软件功能清单）
 
-- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送）
+- [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送；checkpoint-28：`git tag v1.14.0` + 双远端推送）
 - [x] 10 每次 BMAD 执行完全部任务后用 Windows 语音播报"任务执行完毕"提示用户检查（checkpoint-20，`tools/notify_done.ps1`）
 - [x] 17 跳过选芯片环节只需选芯片核心（Cortex-M0+ 等）；纯 SWD/JTAG 内存/Flash 读取无需芯片型号与架构（checkpoint-21，F17）
 

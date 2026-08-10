@@ -122,6 +122,8 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
 
 /* ---------- 工具 ---------- */
 
+#define LOG_STRIP_H 10 /* F22: 消息栏收起后底部细条高度 */
+
 static void set_status(int part, const wchar_t* text)
 {
     if (g_app.hStatus) SendMessageW(g_app.hStatus, SB_SETTEXTW, part, (LPARAM)text);
@@ -562,7 +564,11 @@ static void layout(void)
     bw = rc.right;
     sw = g_app.tree_w;
     logh = g_app.log_h;
-    right_h = rc.bottom - bh - logh - 22 - 5; /* F14: 5px 横向分隔条（消息栏上下拉伸） */
+    /* F22: 消息栏收起时右侧窗口区占满（无分隔条/消息栏），只留底部细条 */
+    if (g_app.log_hidden)
+        right_h = rc.bottom - bh - 22 - LOG_STRIP_H;
+    else
+        right_h = rc.bottom - bh - logh - 22 - 5; /* F14: 5px 横向分隔条（消息栏上下拉伸） */
     right_w = bw - sw - 5;
     /* 工具栏一行（菜单栏正下方）：全部按钮 + 接口/速度/J-Link设备/刷新 */
     {
@@ -628,9 +634,25 @@ static void layout(void)
     MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
-    if (g_app.hSplitH && IsWindow(g_app.hSplitH))
-        MoveWindow(g_app.hSplitH, 0, bh + right_h, bw, 5, TRUE);
-    MoveWindow(g_app.hLog, 0, bh + right_h + 5, bw, logh, TRUE);
+    if (g_app.log_hidden) {
+        /* F22: 消息栏收起——隐藏消息栏与分隔条，显示底部细条 */
+        if (g_app.hLogStrip && IsWindow(g_app.hLogStrip)) {
+            MoveWindow(g_app.hLogStrip, 0, rc.bottom - 22 - LOG_STRIP_H, bw, LOG_STRIP_H, TRUE);
+            ShowWindow(g_app.hLogStrip, SW_SHOW);
+        }
+        if (IsWindow(g_app.hSplitH)) ShowWindow(g_app.hSplitH, SW_HIDE);
+        if (IsWindow(g_app.hLog)) ShowWindow(g_app.hLog, SW_HIDE);
+    } else {
+        if (g_app.hLogStrip && IsWindow(g_app.hLogStrip)) ShowWindow(g_app.hLogStrip, SW_HIDE);
+        if (g_app.hSplitH && IsWindow(g_app.hSplitH)) {
+            MoveWindow(g_app.hSplitH, 0, bh + right_h, bw, 5, TRUE);
+            ShowWindow(g_app.hSplitH, SW_SHOW);
+        }
+        if (IsWindow(g_app.hLog)) {
+            MoveWindow(g_app.hLog, 0, bh + right_h + 5, bw, logh, TRUE);
+            ShowWindow(g_app.hLog, SW_SHOW);
+        }
+    }
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
     SendMessageW(g_app.hStatus, SB_SETPARTS, 4, (LPARAM)parts);
@@ -675,11 +697,61 @@ static LRESULT CALLBACK split_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
-/* ---------- F14 横向分隔条（消息栏上下拉伸） ---------- */
+/* ---------- F14 横向分隔条（消息栏上下拉伸） + F22 抽屉收起/弹出 ---------- */
+
+/* F22: 设置消息栏收起/展开状态并刷新布局 */
+static void log_set_hidden(int hidden)
+{
+    g_app.log_hidden = hidden ? 1 : 0;
+    layout();
+    os_log(OS_LOG_INFO, "消息栏%s", g_app.log_hidden ? "已收起" : "已展开");
+}
+
+/* F22: 消息栏收起后的底部细条（点击弹出，水平方向） */
+static LRESULT CALLBACK log_strip_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_PANEL));
+        /* 顶部边框线（与分隔条同色） */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, os_theme(TH_BORDER));
+            HGDIOBJ op = SelectObject(hdc, pen);
+            MoveToEx(hdc, rc.left, rc.top, NULL);
+            LineTo(hdc, rc.right, rc.top);
+            SelectObject(hdc, op);
+            DeleteObject(pen);
+        }
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, os_theme(TH_TEXT));
+        SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+        DrawTextW(hdc, L"▲ 消息（点击展开）", -1, &rc,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_LBUTTONDOWN:
+        log_set_hidden(0);
+        return 0;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursor(NULL, IDC_HAND));
+        return 1;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
 
 static LRESULT CALLBACK splith_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_LBUTTONDBLCLK: /* F22: 双击横向分隔条 → 消息栏抽屉收起/弹出 */
+        log_set_hidden(g_app.log_hidden ? 0 : 1);
+        return 0;
     case WM_LBUTTONDOWN:
         SetCapture(hwnd);
         SetCursor(LoadCursor(NULL, IDC_SIZENS));
@@ -701,6 +773,21 @@ static LRESULT CALLBACK splith_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         RECT rc;
         GetClientRect(hwnd, &rc);
         FillRect(hdc, &rc, os_theme_brush(TH_BORDER));
+        /* F22: 分隔条中央画一个小向下三角，提示"双击收起" */
+        {
+            HPEN pen = CreatePen(PS_SOLID, 1, os_theme(TH_TEXT));
+            HGDIOBJ op = SelectObject(hdc, pen);
+            HBRUSH ob = (HBRUSH)SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            int cx = (rc.left + rc.right) / 2, cy = (rc.top + rc.bottom) / 2;
+            POINT tri[3];
+            tri[0].x = cx - 4; tri[0].y = cy - 1;
+            tri[1].x = cx + 4; tri[1].y = cy - 1;
+            tri[2].x = cx;     tri[2].y = cy + 2;
+            Polygon(hdc, tri, 3);
+            SelectObject(hdc, ob);
+            SelectObject(hdc, op);
+            DeleteObject(pen);
+        }
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -2250,6 +2337,8 @@ void os_mainwin_apply_theme(void)
         /* 状态栏已子类化自绘（status_theme_proc），这里仅触发重绘 */
         InvalidateRect(g_app.hStatus, NULL, TRUE);
     }
+    if (g_app.hLogStrip && IsWindow(g_app.hLogStrip)) /* F22: 底部细条随主题重绘 */
+        InvalidateRect(g_app.hLogStrip, NULL, TRUE);
     for (i = 0; i < g_app.win_count; i++) {
         for (k = 0; k < g_app.wins[i].group_count; k++) {
             HWND w = g_app.wins[i].group[k];
@@ -2334,6 +2423,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                        0, 36, 30, 22, hwnd, NULL, g_app.hInst, NULL);
         g_app.hSplitH = CreateWindowW(L"OSSplitterH", L"", WS_CHILD | WS_VISIBLE,
                                       0, 500, 800, 5, hwnd, NULL, g_app.hInst, NULL);
+        g_app.hLogStrip = CreateWindowW(L"OSLogStrip", L"", WS_CHILD, /* F22 */
+                                        0, 500, 800, LOG_STRIP_H, hwnd, NULL, g_app.hInst, NULL);
         g_app.hLog = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
                                      WS_CHILD | WS_VISIBLE | LVS_REPORT,
                                      0, 505, 800, 165, hwnd, NULL, g_app.hInst, NULL);
@@ -2592,6 +2683,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         refresh_tree_pin();
         layout();
         return 0;
+    case WM_OS_LOG_HIDE:
+        /* F22 测试钩子：wParam=1 收起消息栏，0=展开 */
+        log_set_hidden(wParam ? 1 : 0);
+        return 0;
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
         if (h && h->hwndFrom == g_app.hTab) {
@@ -2660,7 +2755,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDC_BTN_ABOUT:
             MessageBoxW(hwnd,
-                        L"OpenScope v1.13.0\n\n"
+                        L"OpenScope v1.14.0\n\n"
                         L"MCU 变量采集与标定工具（类 CANape）\n"
                         L"C + Win32 + 动态模块架构\n\n"
                         L"晶圆上的生物技术开发和提供支持\n"
@@ -2816,10 +2911,17 @@ void os_mainwin_register(void)
     wc.lpszClassName = L"OSSplitter";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = splith_proc;   /* F14: 消息栏上下拉伸分隔条 */
+    wc.lpfnWndProc = splith_proc;   /* F14: 消息栏上下拉伸分隔条 + F22: 双击抽屉收起 */
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_SIZENS);
+    wc.style = CS_DBLCLKS; /* F22: 需要 CS_DBLCLKS 才能收到 WM_LBUTTONDBLCLK */
     wc.lpszClassName = L"OSSplitterH";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = log_strip_proc; /* F22: 消息栏收起后的底部细条 */
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_HAND);
+    wc.lpszClassName = L"OSLogStrip";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = tree_strip_proc;
