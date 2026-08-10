@@ -54,7 +54,9 @@ fn main() -> Result<()> {
                     Ok(v) => app.log(&format!("[autoconnect] 成功 {}", v)),
                     Err(e) => app.log(&format!("[autoconnect] 失败: {}", e)),
                 }
-            } else if a == "--selftest" || a == "--autoselect" || a == "--autoconnect-timer" {
+            } else if a == "--selftest" {
+                selftest = true;
+            } else if a == "--autoselect" || a == "--autoconnect-timer" {
                 // 标志位，稍后处理
             } else if a.starts_with('-') {
                 // 其它未知开关：忽略，不当作 ELF 路径
