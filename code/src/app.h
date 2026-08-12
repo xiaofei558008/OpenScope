@@ -39,6 +39,7 @@
 #define WM_OS_WIN_MINIMIZE (WM_APP + 34) /* Bug6: tab 内窗口最小化/还原 (wParam=HWND，切换) */
 #define WM_OS_WIN_ADD_VAR (WM_APP + 35)  /* 测试钩子：向指定窗口添加叶变量 (wParam=HWND, lParam=leaf_id) */
 #define WM_OS_CHART_QUERY (WM_APP + 41)  /* 测试钩子（发给波形窗口）：返回 (series_count<<16)|series[0].count */
+#define WM_OS_CHART_SHOT  (WM_APP + 42)  /* 测试钩子（发给波形窗口）：渲染当前视图存 BMP 到 exe 目录 chart_shot.bmp */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 #define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */

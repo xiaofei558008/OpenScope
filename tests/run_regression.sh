@@ -32,6 +32,7 @@ NON_JLINK=(
   ui_elf_rebind_drive.ps1
   ui_tile_drive.ps1
   ui_chart_fullview_drive.ps1
+  ui_chart_long_zoom_drive.ps1
 )
 JLINK=(
   ui_record_dialog_drive.ps1

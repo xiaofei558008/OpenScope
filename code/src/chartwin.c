@@ -308,10 +308,13 @@ static void fmt_time(double sec, wchar_t* out, int outlen)
     else _snwprintf(out, outlen, L"0");
 }
 
-/* 某路数据在当前视图下可见的起始索引 */
-static int chart_vis_start(const OS_Series* sr, int view_all, int npoints)
+/* 某路数据在当前视图下可见的起始索引。
+ * 用户反馈修复：手动视图（fit_x=0）与全局视图（view_all=1）必须覆盖【全部历史】——
+ * 旧实现手动缩放后仍只扫"最后 npoints 点"，缩放/平移出最后600点窗口后曲线直接消失、
+ * Y 值域/HUD/测量全部取错窗口。只有"跟随最新"（fit_x=1）才限定最后 npoints 点。 */
+static int chart_vis_start(const OS_Series* sr, int view_all, int fit_x, int npoints)
 {
-    if (view_all) return 0;
+    if (view_all || !fit_x) return 0;
     return (sr->count > npoints) ? sr->count - npoints : 0;
 }
 
@@ -320,29 +323,66 @@ static void chart_compute_view(OS_ChartWin* cw, OS_ChartView* v)
 {
     int i, j;
     int64_t vis0 = INT64_MAX, vis1 = INT64_MIN;
+    double wylo = 1e300, wyhi = -1e300;  /* 手动 X 窗内 Y 值域（fit_x=0 时覆盖旧行为） */
+    int have_wy = 0;
     memset(v, 0, sizeof(*v));
     v->full0 = INT64_MAX; v->full1 = INT64_MIN;
     v->ylo = 1e300; v->yhi = -1e300;
     v->nvis = 0;
     for (i = 0; i < cw->series_count; i++) {
         OS_Series* sr = &cw->series[i];
-        int start = chart_vis_start(sr, cw->view_all, cw->npoints);
+        int start = chart_vis_start(sr, cw->view_all, cw->fit_x, cw->npoints);
+        int64_t scan_hi;  /* 扫描上界（手动窗右沿提前退出；跟随/全局无上界） */
+        if (sr->count <= 0) continue;
+        /* O(1) 全量数据范围：环形缓冲按时间追加，最旧样本=最小 ts、最新=最大 ts。
+         * 用户反馈修复（关键）：full0/full1 必须是【全部】样本的数据范围——滚轮缩放/
+         * 框选/拖拽的夹紧边界。旧实现与可见窗口（最后 npoints=600 点）混用：录制超过
+         * 600 点后 full 被截断到最后 600 点窗口，任何缩放/平移都被夹在那个小窗内——
+         * "停止采集后只能显示一小段波形、不能拖拽"的根因。 */
+        {
+            int oidx = (sr->head - sr->count) % OS_CHART_HIST;
+            int nidx = (sr->head - 1 + OS_CHART_HIST) % OS_CHART_HIST;
+            int64_t ot, nt;
+            if (oidx < 0) oidx += OS_CHART_HIST;
+            ot = sr->ts[oidx];
+            nt = sr->ts[nidx];
+            if (ot != 0 && ot != -1) {
+                v->have_t = 1;
+                if (ot < v->full0) v->full0 = ot;
+            }
+            if (nt != 0 && nt != -1) {
+                v->have_t = 1;
+                if (nt > v->full1) v->full1 = nt;
+            }
+        }
+        scan_hi = INT64_MAX;
+        if (!cw->fit_x && !cw->view_all) scan_hi = cw->vx1;
         for (j = start; j < sr->count; j++) {
             int idx = (sr->head - sr->count + j) % OS_CHART_HIST;
+            int64_t t;
             if (idx < 0) idx += OS_CHART_HIST;
             v->have_data = 1;
+            t = sr->ts[idx];
+            if (t != 0 && t != -1) {
+                v->have_t = 1;
+                if (t < vis0) vis0 = t;
+                if (t > vis1) vis1 = t;
+                if (t > scan_hi) break;  /* 时间有序：越过手动窗右沿即结束扫描 */
+            }
             if (sr->val[idx] < v->ylo) v->ylo = sr->val[idx];
             if (sr->val[idx] > v->yhi) v->yhi = sr->val[idx];
-            if (sr->ts[idx] != 0 && sr->ts[idx] != -1) {
-                v->have_t = 1;
-                if (sr->ts[idx] < v->full0) v->full0 = sr->ts[idx];
-                if (sr->ts[idx] > v->full1) v->full1 = sr->ts[idx];
-                if (sr->ts[idx] < vis0) vis0 = sr->ts[idx];
-                if (sr->ts[idx] > vis1) vis1 = sr->ts[idx];
+            /* 手动 X 窗（fit_x=0 且非全局）：另统计窗内 Y 值域，缩放后 Y 刻度跟随可见段 */
+            if (!cw->fit_x && !cw->view_all && t != 0 && t != -1 &&
+                t >= cw->vx0 && t <= cw->vx1) {
+                if (sr->val[idx] < wylo) wylo = sr->val[idx];
+                if (sr->val[idx] > wyhi) wyhi = sr->val[idx];
+                have_wy = 1;
             }
         }
         if (sr->count - start > v->nvis) v->nvis = sr->count - start;
     }
+    /* 手动 X 窗内有样本 → Y 值域跟随可见段（旧行为用"最后600点"的 Y，缩放后刻度错乱） */
+    if (have_wy) { v->ylo = wylo; v->yhi = wyhi; }
     /* 决定可见 X 时间窗 */
     if (v->have_t) {
         if (cw->view_all) { v->x0 = v->full0; v->x1 = v->full1; }
@@ -362,12 +402,17 @@ static void chart_compute_view(OS_ChartWin* cw, OS_ChartView* v)
 /* 计算某路在可见区间的独立 Y 值域（Ctrl+B 多坐标轴） */
 static void chart_series_range(OS_ChartWin* cw, const OS_Series* sr, double* ylo, double* yhi)
 {
-    int start = chart_vis_start(sr, cw->view_all, cw->npoints);
+    int start = chart_vis_start(sr, cw->view_all, cw->fit_x, cw->npoints);
     int j, idx;
     *ylo = 1e300; *yhi = -1e300;
     for (j = start; j < sr->count; j++) {
         idx = (sr->head - sr->count + j) % OS_CHART_HIST;
         if (idx < 0) idx += OS_CHART_HIST;
+        /* 手动 X 窗：只统计窗内样本（fit_x=0 时窗为 [vx0,vx1]） */
+        if (!cw->fit_x && !cw->view_all) {
+            int64_t t = sr->ts[idx];
+            if (t == 0 || t == -1 || t < cw->vx0 || t > cw->vx1) continue;
+        }
         if (sr->val[idx] < *ylo) *ylo = sr->val[idx];
         if (sr->val[idx] > *yhi) *yhi = sr->val[idx];
     }
@@ -410,9 +455,9 @@ static int map_y(const RECT* lane, double val, double ylo, double yhi)
 }
 
 /* 某系列时间上距 t 最近的样本下标（缓冲下标），无样本返回 0 */
-static int chart_sample_at_time(const OS_Series* sr, int view_all, int npoints, int64_t t)
+static int chart_sample_at_time(const OS_Series* sr, int view_all, int fit_x, int npoints, int64_t t)
 {
-    int start = chart_vis_start(sr, view_all, npoints);
+    int start = chart_vis_start(sr, view_all, fit_x, npoints);
     int64_t best = INT64_MAX;
     int j, bi = -1;
     for (j = start; j < sr->count; j++) {
@@ -456,7 +501,7 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
                               const RECT* plot, const RECT* lane, int64_t x0, int64_t x1,
                               double ylo, double yhi, int have_t, int view_all)
 {
-    int start = chart_vis_start(sr, view_all, cw->npoints);
+    int start = chart_vis_start(sr, view_all, cw->fit_x, cw->npoints);
     int npts = sr->count - start;
     int j, first = 1;
     int vis_npts = 0;
@@ -498,7 +543,8 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
             if (have_t) {
                 int64_t t = sr->ts[idx];
                 if (t == 0 || t == -1) { first = 1; continue; }
-                if (t < x0 || t > x1) { first = 1; continue; }
+                if (t < x0) { first = 1; continue; }
+                if (t > x1) break; /* 时间有序：越过窗口右沿即结束（65k 缓冲全量扫描优化） */
                 x = map_x(plot, x0, x1, t);
             } else {
                 x = (npts > 1) ? plot->left + (plot->right - plot->left) * j / (npts - 1) : plot->left;
@@ -518,7 +564,8 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
             if (have_t) {
                 int64_t t = sr->ts[idx];
                 if (t == 0 || t == -1) { first = 1; continue; }
-                if (t < x0 || t > x1) { first = 1; continue; }
+                if (t < x0) { first = 1; continue; }
+                if (t > x1) break; /* 时间有序：越过窗口右沿即结束 */
                 x = map_x(plot, x0, x1, t);
             } else {
                 x = (npts > 1) ? plot->left + (plot->right - plot->left) * j / (npts - 1) : plot->left;
@@ -544,7 +591,7 @@ static void chart_set_mark(OS_ChartWin* cw, const OS_ChartView* v, const RECT* p
     best_t = t;
     for (i = 0; i < cw->series_count; i++) {
         OS_Series* sr = &cw->series[i];
-        int idx = chart_sample_at_time(sr, cw->view_all, cw->npoints, t);
+        int idx = chart_sample_at_time(sr, cw->view_all, cw->fit_x, cw->npoints, t);
         double vv, d;
         int x, y;
         if (idx < 0 || idx >= OS_CHART_HIST || sr->count <= 0) continue;
@@ -781,7 +828,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
                     int idx;
                     char line[340], tn[64];
                     if (!L || sr->count <= 0) continue;
-                    idx = chart_sample_at_time(sr, cw->view_all, cw->npoints, t);
+                    idx = chart_sample_at_time(sr, cw->view_all, cw->fit_x, cw->npoints, t);
                     chart_type_name(L, tn, 64);
                     _snprintf(line, 340, "%s = %.6g (%s)", L->name, sr->val[idx], tn);
                     if (nlines < 8) {
@@ -1367,6 +1414,19 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return (LRESULT)((cw->series_count << 16) | c0);
         }
         return 0;
+    case WM_OS_CHART_SHOT: {
+        /* 测试钩子：渲染当前视图存 BMP（WM_PRINT），供回归脚本验证曲线实际绘制 */
+        if (cw) {
+            wchar_t p[MAX_PATH];
+            wchar_t* slash;
+            GetModuleFileNameW(NULL, p, MAX_PATH);
+            slash = wcsrchr(p, L'\\');
+            if (slash) slash[1] = 0;
+            wcscat(p, L"chart_shot.bmp");
+            os_save_window_bmp(hwnd, p);
+        }
+        return 0;
+    }
     case WM_OS_CHART_LIVE:
         if (cw) {
             cw->view_all = 0; cw->fit_x = 1; cw->fit_y = 1;
