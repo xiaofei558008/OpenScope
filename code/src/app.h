@@ -34,8 +34,13 @@
 #define WM_OS_LOG_TEST_SELECT (WM_APP + 31) /* Bug13 测试钩子：程序化选中日志 [wParam, wParam+lParam)，返回实际选中数 */
 #define WM_OS_LOG_HIDE (WM_APP + 32) /* F22: 消息栏抽屉收起/弹出测试钩子 (wParam=1 收起, 0 展开) */
 #define WM_OS_TREE_HIDE (WM_APP + 33) /* Bug18: 变量栏完全隐藏/展开测试钩子 (wParam=1 隐藏, 0 展开) */
+#define WM_OS_WIN_MINIMIZE (WM_APP + 34) /* Bug6: tab 内窗口最小化/还原 (wParam=HWND，切换) */
+#define WM_OS_WIN_ADD_VAR (WM_APP + 35)  /* 测试钩子：向指定窗口添加叶变量 (wParam=HWND, lParam=leaf_id) */
+#define WM_OS_CHART_QUERY (WM_APP + 41)  /* 测试钩子（发给波形窗口）：返回 (series_count<<16)|series[0].count */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
+#define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */
+#define IDM_HELP_DOC 2702 /* 需求12：帮助菜单"帮助文档" + F1 快捷键 */
 
 typedef enum {
     OS_ACQ_STOPPED = 0,
@@ -73,6 +78,8 @@ typedef struct OS_WinItem {
     int         group_count;                  /* 组内窗口数（含主窗口） */
     int         group_max;                    /* 最大化窗口下标，-1=平铺 */
     wchar_t     group_title[OS_MAX_GROUP][128]; /* 各窗口标题（关闭主窗口后提升用） */
+    double      col_ratio[OS_MAX_GROUP];      /* Bug6: 平铺列宽比例（和=1，默认均分），分隔带拖拽调整 */
+    int         group_min[OS_MAX_GROUP];      /* Bug6: 1=最小化（隐藏窗口，tab 底部最小化条点击还原） */
 } OS_WinItem;
 
 typedef struct OS_App {

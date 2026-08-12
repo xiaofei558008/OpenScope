@@ -8,6 +8,9 @@
 #include "module_mgr.h"
 #include "layout.h"
 #include "theme.h"
+#include "version.h"
+#include "helpwin.h"
+#include "tilecalc.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <string.h>
@@ -41,6 +44,7 @@
 #define IDM_TAB_ADD_NUM    2504 /* N11: 在当前 tab 添加数值窗口 */
 #define IDM_TAB_MAXIMIZE   2505 /* N11: 最大化/还原当前窗口 */
 #define IDM_TAB_FULLSCREEN 2506 /* Bug3: 全屏/退出全屏 */
+#define IDM_TAB_MINIMIZE   2507 /* Bug6: 最小化/还原当前窗口（缩进 tab 底部最小化条） */
 
 #define IDM_LOG_COPY    2601 /* Bug13: 复制选中消息到剪贴板 */
 #define IDM_LOG_CLEAR   2602 /* Bug13: 全部清除 */
@@ -384,11 +388,55 @@ static void layout(void);
 static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, const wchar_t* title);
 static void tab_set_title(int idx, const wchar_t* name);
 
+/* Bug6: 平铺列间分隔带（拖拽调列宽）与 tab 底部最小化条（点击还原）。
+ * 几何由 layout_tab_pages 填充（tab 客户区坐标），tab 子类命中/绘制共用。 */
+#define OS_TILE_GAP 6    /* 平铺列间分隔带宽度 */
+#define OS_MINIBAR_H 26  /* 最小化条高度（有最小化窗口时显示） */
+static RECT g_tile_gaps[OS_MAX_GROUP];      /* 分隔带矩形 */
+static int  g_tile_gap_a[OS_MAX_GROUP];     /* 分隔带左列 group 下标 */
+static int  g_tile_gap_b[OS_MAX_GROUP];     /* 分隔带右列 group 下标 */
+static int  g_tile_gap_count;
+static RECT g_minbar_btns[OS_MAX_GROUP];    /* 最小化条按钮矩形 */
+static int  g_minbar_btn_idx[OS_MAX_GROUP]; /* 按钮对应 group 下标 */
+static int  g_minbar_count;
+
+/* 增删窗口后比例归一：和>0 等比缩放到 1，否则均分（布局安全网） */
+static void tile_normalize(OS_WinItem* wi)
+{
+    double sum = 0.0;
+    int k;
+    for (k = 0; k < wi->group_count; k++) sum += wi->col_ratio[k];
+    if (sum <= 0.0001) { os_tile_ratios_init(wi->col_ratio, wi->group_count); return; }
+    for (k = 0; k < wi->group_count; k++) wi->col_ratio[k] /= sum;
+}
+
+/* 最小化条按钮矩形（pr 为完整页区域，条在底部 OS_MINIBAR_H 高） */
+static void tile_minbar_geom(const RECT* pr, const OS_WinItem* wi)
+{
+    int k, x = pr->left + 4;
+    g_minbar_count = 0;
+    for (k = 0; k < wi->group_count && g_minbar_count < OS_MAX_GROUP; k++) {
+        RECT* b;
+        if (!wi->group_min[k]) continue;
+        b = &g_minbar_btns[g_minbar_count];
+        b->left = x;
+        b->top = pr->bottom - OS_MINIBAR_H + 3;
+        b->right = x + 170;
+        b->bottom = pr->bottom - 3;
+        g_minbar_btn_idx[g_minbar_count] = k;
+        g_minbar_count++;
+        x += 176;
+    }
+}
+
 static void layout_tab_pages(void)
 {
-    RECT rc, pr;
+    RECT rc, pr, work;
     OS_WinItem* wi;
-    int n, k, col, x, w;
+    int n, k, x;
+    int min_count = 0, tiled = 0, last_tiled = -1;
+    int usable_w, avail_h;
+    double sumr;
     if (!g_app.hTab || !IsWindow(g_app.hTab)) return;
     if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) return;
     GetClientRect(g_app.hTab, &rc);
@@ -396,15 +444,22 @@ static void layout_tab_pages(void)
     SendMessageW(g_app.hTab, TCM_ADJUSTRECT, FALSE, (LPARAM)&pr);
     wi = &g_app.wins[g_cur_tab];
     n = wi->group_count;
+    g_tile_gap_count = 0;
+    g_minbar_count = 0;
     if (n <= 0) return;
-    if (wi->group_max >= 0 && wi->group_max < n) {
-        /* N11 最大化：该窗口填满 tab，其余隐藏 */
+    for (k = 0; k < n; k++) if (wi->group_min[k]) min_count++;
+    work = pr;
+    if (min_count > 0) work.bottom -= OS_MINIBAR_H;
+    tile_minbar_geom(&pr, wi);
+    if (wi->group_max >= 0 && wi->group_max < n && !wi->group_min[wi->group_max]) {
+        /* N11 最大化：该窗口填满 tab（减去最小化条），其余隐藏 */
         for (k = 0; k < n; k++) {
             HWND gw = wi->group[k];
             if (!gw || !IsWindow(gw)) continue;
             if (gw == g_app.fs_win) continue; /* 全屏窗口不受平铺/最大化影响 */
             if (k == wi->group_max) {
-                MoveWindow(gw, pr.left, pr.top, pr.right - pr.left, pr.bottom - pr.top, TRUE);
+                MoveWindow(gw, work.left, work.top, work.right - work.left,
+                           work.bottom - work.top, TRUE);
                 ShowWindow(gw, SW_SHOW);
             } else {
                 ShowWindow(gw, SW_HIDE);
@@ -412,17 +467,63 @@ static void layout_tab_pages(void)
         }
         return;
     }
-    /* N11 平铺：n 等分列，每列一个窗口 */
-    col = n;
-    w = (pr.right - pr.left) / col;
-    x = pr.left;
+    /* Bug6 平铺：非最小化窗口按列宽比例排列（非最小化列间归一），
+     * 列间留 OS_TILE_GAP 分隔带供鼠标拖拽调宽；最小化窗口隐藏。 */
+    tile_normalize(wi);
+    sumr = 0.0;
     for (k = 0; k < n; k++) {
-        HWND gw = wi->group[k];
-        if (!gw || !IsWindow(gw)) continue;
-        if (gw == g_app.fs_win) continue; /* 全屏窗口不受平铺/最大化影响 */
-        MoveWindow(gw, x, pr.top, w, pr.bottom - pr.top, TRUE);
-        ShowWindow(gw, SW_SHOW);
-        x += w;
+        if (!wi->group_min[k]) { sumr += wi->col_ratio[k]; tiled++; last_tiled = k; }
+    }
+    if (tiled <= 0 || sumr <= 0.0) {
+        /* 全部最小化：只留最小化条 */
+        for (k = 0; k < n; k++) {
+            HWND gw = wi->group[k];
+            if (gw && IsWindow(gw) && gw != g_app.fs_win) ShowWindow(gw, SW_HIDE);
+        }
+        return;
+    }
+    usable_w = (work.right - work.left) - OS_TILE_GAP * (tiled - 1);
+    avail_h = work.bottom - work.top;
+    x = work.left;
+    {
+        int seen = 0;
+        for (k = 0; k < n; k++) {
+            HWND gw = wi->group[k];
+            int wk;
+            if (!gw || !IsWindow(gw)) continue;
+            if (gw == g_app.fs_win) continue;
+            if (wi->group_min[k]) { ShowWindow(gw, SW_HIDE); continue; }
+            seen++;
+            if (k == last_tiled)
+                wk = work.right - x; /* 最后一列吃剩余宽度（消除舍入误差） */
+            else
+                wk = (int)(wi->col_ratio[k] / sumr * usable_w + 0.5);
+            if (wk < 20) wk = 20;
+            MoveWindow(gw, x, work.top, wk, avail_h, TRUE);
+            ShowWindow(gw, SW_SHOW);
+            /* 分隔带矩形（最后一列之后没有；右列下表循环结束后统一回填） */
+            if (k != last_tiled && g_tile_gap_count < OS_MAX_GROUP) {
+                RECT* grect = &g_tile_gaps[g_tile_gap_count];
+                grect->left = x + wk;
+                grect->top = work.top;
+                grect->right = x + wk + OS_TILE_GAP;
+                grect->bottom = work.bottom;
+                g_tile_gap_a[g_tile_gap_count] = k;
+                g_tile_gap_b[g_tile_gap_count] = k;
+                g_tile_gap_count++;
+            }
+            x += wk + OS_TILE_GAP;
+        }
+    }
+    /* 修正：分隔带右列下标 = 下一个非最小化列（上面循环按出现顺序已保证 a<b 相邻可见） */
+    {
+        int g;
+        for (g = 0; g < g_tile_gap_count; g++) {
+            int a = g_tile_gap_a[g], j;
+            for (j = a + 1; j < n; j++) {
+                if (!wi->group_min[j]) { g_tile_gap_b[g] = j; break; }
+            }
+        }
     }
 }
 
@@ -433,8 +534,10 @@ static void show_tab(int idx)
         OS_WinItem* wi = &g_app.wins[i];
         for (k = 0; k < wi->group_count; k++) {
             HWND w = wi->group[k];
-            if (w && IsWindow(w) && w != g_app.fs_win)
-                ShowWindow(w, (i == idx) ? SW_SHOW : SW_HIDE);
+            if (!w || !IsWindow(w) || w == g_app.fs_win) continue;
+            /* Bug6: 当前 tab 的最小化窗口保持隐藏（缩进最小化条） */
+            if (i == idx && wi->group_min[k] && wi->group_max < 0) continue;
+            ShowWindow(w, (i == idx) ? SW_SHOW : SW_HIDE);
         }
     }
     g_cur_tab = idx;
@@ -972,6 +1075,19 @@ static int load_elf_path(const wchar_t* path)
     os_vartree_build();
     os_vartree_fill_tree(g_app.hTree);
     os_layout_apply_pending(); /* 布局恢复时未解析的变量，ELF 就绪后补挂 */
+    {
+        /* 需求2：ELF 重载后叶下标可能漂移——全部本地窗口按变量名重绑 leaf_id，
+         * 否则窗口会静默绑到错误变量（错地址/错数据）。 */
+        int wi, k;
+        for (wi = 0; wi < g_app.win_count; wi++) {
+            for (k = 0; k < g_app.wins[wi].group_count; k++) {
+                HWND w = g_app.wins[wi].group[k];
+                if (!w || !IsWindow(w) || g_app.wins[wi].is_module) continue;
+                if (os_chart_is(w)) os_chart_rebind(w);
+                else if (os_num_is(w)) os_num_rebind(w);
+            }
+        }
+    }
     /* 缺失变量提示 */
     if (os_vartree_missing_count() > 0) {
         wchar_t list[1800] = L"";
@@ -1175,14 +1291,18 @@ void os_mainwin_cfg_init(void)
     cfg_fill_emus();
 }
 
-/* 向所有原生波形窗口广播视图消息（FITALL=整体展示，LIVE=跟随最新） */
+/* 向所有原生波形窗口广播视图消息（FITALL=整体展示，LIVE=跟随最新）。
+ * Bug19：遍历每个 tab 的 group[] 全部窗口，不只 group[0]。 */
 static void chart_broadcast(UINT msg)
 {
-    int i;
+    int i, k;
     for (i = 0; i < g_app.win_count; i++) {
-        HWND w = g_app.wins[i].hwnd;
-        if (w && !g_app.wins[i].is_module && os_chart_is(w))
-            PostMessage(w, msg, 0, 0);
+        if (g_app.wins[i].is_module) continue;
+        for (k = 0; k < g_app.wins[i].group_count; k++) {
+            HWND w = g_app.wins[i].group[k];
+            if (w && IsWindow(w) && os_chart_is(w))
+                PostMessage(w, msg, 0, 0);
+        }
     }
 }
 
@@ -1291,6 +1411,7 @@ static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, co
     wi->active = 1;
     _snwprintf(wi->title, 128, L"%s", title ? title : L"");
     _snwprintf(wi->group_title[0], 128, L"%s", title ? title : L"");
+    os_tile_ratios_init(wi->col_ratio, wi->group_count); /* Bug6: 平铺列宽默认均分 */
     g_cur_tab = g_app.win_count - 1;
     os_mainwin_tile();
     if (g_app.rename_tab[0] && g_app.win_count == 1)
@@ -1330,6 +1451,7 @@ HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title)
                     _snwprintf(wi->group_title[wi->group_count], 128, L"%s",
                                title ? title : L"");
                     wi->group_count++;
+                    os_tile_ratios_init(wi->col_ratio, wi->group_count); /* Bug6: 均分 */
                     os_mainwin_tile();
                     return h;
                 }
@@ -1347,6 +1469,7 @@ HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title)
         wi->group[wi->group_count] = h;
         _snwprintf(wi->group_title[wi->group_count], 128, L"%s", title ? title : L"");
         wi->group_count++;
+        os_tile_ratios_init(wi->col_ratio, wi->group_count); /* Bug6: 均分 */
         os_log(OS_LOG_INFO, "窗口已附加到当前标签: %ls (tab%d 共%d个)",
                title ? title : L"", tab, wi->group_count);
         os_mainwin_tile();
@@ -1915,8 +2038,10 @@ static void tab_context_menu(void)
     AppendMenuW(m, MF_STRING, IDM_TAB_RENAME, L"重命名标签");
     AppendMenuW(m, MF_STRING, IDM_TAB_ADD_CHART, L"在当前标签添加波形窗口");
     AppendMenuW(m, MF_STRING, IDM_TAB_ADD_NUM, L"在当前标签添加数值窗口");
-    if (g_app.wins[hit].group_count > 1)
+    if (g_app.wins[hit].group_count > 1) {
         AppendMenuW(m, MF_STRING, IDM_TAB_MAXIMIZE, L"最大化/还原当前窗口");
+        AppendMenuW(m, MF_STRING, IDM_TAB_MINIMIZE, L"最小化/还原当前窗口");
+    }
     AppendMenuW(m, MF_STRING, IDM_TAB_FULLSCREEN, L"全屏/退出全屏");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TAB_CLOSE, L"关闭窗口");
@@ -2283,10 +2408,166 @@ static void apply_dark_theme_controls(HWND root)
     }
 }
 
-/* tab 控件：背景（tab 项以外区域）用主题色填充；tab 项本身由 uxtheme 暗色渲染 */
+/* tab 控件：背景（tab 项以外区域）用主题色填充；tab 项本身由 uxtheme 暗色渲染。
+ * Bug6: 平铺列间分隔带拖拽调列宽（IDC_SIZEWE 光标 + 实时重排），
+ *       tab 底部最小化条自绘（点击按钮还原窗口）。 */
+static int    g_tile_drag_on;                    /* 分隔带拖拽进行中 */
+static int    g_tile_drag_gap;                   /* 拖拽的分隔带下标 */
+static int    g_tile_drag_x0;                    /* 拖拽起点 x（tab 客户区） */
+static double g_tile_drag_ratios[OS_MAX_GROUP];  /* 拖拽起点比例快照 */
+
+static int tab_gap_hit(int x, int y)
+{
+    int g;
+    for (g = 0; g < g_tile_gap_count; g++) {
+        if (y >= g_tile_gaps[g].top && y < g_tile_gaps[g].bottom &&
+            x >= g_tile_gaps[g].left && x < g_tile_gaps[g].right)
+            return g;
+    }
+    return -1;
+}
+
+static int tab_minbar_hit(int x, int y)
+{
+    int b;
+    for (b = 0; b < g_minbar_count; b++) {
+        if (x >= g_minbar_btns[b].left && x < g_minbar_btns[b].right &&
+            y >= g_minbar_btns[b].top && y < g_minbar_btns[b].bottom)
+            return b;
+    }
+    return -1;
+}
+
+static void tab_minbar_paint(HWND h)
+{
+    /* 最小化条：每个最小化窗口一个按钮（标题 + 点击还原） */
+    HDC hdc;
+    int b;
+    RECT bar;
+    if (g_minbar_count <= 0 || g_cur_tab < 0 || g_cur_tab >= g_app.win_count) return;
+    hdc = GetDC(h);
+    if (!hdc) return;
+    bar = g_minbar_btns[0];
+    bar.left = 0;
+    {
+        RECT rc;
+        GetClientRect(h, &rc);
+        bar.right = rc.right;
+        bar.top = g_minbar_btns[0].top - 3;
+        bar.bottom = rc.bottom;
+    }
+    FillRect(hdc, &bar, os_theme_brush(TH_PANEL));
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, os_theme(TH_TAB_TEXT));
+    SelectObject(hdc, (HFONT)SendMessageW(h, WM_GETFONT, 0, 0));
+    for (b = 0; b < g_minbar_count; b++) {
+        OS_WinItem* wi = &g_app.wins[g_cur_tab];
+        int gi = g_minbar_btn_idx[b];
+        RECT* r = &g_minbar_btns[b];
+        HBRUSH frame = os_theme_brush(TH_BORDER);
+        /* 按钮面 + 边框 + 标题（▢ 还原提示） */
+        FillRect(hdc, r, os_theme_brush(TH_EDIT_BG));
+        FrameRect(hdc, r, frame);
+        if (gi >= 0 && gi < wi->group_count) {
+            wchar_t cap[160];
+            RECT tr = *r;
+            tr.left += 6;
+            tr.right -= 4;
+            _snwprintf(cap, 160, L"▢ %ls", wi->group_title[gi]);
+            DrawTextW(hdc, cap, -1, &tr,
+                      DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        }
+    }
+    ReleaseDC(h, hdc);
+}
+
 static LRESULT CALLBACK tab_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case WM_SETCURSOR:
+        /* Bug6: 悬停分隔带显示横向调整光标 */
+        if (LOWORD(lParam) == HTCLIENT) {
+            POINT pt;
+            GetCursorPos(&pt);
+            ScreenToClient(h, &pt);
+            if (tab_gap_hit(pt.x, pt.y) >= 0) {
+                SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+                return TRUE;
+            }
+        }
+        break;
+    case WM_LBUTTONDOWN: {
+        int x = (int)(short)LOWORD(lParam), y = (int)(short)HIWORD(lParam);
+        int b = tab_minbar_hit(x, y);
+        int g;
+        if (b >= 0 && g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
+            /* Bug6: 点击最小化条按钮 -> 还原该窗口 */
+            OS_WinItem* wi = &g_app.wins[g_cur_tab];
+            int gi = g_minbar_btn_idx[b];
+            wi->group_min[gi] = 0;
+            os_log(OS_LOG_INFO, "窗口还原: tab%d %d/%d", g_cur_tab, gi, wi->group_count);
+            layout_tab_pages();
+            InvalidateRect(h, NULL, TRUE);
+            return 0;
+        }
+        g = tab_gap_hit(x, y);
+        if (g >= 0 && g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
+            /* Bug6: 开始分隔带拖拽（快照起点比例，移动中相对起点增量应用） */
+            OS_WinItem* wi = &g_app.wins[g_cur_tab];
+            int k;
+            g_tile_drag_on = 1;
+            g_tile_drag_gap = g;
+            g_tile_drag_x0 = x;
+            for (k = 0; k < wi->group_count; k++)
+                g_tile_drag_ratios[k] = wi->col_ratio[k];
+            SetCapture(h);
+            SetCursor(LoadCursor(NULL, IDC_SIZEWE));
+            return 0;
+        }
+        break;
+    }
+    case WM_MOUSEMOVE:
+        /* Bug6: 拖拽中仅响应按住左键的移动——SetCapture 期间窗口尺寸变化会让
+         * 静止的物理光标收到 wParam=0 的 WM_MOUSEMOVE（命中测试重评估），
+         * 不加过滤会把物理光标位置误当拖拽位移，列宽跳变 */
+        if (g_tile_drag_on && (wParam & MK_LBUTTON) &&
+            g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
+            int x = (int)(short)LOWORD(lParam);
+            OS_WinItem* wi = &g_app.wins[g_cur_tab];
+            int a = g_tile_gap_a[g_tile_drag_gap];
+            int b = g_tile_gap_b[g_tile_drag_gap];
+            RECT rc, pr;
+            int total, k;
+            int tiled = 0;
+            for (k = 0; k < wi->group_count; k++)
+                if (!wi->group_min[k]) tiled++;
+            /* 可用总宽 = 页区域宽 - 分隔带占用（与 layout_tab_pages 一致） */
+            GetClientRect(h, &rc);
+            pr = rc;
+            SendMessageW(h, TCM_ADJUSTRECT, FALSE, (LPARAM)&pr);
+            total = (pr.right - pr.left) - OS_TILE_GAP * (tiled - 1);
+            /* 从拖拽起点快照出发，相对总位移应用（避免增量累积误差） */
+            for (k = 0; k < wi->group_count; k++) wi->col_ratio[k] = g_tile_drag_ratios[k];
+            if (os_tile_ratios_drag2(wi->col_ratio, a, b, total, x - g_tile_drag_x0, 60))
+                layout_tab_pages();
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (g_tile_drag_on) {
+            int a, b;
+            OS_WinItem* wi;
+            g_tile_drag_on = 0;
+            ReleaseCapture();
+            if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) return 0;
+            wi = &g_app.wins[g_cur_tab];
+            a = g_tile_gap_a[g_tile_drag_gap];
+            b = g_tile_gap_b[g_tile_drag_gap];
+            os_log(OS_LOG_INFO, "列宽调整: tab%d 列%d/列%d 比例 %.2f/%.2f",
+                   g_cur_tab, a, b, wi->col_ratio[a], wi->col_ratio[b]);
+            return 0;
+        }
+        break;
     case WM_ERASEBKGND: {
         RECT rc;
         GetClientRect(h, &rc);
@@ -2321,6 +2602,7 @@ static LRESULT CALLBACK tab_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM l
             }
             ReleaseDC(h, hdc);
         }
+        tab_minbar_paint(h); /* Bug6: 底部最小化条（有最小化窗口时） */
         return r;
     }
     }
@@ -2414,8 +2696,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                       0, 34, 340, 400, hwnd, NULL, g_app.hInst, NULL);
         SendMessageW(g_app.hTree, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         TreeView_SetUnicodeFormat(g_app.hTree, TRUE);
-        /* Bug4: 树扩展样式开启多选（Ctrl 单击连续多选 / Shift 起止范围选） */
-        TreeView_SetExtendedStyle(g_app.hTree, TVS_EX_MULTISELECT, 0);
+        /* Bug4: 树扩展样式开启多选（Ctrl 单击连续多选 / Shift 起止范围选）。
+         * 注意 TreeView_SetExtendedStyle 签名是 (hwnd, mask, style)，mask 指定要
+         * 修改的位，style 是目标值。旧代码 style=0 会把 TVS_EX_MULTISELECT 清为 0
+         * （禁用多选），应设为 TVS_EX_MULTISELECT 才真正开启。 */
+        TreeView_SetExtendedStyle(g_app.hTree, TVS_EX_MULTISELECT, TVS_EX_MULTISELECT);
         g_app.hSplitV = CreateWindowW(L"OSSplitter", L"", WS_CHILD | WS_VISIBLE,
                                       340, 34, 5, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hRight = CreateWindowExW(WS_EX_CLIENTEDGE, g_right_class, L"",
@@ -2487,6 +2772,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mLog, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAY, L"离线回放...");
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAYSTOP, L"停止回放");
+        AppendMenuW(mHelp, MF_STRING, IDM_HELP_DOC, L"帮助文档\tF1");
         AppendMenuW(mHelp, MF_STRING, IDC_BTN_ABOUT, L"关于 OpenScope");
         g_menu = CreateMenu();
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mFile, L"文件(&F)");
@@ -2629,8 +2915,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                         for (gi = k; gi < wi->group_count - 1; gi++) {
                             wi->group[gi] = wi->group[gi + 1];
                             _snwprintf(wi->group_title[gi], 128, L"%s", wi->group_title[gi + 1]);
+                            wi->group_min[gi] = wi->group_min[gi + 1]; /* Bug6 */
                         }
                         wi->group_count--;
+                        wi->group_min[wi->group_count] = 0;
+                        os_tile_ratios_init(wi->col_ratio, wi->group_count); /* Bug6: 重新均分 */
                         if (k == 0) {
                             wi->hwnd = wi->group[0];
                             _snwprintf(wi->title, 128, L"%s", wi->group_title[0]);
@@ -2658,6 +2947,35 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     os_log(OS_LOG_INFO, "窗口%s: tab%d %d/%d",
                            wi->group_max == k ? "最大化" : "还原", i, k, wi->group_count);
                     layout_tab_pages();
+                    return 0;
+                }
+            }
+        }
+        return 0;
+    }
+    case WM_OS_WIN_ADD_VAR: {
+        /* 测试钩子：wParam=目标窗口 HWND，lParam=叶 id，向指定窗口添加变量 */
+        HWND w = (HWND)wParam;
+        if (w && IsWindow(w)) {
+            if (os_chart_is(w)) os_chart_add_var(w, (int)lParam);
+            else if (os_num_is(w)) os_num_add_var(w, (int)lParam);
+        }
+        return 0;
+    }
+    case WM_OS_WIN_MINIMIZE: {
+        /* Bug6: 最小化/还原：wParam=HWND，缩进 tab 底部最小化条（点击条上按钮还原） */
+        HWND w = (HWND)wParam;
+        int i, k;
+        for (i = 0; i < g_app.win_count; i++) {
+            OS_WinItem* wi = &g_app.wins[i];
+            for (k = 0; k < wi->group_count; k++) {
+                if (wi->group[k] == w) {
+                    wi->group_min[k] = !wi->group_min[k];
+                    if (wi->group_min[k] && wi->group_max == k) wi->group_max = -1;
+                    os_log(OS_LOG_INFO, "窗口%s: tab%d %d/%d",
+                           wi->group_min[k] ? "最小化" : "还原", i, k, wi->group_count);
+                    layout_tab_pages();
+                    InvalidateRect(g_app.hTab, NULL, TRUE);
                     return 0;
                 }
             }
@@ -2738,7 +3056,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             }
             if (h->code == TVN_ITEMCHANGEDW) {
                 NMTVITEMCHANGE* p = (NMTVITEMCHANGE*)lParam;
-                if (p->uChanged & TVIF_STATE) {
+                /* 需求2：树填充期间屏蔽勾选联动（重建时节点 lParam 是旧叶表 id，
+                 * 回写会误置新叶表同名位置的观测标志）；仅响应勾选框位真实翻转，
+                 * 选择状态变化不处理（uStateNew 含 TVIS_SELECTED 时图像位为 0） */
+                if (!os_vartree_is_filling() && (p->uChanged & TVIF_STATE) &&
+                    ((p->uStateOld ^ p->uStateNew) & TVIS_STATEIMAGEMASK)) {
                     LPARAM lp = p->lParam;
                     if (lp > 0) {
                         int id = (int)(lp - 1);
@@ -2769,15 +3091,19 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_LOGSTOP: cmd_log_stop(); break;
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
-        case IDC_BTN_ABOUT:
-            MessageBoxW(hwnd,
-                        L"OpenScope v1.15.0\n\n"
-                        L"MCU 变量采集与标定工具（类 CANape）\n"
-                        L"C + Win32 + 动态模块架构\n\n"
-                        L"晶圆上的生物技术开发和提供支持\n"
-                        L"网址: www.opendebugger.com",
-                        L"关于", MB_OK | MB_ICONINFORMATION);
+        case IDM_HELP_DOC: os_help_show(hwnd); break; /* 需求12：帮助文档（F1 同路径） */
+        case IDC_BTN_ABOUT: {
+            wchar_t about[640];
+            _snwprintf(about, 640,
+                       L"OpenScope v%s\n\n"
+                       L"MCU 变量采集与标定工具（类 CANape）\n"
+                       L"C + Win32 + 动态模块架构\n\n"
+                       L"晶圆上的生物技术开发和提供支持\n"
+                       L"网址: www.opendebugger.com",
+                       OS_VERSION_WIDE);
+            MessageBoxW(hwnd, about, L"关于", MB_OK | MB_ICONINFORMATION);
             break;
+        }
         case IDM_EXIT:
             DestroyWindow(hwnd);
             break;
@@ -2847,6 +3173,24 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             os_log(OS_LOG_INFO, "窗口%s: tab%d %d/%d",
                    wi->group_max == k ? "最大化" : "还原", g_cur_tab, k, wi->group_count);
             layout_tab_pages();
+            break;
+        }
+        case IDM_TAB_MINIMIZE: {
+            /* Bug6: 最小化/还原当前 tab 内活动窗口（无活动→首个），缩进 tab 底部最小化条 */
+            OS_WinItem* wi;
+            int k = 0, i;
+            if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) break;
+            wi = &g_app.wins[g_cur_tab];
+            if (g_cur_win) {
+                for (i = 0; i < wi->group_count; i++)
+                    if (wi->group[i] == g_cur_win) { k = i; break; }
+            }
+            wi->group_min[k] = !wi->group_min[k];
+            if (wi->group_min[k] && wi->group_max == k) wi->group_max = -1; /* 最小化取消最大化 */
+            os_log(OS_LOG_INFO, "窗口%s: tab%d %d/%d",
+                   wi->group_min[k] ? "最小化" : "还原", g_cur_tab, k, wi->group_count);
+            layout_tab_pages();
+            InvalidateRect(g_app.hTab, NULL, TRUE); /* 最小化条出现/消失需重绘 */
             break;
         }
         case IDM_TAB_FULLSCREEN:

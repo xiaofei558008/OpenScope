@@ -23,6 +23,7 @@ typedef struct OS_NumWin {
     HWND list;
     wchar_t title[128];
     int leaf_ids[OS_MAX_NUM_ROWS];
+    char names[OS_MAX_NUM_ROWS][256]; /* 添加时的变量全名：ELF 重载后按名重绑（需求2） */
     int count;
     HWND edit;       /* 就地编辑 EDIT 控件（NULL=无） */
     int edit_row;    /* 正在编辑的行 */
@@ -93,6 +94,7 @@ void os_num_add_var(HWND hwnd, int leaf_id)
     ListView_SetItemText(nw->list, nw->count, NUM_COL_ADDR, waddr);
     ListView_SetItemText(nw->list, nw->count, NUM_COL_VAL, L"");
     nw->leaf_ids[nw->count] = leaf_id;
+    _snprintf(nw->names[nw->count], 256, "%s", L ? L->name : "");
     nw->count++;
     /* N9(a): 加入窗口的变量自动纳入采集（观测勾选），否则多变量恒为 0 */
     os_vartree_set_watch(leaf_id, 1);
@@ -111,7 +113,10 @@ void os_num_remove_var(HWND hwnd, int row)
     removed_id = nw->leaf_ids[row];
     if (nw->edit_row == row) num_end_edit(nw, 1);
     ListView_DeleteItem(nw->list, row);
-    for (k = row; k < nw->count - 1; k++) nw->leaf_ids[k] = nw->leaf_ids[k + 1];
+    for (k = row; k < nw->count - 1; k++) {
+        nw->leaf_ids[k] = nw->leaf_ids[k + 1];
+        _snprintf(nw->names[k], 256, "%s", nw->names[k + 1]);
+    }
     nw->count--;
     os_log(OS_LOG_INFO, "数值窗口移除变量: id=%d (剩余 %d 行)", removed_id, nw->count);
     os_win_auto_unwatch(removed_id);
@@ -121,6 +126,49 @@ int os_num_is(HWND hwnd)
 {
     OS_NumWin* nw = num_from_hwnd(hwnd);
     return nw ? 1 : 0;
+}
+
+/* 需求2：ELF 重新加载后叶表重建、叶下标可能漂移——按变量全名重绑 leaf_id 并
+ * 刷新地址列。旧实现只存下标，重编译增删变量后窗口会静默绑到错误变量。
+ * 缺失变量的行移除（观测勾选由 os_vartree_build 按名恢复）。 */
+void os_num_rebind(HWND hwnd)
+{
+    OS_NumWin* nw = num_from_hwnd(hwnd);
+    int i, ok = 0, miss = 0;
+    if (!nw) return;
+    for (i = 0; i < nw->count; ) {
+        int id;
+        if (!nw->names[i][0]) { i++; continue; }
+        id = os_vartree_find_by_name(nw->names[i]);
+        if (id >= 0) {
+            const OS_Leaf* L = os_vartree_leaf(id);
+            wchar_t waddr[64];
+            if (id != nw->leaf_ids[i])
+                os_log(OS_LOG_INFO, "数值变量重绑: %s id=%d->%d @0x%llX",
+                       nw->names[i], nw->leaf_ids[i], id,
+                       (unsigned long long)(L ? L->address : 0));
+            nw->leaf_ids[i] = id;
+            _snwprintf(waddr, 64, L"0x%llX", (unsigned long long)(L ? L->address : 0));
+            ListView_SetItemText(nw->list, i, NUM_COL_ADDR, waddr);
+            ListView_SetItemText(nw->list, i, NUM_COL_VAL, L"");
+            ok++;
+            i++;
+        } else {
+            int k;
+            os_log(OS_LOG_WARN, "数值变量重绑缺失（移除）: %s", nw->names[i]);
+            if (nw->edit_row == i) num_end_edit(nw, 0);
+            ListView_DeleteItem(nw->list, i);
+            for (k = i; k < nw->count - 1; k++) {
+                nw->leaf_ids[k] = nw->leaf_ids[k + 1];
+                _snprintf(nw->names[k], 256, "%s", nw->names[k + 1]);
+                if (nw->edit_row == k + 1) nw->edit_row = k;
+            }
+            nw->count--;
+            miss++;
+        }
+    }
+    if (ok || miss)
+        os_log(OS_LOG_INFO, "数值窗口变量重绑: 成功 %d 缺失 %d", ok, miss);
 }
 
 /* F20: 按当前主题刷新数值窗口内部列表颜色 */

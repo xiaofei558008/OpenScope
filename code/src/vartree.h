@@ -9,6 +9,8 @@ void os_vartree_clear(void);
 
 /* 重建左侧 TreeView */
 void os_vartree_fill_tree(HWND hTree);
+/* 树填充进行中（此期间 TVN_ITEMCHANGED 勾选联动应屏蔽，防止旧 lParam 误置观测） */
+int os_vartree_is_filling(void);
 
 /* 模糊搜索叶子（子串、不区分大小写），返回匹配数 */
 int os_vartree_search(const char* needle, int max, int* out_ids);

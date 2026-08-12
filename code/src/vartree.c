@@ -5,6 +5,9 @@
 
 static char g_missing[64][256];
 static int  g_missing_count;
+/* 需求2：树填充（删除重建）期间屏蔽 TVN_ITEMCHANGED 勾选联动——
+ * 重建时树节点 lParam（旧叶 id+1）指向新叶表的错误变量，通知回写会误置观测标志 */
+static int  g_tree_filling;
 
 static void add_leaf(const char* name, uint64_t addr, uint32_t size, OS_TypeKind kind,
                      int is_signed, int is_ptr, int is_bitfield, int bit_off, int bit_size,
@@ -317,9 +320,12 @@ static HTREEITEM add_node(HWND tree, HTREEITEM parent, const wchar_t* text, LPAR
     memset(&ins, 0, sizeof(ins));
     ins.hParent = parent;
     ins.hInsertAfter = TVI_LAST;
-    ins.item.mask = TVIF_TEXT | TVIF_PARAM;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_STATE;
     ins.item.pszText = (LPWSTR)text;
     ins.item.lParam = lparam;
+    /* 需求2：重建后勾选状态随 watched 恢复（填充期间通知被 g_tree_filling 屏蔽，不会回写） */
+    ins.item.stateMask = TVIS_STATEIMAGEMASK;
+    ins.item.state = INDEXTOSTATEIMAGEMASK(checked ? 2 : 1);
     return TreeView_InsertItem(tree, &ins);
 }
 
@@ -398,13 +404,16 @@ static void tree_add_type(HWND tree, HTREEITEM parent, const OS_Type* t, const c
     }
 }
 
+int os_vartree_is_filling(void) { return g_tree_filling; }
+
 void os_vartree_fill_tree(HWND hTree)
 {
     int i, n;
     wchar_t wname[320];
     HTREEITEM h;
+    g_tree_filling = 1;
     TreeView_DeleteAllItems(hTree);
-    if (!g_app.elf) return;
+    if (!g_app.elf) { g_tree_filling = 0; return; }
     n = os_elf_var_count(g_app.elf);
     for (i = 0; i < n; i++) {
         const OS_Variable* v = os_elf_var_at(g_app.elf, i);
@@ -424,6 +433,7 @@ void os_vartree_fill_tree(HWND hTree)
             add_node(hTree, NULL, wfull, (LPARAM)-1, 0, 0);
         }
     }
+    g_tree_filling = 0;
     (void)set_check;
 }
 

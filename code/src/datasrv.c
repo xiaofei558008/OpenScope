@@ -291,23 +291,34 @@ void os_ds_push_batch(OS_Sample* samples, int n)
     }
 }
 
+/* Bug1 同类风险：UI 线程栈上大数组（OS_MAX_LEAVES × ~96B ≈ 384KB），
+ * 嵌套在 WM_PAINT/WM_OS_SAMPLES 下可能逼近 1MB 默认栈上限。
+ * 每次排空只需 ~256 条即可维持 60Hz UI 刷新；环内剩余样本下个周期排。 */
+#define OS_DRAIN_BATCH 256
+
 void os_ds_drain(void)
 {
-    OS_Sample batch[OS_MAX_LEAVES];
+    OS_Sample batch[OS_DRAIN_BATCH];
     int n = 0, i, j;
     EnterCriticalSection(&g_app.ring_cs);
-    while (g_app.ring_tail != g_app.ring_head && n < OS_MAX_LEAVES) {
+    while (g_app.ring_tail != g_app.ring_head && n < OS_DRAIN_BATCH) {
         batch[n++] = g_app.ring[g_app.ring_tail];
         g_app.ring_tail = (g_app.ring_tail + 1) % OS_RING_CAP;
     }
     LeaveCriticalSection(&g_app.ring_cs);
     if (n <= 0) return;
+    /* Bug19: 推送给每个 tab 内的全部窗口（group[]），而不是只有 group[0]——
+     * 旧实现同 tab 多窗口时只有第一个窗口更新/绘图 */
     for (i = 0; i < g_app.win_count; i++) {
-        HWND w = g_app.wins[i].hwnd;
-        if (!w || g_app.wins[i].is_module || !IsWindow(w)) continue;
-        for (j = 0; j < n; j++) {
-            os_chart_push(w, &batch[j]);
-            os_num_push(w, &batch[j]);
+        int k;
+        if (g_app.wins[i].is_module) continue;
+        for (k = 0; k < g_app.wins[i].group_count; k++) {
+            HWND w = g_app.wins[i].group[k];
+            if (!w || !IsWindow(w)) continue;
+            for (j = 0; j < n; j++) {
+                os_chart_push(w, &batch[j]);
+                os_num_push(w, &batch[j]);
+            }
         }
     }
     for (i = 0; i < g_app.winmod_count; i++) {

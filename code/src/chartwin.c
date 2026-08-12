@@ -10,6 +10,7 @@
 
 typedef struct OS_Series {
     int leaf_id;
+    char name[256];     /* 添加时的变量全名：ELF 重载后按名重绑（需求2），防止叶下标漂移绑错变量 */
     COLORREF color;
     int64_t ts[OS_CHART_HIST];
     double val[OS_CHART_HIST];
@@ -148,14 +149,17 @@ void os_chart_push(HWND hwnd, const OS_Sample* s)
 void os_chart_add_var(HWND hwnd, int leaf_id)
 {
     OS_ChartWin* cw = cw_from_hwnd(hwnd);
+    const OS_Leaf* L;
     int i;
     if (!cw) return;
     for (i = 0; i < cw->series_count; i++) {
         if (cw->series[i].leaf_id == leaf_id) return;
     }
     if (cw->series_count >= OS_MAX_CHART_SERIES) return;
+    L = os_vartree_leaf(leaf_id);
     memset(&cw->series[cw->series_count], 0, sizeof(OS_Series));
     cw->series[cw->series_count].leaf_id = leaf_id;
+    if (L) _snprintf(cw->series[cw->series_count].name, 256, "%s", L->name);
     cw->series[cw->series_count].color = g_pal[cw->series_count % 8];
     cw->series_count++;
     /* N9(a): 加入窗口的变量自动纳入采集（观测勾选），否则 poll 线程
@@ -181,6 +185,45 @@ void os_chart_remove_var(HWND hwnd, int idx)
     os_log(OS_LOG_INFO, "波形窗口移除变量: id=%d (剩余 %d 路)", removed_id, cw->series_count);
     os_win_auto_unwatch(removed_id);
     InvalidateRect(hwnd, NULL, TRUE);
+}
+
+/* 需求2：ELF 重新加载后叶表重建、叶下标可能漂移——按变量全名重绑 leaf_id。
+ * 旧实现只存下标，重编译增删变量后窗口会静默绑到错误变量（显示错地址/错数据）。
+ * 缺失变量的系列移除；重绑后清空历史（地址可能已变，旧样本不再可比）。 */
+void os_chart_rebind(HWND hwnd)
+{
+    OS_ChartWin* cw = cw_from_hwnd(hwnd);
+    int i, ok = 0, miss = 0;
+    if (!cw) return;
+    for (i = 0; i < cw->series_count; ) {
+        int id;
+        if (!cw->series[i].name[0]) { i++; continue; }
+        id = os_vartree_find_by_name(cw->series[i].name);
+        if (id >= 0) {
+            const OS_Leaf* L = os_vartree_leaf(id);
+            if (id != cw->series[i].leaf_id)
+                os_log(OS_LOG_INFO, "波形变量重绑: %s id=%d->%d @0x%llX",
+                       cw->series[i].name, cw->series[i].leaf_id, id,
+                       (unsigned long long)(L ? L->address : 0));
+            cw->series[i].leaf_id = id;
+            cw->series[i].head = 0;
+            cw->series[i].count = 0;
+            ok++;
+            i++;
+        } else {
+            int k;
+            os_log(OS_LOG_WARN, "波形变量重绑缺失（移除）: %s", cw->series[i].name);
+            for (k = i; k < cw->series_count - 1; k++) cw->series[k] = cw->series[k + 1];
+            cw->series_count--;
+            miss++;
+        }
+    }
+    if (cw->sel >= cw->series_count) cw->sel = cw->series_count - 1;
+    if (ok || miss) {
+        /* 观测勾选由 os_vartree_build 按名恢复，无需再处理 */
+        os_log(OS_LOG_INFO, "波形窗口变量重绑: 成功 %d 缺失 %d", ok, miss);
+        InvalidateRect(hwnd, NULL, TRUE);
+    }
 }
 
 int os_chart_is(HWND hwnd)
@@ -406,27 +449,45 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
     }
     pen = CreatePen(PS_SOLID, 1, sr->color);
     old = (HPEN)SelectObject(hdc, pen);
-    for (j = 0; j < npts; j++) {
-        int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
-        int x, y;
-        if (idx < 0) idx += OS_CHART_HIST;
-        if (have_t) {
-            int64_t t = sr->ts[idx];
-            if (t == 0 || t == -1) { first = 1; continue; }
-            if (t < x0 || t > x1) { first = 1; continue; }
-            x = map_x(plot, x0, x1, t);
-        } else {
-            x = (npts > 1) ? plot->left + (plot->right - plot->left) * j / (npts - 1) : plot->left;
-        }
-        y = map_y(lane, sr->val[idx], ylo, yhi);
-        if (first) { MoveToEx(hdc, x, y, NULL); first = 0; }
-        else LineTo(hdc, x, y);
-        if (dots) {
-            HBRUSH br = CreateSolidBrush(sr->color);
-            HBRUSH obr = (HBRUSH)SelectObject(hdc, br);
+    if (dots) {
+        /* 采样圆点复用同一把画刷，避免每点 CreateSolidBrush / DeleteObject 的 GDI 开销 */
+        HBRUSH dot_br = CreateSolidBrush(sr->color);
+        HBRUSH dot_obr = (HBRUSH)SelectObject(hdc, dot_br);
+        for (j = 0; j < npts; j++) {
+            int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
+            int x, y;
+            if (idx < 0) idx += OS_CHART_HIST;
+            if (have_t) {
+                int64_t t = sr->ts[idx];
+                if (t == 0 || t == -1) { first = 1; continue; }
+                if (t < x0 || t > x1) { first = 1; continue; }
+                x = map_x(plot, x0, x1, t);
+            } else {
+                x = (npts > 1) ? plot->left + (plot->right - plot->left) * j / (npts - 1) : plot->left;
+            }
+            y = map_y(lane, sr->val[idx], ylo, yhi);
+            if (first) { MoveToEx(hdc, x, y, NULL); first = 0; }
+            else LineTo(hdc, x, y);
             Ellipse(hdc, x - 2, y - 2, x + 2, y + 2);
-            SelectObject(hdc, obr);
-            DeleteObject(br);
+        }
+        SelectObject(hdc, dot_obr);
+        DeleteObject(dot_br);
+    } else {
+        for (j = 0; j < npts; j++) {
+            int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
+            int x, y;
+            if (idx < 0) idx += OS_CHART_HIST;
+            if (have_t) {
+                int64_t t = sr->ts[idx];
+                if (t == 0 || t == -1) { first = 1; continue; }
+                if (t < x0 || t > x1) { first = 1; continue; }
+                x = map_x(plot, x0, x1, t);
+            } else {
+                x = (npts > 1) ? plot->left + (plot->right - plot->left) * j / (npts - 1) : plot->left;
+            }
+            y = map_y(lane, sr->val[idx], ylo, yhi);
+            if (first) { MoveToEx(hdc, x, y, NULL); first = 0; }
+            else LineTo(hdc, x, y);
         }
     }
     SelectObject(hdc, old);
@@ -637,10 +698,15 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
             MoveToEx(hdc, cw->m1.x, plot.top, NULL);
             LineTo(hdc, cw->m1.x, plot.bottom);
             {
-                wchar_t wt[180];
+                wchar_t wt[180], wdx[64];
                 RECT r;
-                _snwprintf(wt, 180, L"ΔX=%lldus  ΔY=%g",
-                           (long long)(cw->mt1 - cw->mt0), cw->mv1 - cw->mv0);
+                int64_t dx_us = cw->mt1 - cw->mt0;
+                double dx_sec = (double)dx_us / 1e6;
+                /* 短间隔用 µs/ms；长间隔用人类可读时分秒 */
+                if (dx_sec < 0.001) _snwprintf(wdx, 64, L"%lldµs", (long long)dx_us);
+                else if (dx_sec < 1.0) _snwprintf(wdx, 64, L"%.3fms", dx_sec * 1000.0);
+                else fmt_time(dx_sec, wdx, 64);
+                _snwprintf(wt, 180, L"ΔX=%s  ΔY=%g", wdx, cw->mv1 - cw->mv0);
                 r.left = cw->m0.x + 8; r.top = plot.top + 4;
                 r.right = cw->m0.x + 320; r.bottom = plot.top + 22;
                 if (r.right > plot.right) { r.left = cw->m0.x - 320; r.right = cw->m0.x - 8; }
@@ -1154,6 +1220,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             switch (wParam) {
             case 'F': case 'f': /* 全局显示：整体展示全部波形 */
                 cw->view_all = 1; cw->fit_x = 1; cw->fit_y = 1;
+                cw->m0.x = cw->m1.x = -1; /* 清除测量标记（视图跳变后像素位置已无效） */
                 os_log(OS_LOG_DEBUG, "波形全局显示 (F)");
                 InvalidateRect(hwnd, NULL, TRUE);
                 break;
@@ -1171,8 +1238,17 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         if (cw) {
             cw->view_all = 1; cw->fit_x = 1; cw->fit_y = 1;
             cw->paused = 1;
+            cw->m0.x = cw->m1.x = -1; /* 清除测量标记 */
             os_log(OS_LOG_DEBUG, "波形整体展示 (停止采集)");
             InvalidateRect(hwnd, NULL, TRUE);
+        }
+        return 0;
+    case WM_OS_CHART_QUERY:
+        /* 测试钩子（Bug19 回归）：返回 (series_count<<16) | series[0].count（截断 0xFFFF） */
+        if (cw) {
+            int c0 = cw->series_count > 0 ? cw->series[0].count : 0;
+            if (c0 > 0xFFFF) c0 = 0xFFFF;
+            return (LRESULT)((cw->series_count << 16) | c0);
         }
         return 0;
     case WM_OS_CHART_LIVE:
@@ -1206,6 +1282,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case MENU_CHART_FITALL:
             if (cw) {
                 cw->view_all = 1; cw->fit_x = 1; cw->fit_y = 1;
+                cw->m0.x = cw->m1.x = -1; /* 清除测量标记 */
                 os_log(OS_LOG_DEBUG, "波形全局显示 (菜单)");
                 InvalidateRect(hwnd, NULL, TRUE);
             }

@@ -10,6 +10,7 @@ void os_num_add_var(HWND hwnd, int leaf_id);
 void os_num_remove_var(HWND hwnd, int row);
 int os_num_is(HWND hwnd);
 int os_num_var_name(HWND hwnd, int idx, char* out, int cap);
+void os_num_rebind(HWND hwnd); /* 需求2：ELF 重载后按变量名重绑 leaf_id */
 /* F20: 按当前主题刷新数值窗口内部列表颜色 */
 void os_num_apply_theme(HWND hwnd);
 

@@ -13,6 +13,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
+python tests\gen_elf_out_v2.py
+if errorlevel 1 (
+  echo [ERROR] gen_elf_out_v2 failed
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I code\src tests\elf_smoke.c ^
     code\src\elf.c code\src\vartree.c code\src\util.c ^
     /Fe:tests\bin\elf_smoke.exe /link user32.lib gdi32.lib
@@ -83,6 +89,20 @@ echo Running chartview smoke...
 tests\bin\chartview_smoke.exe
 if errorlevel 1 (
   echo [ERROR] chartview_smoke FAILED
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I code\src tests\tilecalc_smoke.c code\src\tilecalc.c ^
+    /Fe:tests\bin\tilecalc_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] tilecalc_smoke build failed
+  exit /b 1
+)
+
+echo Running tilecalc smoke...
+tests\bin\tilecalc_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] tilecalc_smoke FAILED
   exit /b 1
 )
 

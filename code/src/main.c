@@ -8,6 +8,8 @@
 #include "layout.h"
 #include "util.h"
 #include "theme.h"
+#include "version.h"
+#include "helpwin.h"
 #include <string.h>
 #include <commctrl.h>
 
@@ -165,7 +167,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
-    os_log(OS_LOG_INFO, "OpenScope 启动 (version 1.15.0)");
+    os_log(OS_LOG_INFO, "OpenScope 启动 (version " OS_VERSION_STR ")");
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
@@ -173,6 +175,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_chart_register();
     os_num_register();
     os_mainwin_register();
+    os_help_register(); /* 需求12：帮助文档窗口类（F1） */
     os_theme_load(); /* F20: 创建主窗口前读回持久化主题，标题栏/控件从首帧即按主题渲染 */
     hMain = CreateWindowW(L"OpenScopeMain", L"OpenScope - MCU 变量采集与标定",
                           WS_OVERLAPPEDWINDOW,
@@ -203,16 +206,27 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
             SetTimer(hMain, 2, 10, NULL); /* 测试钩子：--replay 自动开始离线回放 */
         if (!no_layout && lsv) os_layout_save_to(lsv);
     }
-    while (GetMessage(&msg, NULL, 0, 0)) {
-        /* N3: 就地重命名编辑框的回车/ESC 在分发前拦截（不子类化编辑框） */
-        HWND te = os_tab_edit_hwnd();
-        if (te && msg.message == WM_KEYDOWN && msg.hwnd == te &&
-            (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE)) {
-            os_tab_edit_handle_key(msg.wParam);
-            continue;
+    {
+        /* 需求12：F1 弹出帮助文档（加速键在消息循环层拦截，子控件焦点同样生效） */
+        ACCEL acc[1];
+        HACCEL hAcc;
+        acc[0].fVirt = FVIRTKEY;
+        acc[0].key = VK_F1;
+        acc[0].cmd = IDM_HELP_DOC;
+        hAcc = CreateAcceleratorTableW(acc, 1);
+        while (GetMessage(&msg, NULL, 0, 0)) {
+            /* N3: 就地重命名编辑框的回车/ESC 在分发前拦截（不子类化编辑框） */
+            HWND te = os_tab_edit_hwnd();
+            if (te && msg.message == WM_KEYDOWN && msg.hwnd == te &&
+                (msg.wParam == VK_RETURN || msg.wParam == VK_ESCAPE)) {
+                os_tab_edit_handle_key(msg.wParam);
+                continue;
+            }
+            if (hAcc && TranslateAcceleratorW(hMain, hAcc, &msg)) continue;
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
         }
-        TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        if (hAcc) DestroyAcceleratorTable(hAcc);
     }
     DeleteCriticalSection(&g_app.ring_cs);
     return (int)msg.wParam;

@@ -214,6 +214,35 @@
   - 版本 1.15.0：`python build.py --quiet` 干净构建 0 error/0 warning；打包 `dist/OpenScope-Setup-1.15.0.exe` 并发布 `https://www.opendebugger.com/downloads/`（下载页与安装包 HTTP 200 自检通过）。UAC 已禁用，本地安装版用文件复制更新（新构建 exe + dll/jlink.dll → Program Files）。
   - 需求 9：checkpoint-29 提交 git + `git tag v1.15.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
 
+- **checkpoint-31（2026-08-10）**：request.md 全量逐条复查——修复 4 项实现失败/缺失（需求12 F1 帮助文档完全缺失、关于框/启动日志版本号失配、需求2 ELF 重载窗口变量绑错、Bug6 tab 内窗口列宽拖拽/最小化缺失），v1.17.0。
+  - 审计结论（逐条核对 request.md 基本需求1-12/新增特性1-23/Bug1-18 后的真实失败项）：
+    - **需求12（F1 帮助文档）完全缺失**：无 F1 处理、帮助菜单无"帮助文档"项、readme.md 未进安装包。实现：readme.md 以 RCDATA 内嵌 exe 资源（IDR_HELP_MD，安装版脱离源码目录可用）；新增 `code/src/helpwin.c/h`（OSHelpWin 单例只读窗口，UTF-8→宽字符 \n→CRLF 转换，只读多行 EDIT，跟随 F20 主题，居中主窗口，Esc/F1 关闭）；帮助菜单新增"帮助文档\tF1"（IDM_HELP_DOC=2702）；main.c 加速键表 `TranslateAcceleratorW` 拦截 F1（子控件焦点同样生效）。
+    - **版本号失配（Bug17 同类）**：main.c 启动日志与 mainwin.c 关于框硬编码 1.15.0，与 version.rc 1.16.0 不一致。修复：build.py 新增 `gen_version_h()` 从 version.rc（唯一来源）解析生成 `code/src/version.h`（内容不变不重写避免重编译），启动日志/关于框统一引用 OS_VERSION_STR/OS_VERSION_WIDE，结构性杜绝失配。
+    - **需求2 加固（ELF 重载绑错变量）**：chartwin/numwin 只存叶下标 leaf_id，ELF 重载叶表重建后下标漂移→窗口静默绑到错误变量（错地址/错数据）。修复：OS_Series/OS_NumWin 增加变量全名存储，新增 `os_chart_rebind`/`os_num_rebind` 在 load_elf_path 重建后按名重绑（逐变量日志 `重绑: 名 id=旧->新 @新地址` + 汇总 `成功 N 缺失 M`，缺失变量移除，数值窗口同步刷新地址列）。
+    - **需求2 附带真 bug（伪观测）**：树重建（fill_tree 删除重建）期间 TVN_ITEMCHANGED 用旧节点 lParam（旧叶 id+1）回写新叶表同名位置→把不同变量误置观测（实测 g_extra 被误观测，弹"变量缺失"误报）。修复：`g_tree_filling` 填充期间屏蔽勾选联动 + 仅响应勾选框图像位真实翻转（选择状态变化不再触发）；add_node 补上勾选状态恢复（重建后勾选框与 watched 一致）。
+    - **Bug6 补齐（tab 内窗口鼠标拉伸边沿 + 最小化）**：旧平铺等分固定列宽、无最小化。实现：`OS_WinItem` 新增 `col_ratio[]`（列宽比例）与 `group_min[]`；平铺列间留 6px 分隔带，tab 子类命中拖拽（IDC_SIZEWE 光标、起点快照、相对位移实时重排、最小列宽 60px 夹紧）；最小化=窗口隐藏+tab 底部 26px 最小化条自绘按钮（标题），点击按钮还原；菜单新增"最小化/还原当前窗口"（IDM_TAB_MINIMIZE=2507）+ `WM_OS_WIN_MINIMIZE`（WM_APP+34）测试钩子。比例数学抽成 `code/src/tilecalc.c/h` 纯函数（drag/drag2 此消彼长、和保持 1、双向夹紧、浮点噪声 epsilon 判定）。
+    - **拖拽抖动修复**：SetCapture 期间窗口尺寸变化会让静止物理光标收到 wParam=0 的 WM_MOUSEMOVE（命中测试重评估），被误当拖拽位移导致列宽跳变——MOUSEMOVE 仅在按住左键（MK_LBUTTON）时应用。
+  - 测试：单元 `tests/tilecalc_smoke.c`（23 项：均分/此消彼长/最小夹紧/和保持/drag2 任意下标/退化输入，接入 build_tests.bat）；UI 新增 3 个——`ui_help_drive.ps1`（菜单命令开帮助/真实 F1 键弹出/readme 全文内嵌校验/关于框版本与 exe 文件版本一致/需求6 文案）、`ui_elf_rebind_drive.ps1`（新增 `gen_elf_out_v2.py` 生成"重新编译"变体 ELF——g_extra 首位插入+地址迁移；覆盖触发 2s mtime 弹窗→点是→双向重绑断言 id 0->1->0 与新地址 0x20000004/0x20000000 + 无伪观测 + 无误报缺失弹窗）、`ui_tile_drive.ps1`（分隔带拖拽 ±80px 精确断言/菜单最小化/最小化条点击还原/钩子切换）。测试陷阱修复：跨进程 SendMessage TCM_ADJUSTRECT（>=WM_USER 不封送指针）会让 comctl32 在被测进程解引用野指针崩溃——改用几何公式计算按钮坐标。
+  - 回归：全量 UI 回归 dev+安装版（--jlink）**54/54 ALL PASS**（NON_JLINK 23 + JLINK 4，各两变体，含新 3 脚本）；单元/冒烟（tilecalc 23 项/chartview 20 项/elf/enc/replay/jlink/bug9 四速度）全部 PASS；构建 0 error/0 warning。
+  - 版本 1.17.0：version.rc（唯一来源）/openscope.iss/jlink.dll 模块版本同步；`python build.py --quiet` 干净构建；打包 `dist/OpenScope-Setup-1.17.0.exe`（10.4MB），静默安装验证 1.17.0.0；发布 `https://www.opendebugger.com/downloads/`。
+  - 需求 9：checkpoint-31 提交 git + `git tag v1.17.0` + 推送 `gitee_origin` 与 `github_origin` 双远端。
+
+- **checkpoint-32（2026-08-12）**：BMAD 全量审计 request.md + 修复 5 项真实缺陷（含 1 项严重——树 Ctrl/Shift 多选从代码层即被禁用），v1.17.1。
+  - **审计方法**：4 路并行 agent 全量扫描 chartwin.c / mainwin.c / datasrv.c / numwin.c / vartree.c / layout.c 对照 request.md 逐特性/bug 核对，同时手工审查关键代码路径。
+  - **审计结论**——3 项请求已妥善实现（仅在代码层面有子级缺陷）：
+    - 波形 F23 丝滑缩放/拖拽/框选：chart_sync_manual + X/Y 独立动画 + drag Y 保护 + 整数收敛 + 框选亮青边框已全部到位；**修复**：F 键/停止采集/菜单全局显示未清除测量标记（视图跳变后像素位置已无效→改为提前清 m0/m1）。
+    - Bug19 同 tab 多窗口同时更新：`os_ds_drain` 已遍历 `group[]` 全部窗口；**加固**：`chart_broadcast`（FITALL/LIVE 广播）同样补全 group[] 遍历。
+    - Bug1/16 多变量崩溃：poll 线程堆分配 + EMU_SelectByIndex 顺序已修；**风险削减**：`os_ds_drain` 栈分配 OS_MAX_LEAVES（384KB）改 OS_DRAIN_BATCH=256（24KB），消除 UI 线程栈溢出隐患。
+  - **新发现的真实缺陷（5 项，全部修复）**：
+    1. 🔴 **TreeView Ctrl/Shift 多选从代码层被禁用**（`mainwin.c:2700`）：`TreeView_SetExtendedStyle(g_app.hTree, TVS_EX_MULTISELECT, 0)` 签名 `(hwnd, mask, style)` 传 `style=0` 会把 TVS_EX_MULTISELECT 位**清 0**（禁用），应传 `TVS_EX_MULTISELECT` 才开启。此前 checkpoint-19 声称"树改 TVS_EX_MULTISELECT 扩展样式"实际效果为零——Ctrl 单击多选 / Shift 起止范围选从未真正工作过。
+    2. 🟡 **树自动隐藏/钉住偏好未持久化**（`layout.c`）：`tree_auto`（钉图标状态）不随布局保存/恢复——每次启动重置为钉住，用户偏好丢失。新增 layout.ini `tree_auto` 键 + 加载后刷新钉图标颜色。
+    3. 🟡 **波形 GDI 采样圆点逐点 CreateSolidBrush/DeleteObject**（`chartwin.c:chart_draw_series`）：可见 ≤120 点时每帧 120 次 GDI 对象创建/销毁（~7200/s/系列），改为复用单把画刷，仅 dots 分支才创建。
+    4. 🟢 **Δ 测量时间始终以 µs 显示**（`chartwin.c:chart_draw`）：长录制（数十秒）ΔX 显示 `12345678µs` 不可读，改为 <1ms→µs / <1s→ms / ≥1s→`fmt_time`（人类可读时分秒）。
+    5. 🟢 **F 键/停止采集/菜单全局显示未清除测量标记**（`chartwin.c`）：3 处（WM_KEYDOWN F / WM_OS_CHART_FITALL / MENU_CHART_FITALL）均只复位 view/fit 状态未清 m0/m1，补 `cw->m0.x = cw->m1.x = -1`。
+  - 测试：构建 `python build.py --quiet` 0 error/0 warning；单元测试 elf/enc/replay/chartview/tilecalc 全部 PASS；UI 回归因 pwsh 7 未安装跳过一次（用户本地环境可跑 `tests/run_regression.sh` NON_JLINK 组）。
+  - 版本 1.17.1：未重新打包（按用户要求不推送、先本地测试）。
+  - 需求 9：checkpoint-32 本地提交 git（不推送）。
+
 - **checkpoint-30（2026-08-10）**：request.md 特性 23 加"仔细实现"前缀重新仔细实现（波形丝滑缩放/拖拽/框选，消除全部跳变根因），v1.16.0。
   - 通读 chartwin.c F23 定位 5 个跳变根因并逐一修复：
     - **A（最严重）滚轮缩放动画从陈旧视图起跳**：live 跟随（fit_x=1）下 vx0/vx1 从不写回（calloc 为 0），首次滚轮缩放把 fit_x 置 0 后动画从 0 起跳，整图先跳到时间 0 再弹回。新增 `chart_sync_manual()` 在缩放/框选前把当前自动视图同步进 vx0/vx1/vylo/vyhi，动画/平移永远从当前实际画面起步。
@@ -281,6 +310,13 @@
 - [x] 23 波形窗口鼠标缩放丝滑连续：滚轮连续缩放（pow factor + 平滑动画消除跳变）+ 左键拖拽平移 + Ctrl+左键框选局部放大，保留测量标记/滚轮缩放等原有功能（checkpoint-29，F23）
 - [x] 23（仔细实现）消除全部跳变根因：live 模式下缩放动画从陈旧 0 值起跳 → 缩放前同步当前视图（chart_sync_manual）；X/Y 缩放独立动画互不干扰；拖拽仅锁定 Y 时平移 Y；动画差值过小直接吸附收敛；框选边框改亮青两主题可见。缩放/框选数学抽成 chartview.c 纯函数 + 20 项单元测试，UI 回归新增 Bug A/B 断言（checkpoint-30，F23 v1.16.0）
 
+## 复查补齐（checkpoint-31，request.md 全量逐条复查）
+
+- [x] 12 readme.md 内容写入帮助文档，F1 键弹出 + 帮助菜单"帮助文档"选项（readme 内嵌 exe 资源，安装版可用；此前完全缺失）
+- [x] 2 加固：ELF 重载后波形/数值窗口变量按名重绑 leaf_id（旧实现只存下标，重编译变量顺序漂移后静默绑错变量）+ 树重建期间勾选联动屏蔽（旧 lParam 回写新叶表误置观测/误报缺失弹窗）+ 勾选状态随重建恢复
+- [x] Bug6 补齐：tab 内平铺窗口列间分隔带鼠标拖拽调列宽（tilecalc 纯函数 + 23 项单元测试）+ 窗口最小化（tab 底部最小化条点击还原）
+- [x] 版本号单一来源：build.py 从 version.rc 生成 version.h，启动日志/关于框统一引用（修复关于框硬编码 1.15.0 与 version.rc 失配）
+
 ## 需求（request.md 软件功能清单）
 
 - [x] 9 每次开发后填好 checkout point、提交 git、添加 tag 并推送到远端 gitee_origin / git_hub（checkpoint-18 起执行：`git tag v1.7.0` + 双远端推送；checkpoint-19：`git tag v1.8.0` + 双远端推送；checkpoint-20：`git tag v1.8.1` + 双远端推送；checkpoint-21：`git tag v1.8.2` + 双远端推送；checkpoint-22：`git tag v1.8.3` + 双远端推送；checkpoint-23：`git tag v1.9.0` + 双远端推送；checkpoint-24：`git tag v1.10.0` + 双远端推送；checkpoint-25：`git tag v1.11.0` + 双远端推送；checkpoint-26：`git tag v1.12.0` + 双远端推送；checkpoint-27：`git tag v1.13.0` + 双远端推送；checkpoint-28：`git tag v1.14.0` + 双远端推送；checkpoint-29：`git tag v1.15.0` + 双远端推送；checkpoint-30：`git tag v1.16.0` + 双远端推送）
@@ -301,8 +337,9 @@
 - [x] Bug14 软件弹窗选择芯片并闪退——删除死代码芯片配置弹窗（checkpoint-24）
 - [x] Bug16 12000kHz 掉线自动重连时 `JLINKARM_Open` 返回垃圾值（rc=-488389840）导致采集停止——连接前整库重载 DLL + open 失败重载重试 + 自动重连重试 3 次 + close 与读互斥（checkpoint-26）
 - [x] Bug16 软件添加 6 个变量之后闪退（着重看内存管理）——根因不是内存：`EMU_SelectByIndex` 在 `JLINKARM_Open` 之后调用违反 SDK 契约，open 后选择失败致 DLL 内部 AV（JLink_x64.dll+0x18C36E），与变量个数无关；移到 open 前修复，首连即 Connect rc=0（checkpoint-27）
-- [x] Bug17 安装包开始安装时界面显示 v1.13.0（安装后关于正确）——iss 的 AppVerName/VersionInfoProductVersion 未随版本同步 + make_setup.py 校验漏检，iss 全部版本字段同步 + 校验增补 4 项（checkpoint-29）
+- [x] Bug17 安装包开始安装时界面显示 v1.13.0（安装后关于正确）——iss 的 AppVerName/VersionInfoProductVersion 未随版本同步 + make_setup.py 校验漏检，iss 全部版本字段同步 + 校验增补 4 项（checkpoint-29）；checkpoint-31 进一步消除同类失配：关于框/启动日志改引 version.h（build.py 从 version.rc 自动生成，单一来源）
 - [x] Bug18 仍未实现全部隐藏全局变量窗口——双击竖向分隔条完全隐藏 + 左侧细条点击展开 + 钉住态保持隐藏（tree_auto_tick 不再强制展开）+ `tree_hidden` 布局持久化（checkpoint-29）
+- [x] Bug6 tab 内窗口最大化/最小化/鼠标拉伸边沿 + 一个 tab 多窗口——最大化/多窗口 checkpoint-17（N11）；最小化（最小化条）与列宽分隔带拖拽 checkpoint-31 补齐
 
 ## 总结
 
