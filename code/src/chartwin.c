@@ -62,6 +62,7 @@ typedef struct OS_ChartWin {
     POINT drag0;        /* 按下起点（客户区） */
     int64_t drag_x0, drag_x1;  /* 拖拽起点视图 X (us) */
     double drag_y0, drag_y1;   /* 拖拽起点视图 Y */
+    int64_t drag_full0, drag_full1; /* 拖拽起点全量数据时间窗：平移夹紧边界（不拖出数据范围） */
     int dragging;       /* 1=正在平移拖拽（位移已超阈值） */
     /* F23: Ctrl+左键框选局部放大 */
     int boxing;         /* 1=框选进行中 */
@@ -982,6 +983,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         cw->drag0.y = y;
                         cw->drag_x0 = v.x0; cw->drag_x1 = v.x1;
                         cw->drag_y0 = v.ylo; cw->drag_y1 = v.yhi;
+                        cw->drag_full0 = v.full0; cw->drag_full1 = v.full1; /* 夹紧边界 */
                         cw->dragging = 0;
                     } else {
                         /* 普通拖拽 = 框选局部放大：框选起点同步当前视图，映射基于此刻画面 */
@@ -1031,12 +1033,23 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             if (cw->dragging && GetCapture() == hwnd) {
                 int dx = x - cw->drag0.x;
                 int dy = y - cw->drag0.y;
-                /* X 平移始终有效（fit_x 转手动，从拖拽起点快照平移） */
+                /* X 平移始终有效（fit_x 转手动，从拖拽起点快照平移）。
+                 * 夹紧到数据全量范围：全局视图拖拽不再拖出界（用户反馈：
+                 * 全局显示下拖拽平移"没实现"——实际是拖出数据范围显示空白）。 */
                 if (cw->drag_x1 > cw->drag_x0 && plot.right > plot.left) {
                     double us_px = (double)(cw->drag_x1 - cw->drag_x0) / (plot.right - plot.left);
                     int64_t nx0 = cw->drag_x0 - (int64_t)(dx * us_px);
                     int64_t nx1 = cw->drag_x1 - (int64_t)(dx * us_px);
-                    if (nx1 > nx0) { cw->vx0 = nx0; cw->vx1 = nx1; }
+                    if (nx1 > nx0) {
+                        if (cw->drag_full1 > cw->drag_full0) {
+                            int64_t span = nx1 - nx0;
+                            if (nx0 < cw->drag_full0) { nx0 = cw->drag_full0; nx1 = nx0 + span; }
+                            if (nx1 > cw->drag_full1) { nx1 = cw->drag_full1; nx0 = nx1 - span; }
+                            if (nx0 < cw->drag_full0) nx0 = cw->drag_full0; /* span 大于全量时兜底 */
+                        }
+                        cw->vx0 = nx0;
+                        cw->vx1 = nx1;
+                    }
                 }
                 /* Y 平移仅在 Y 已手动锁定（fit_y=0）时有效；fit_y=1 时保持自动、
                  * 随 X 窗内数据每帧重算——避免水平拖拽把 Y 从自动冻结到起点快照（跳变根因 C） */
@@ -1190,7 +1203,8 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 pt.y >= plot.top && pt.y <= plot.bottom) {
                 chart_compute_view(cw, &v);
                 if (LOWORD(wParam) & MK_CONTROL) {
-                    /* Ctrl+滚轮：Y 轴缩放（只动 Y，X 自动/手动保持不被打扰——跳变根因 B） */
+                    /* Ctrl+滚轮：Y 轴缩放（只动 Y，X 自动/手动保持不被打扰——跳变根因 B）。
+                     * Y 缩放不退出整体展示：X 窗保持全局。 */
                     if (!v.have_data) return 0;
                     {
                         double f = (double)(plot.bottom - pt.y) / (plot.bottom - plot.top);
@@ -1205,7 +1219,10 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         }
                     }
                 } else {
-                    /* X 轴缩放（只动 X：Y 保持自动/手动不被打扰——跳变根因 B） */
+                    /* X 轴缩放（只动 X：Y 保持自动/手动不被打扰——跳变根因 B）。
+                     * 用户反馈 bug：旧代码 view_all=0 无条件执行——全局视图滚轮缩小
+                     * （no-op，已在全量范围）后 view_all 被清除、fit_x=1 跌回"最后
+                     * npoints 窗口"→ 界面跳转到小段波形。改为缩放真正生效才退出整体展示。 */
                     if (v.have_t && v.x1 > v.x0) {
                         double f = (double)(pt.x - plot.left) / (plot.right - plot.left);
                         int64_t nx0, nx1;
@@ -1214,6 +1231,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         if (os_cv_zoom_x(v.x0, v.x1, f, factor, v.full0, v.full1, &nx0, &nx1)) {
                             chart_sync_manual(cw, &v);  /* 起点=当前自动视图，避免动画从陈旧值起跳 */
                             cw->fit_x = 0;
+                            cw->view_all = 0; /* 仅缩放生效时退出整体展示 */
                             os_log(OS_LOG_DEBUG, "波形 X 轴缩放: [%lld,%lld] us (目标; 起点=[%lld,%lld])",
                                    (long long)nx0, (long long)nx1,
                                    (long long)cw->vx0, (long long)cw->vx1);
@@ -1221,7 +1239,6 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                         }
                     }
                 }
-                cw->view_all = 0; /* 缩放退出整体展示 */
                 cw->m0.x = cw->m1.x = -1; /* 缩放后清除测量标记 */
                 InvalidateRect(hwnd, NULL, TRUE);
             }
