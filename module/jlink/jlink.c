@@ -219,16 +219,21 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
     memset(res, 0, sizeof(res));
     rc = a->exec_cmd(cmd, res, sizeof(res));
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: '%s' rc=%d -> %s", cmd, rc, res[0] ? res : "(空)");
-    /* 时钟速度 */
+    /* 时钟速度：显式设置 SWD/JTAG 频率。speed=0 由 J-Link DLL 自适应。
+     * 注意：SetSpeed 在前 TIF_Select 在后，确保 SWD 模式也使用用户指定频率。 */
     if (cfg->speed_khz > 0) {
         rc = a->set_speed(cfg->speed_khz);
-        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: SetSpeed(%d) rc=%d", cfg->speed_khz, rc);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: SetSpeed(%d kHz) rc=%d%s",
+                            cfg->speed_khz, rc, rc == 0 ? "" : " (失败——将用 DLL 默认速度)");
+    } else {
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: 速度=自动（J-Link DLL 自适应）");
     }
     rc = a->is_connected();
     if (!rc) rc = a->connect();
-    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: Connect rc=%d", rc);
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: Connect rc=%d %s%s",
+                        rc, rc == 0 ? "" : "(失败) ",
+                        rc == 0 ? "" : "请检查目标板/电源/接线");
     if (rc != 0) {
-        if (errbuf) _snprintf(errbuf, errlen, "JLINKARM_Connect 失败 (rc=%d)，请检查目标板/电源/接线", rc);
         a->close();
         return OS_ERR_NO_DEVICE;
     }

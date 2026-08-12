@@ -2875,6 +2875,18 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         else if (wParam == 2) os_replay_tick();
         else if (wParam == 3) { tree_auto_tick(); os_tab_edit_focus_check(); }
         return 0;
+    /* Windows 将 WM_MOUSEWHEEL 发送给拥有键盘焦点的窗口，而非鼠标下方的窗口。
+     * 当用户点击左侧变量树后，焦点在树——此后在波形绘图区滚轮缩放会被树吞掉。
+     * 主窗口拦截 WM_MOUSEWHEEL，用 WindowFromPoint 找到光标下的真实子窗口
+     * 并转发给它（chartwin 的 chart_proc 已实现完整的滚轮缩放/框选/拖拽逻辑）。 */
+    case WM_MOUSEWHEEL: {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        HWND target = WindowFromPoint(pt);
+        /* 仅当光标下的窗口是子控件（非主窗口自身）时转发；主窗口直接 break。 */
+        if (target && target != hwnd && IsChild(hwnd, target))
+            return SendMessageW(target, WM_MOUSEWHEEL, wParam, lParam);
+        break; /* 主窗口自身 → 默认处理 */
+    }
     case WM_OS_SAMPLES:
         os_ds_drain();
         refresh_status();

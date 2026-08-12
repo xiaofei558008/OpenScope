@@ -14,7 +14,9 @@
 #define OS_MAX_WINS          64
 #define OS_MAX_GROUP         8   /* N11: 一个 tab 最多容纳的窗口数 */
 #define OS_MAX_CHART_SERIES  16
-#define OS_CHART_HIST        8192
+/* 高速采集下 8192 点 ≈1 秒即满（6ch @8k/s）；扩到 65536 提供 ~8 秒深历史，
+ * 缩放回看足够，同时保持每系列 65536×24B≈1.5MB 内存可控。 */
+#define OS_CHART_HIST        65536
 #define OS_MAX_NUM_ROWS      128
 
 #define WM_OS_SAMPLES     (WM_APP + 1)
