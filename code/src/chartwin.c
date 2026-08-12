@@ -100,6 +100,43 @@ static void chart_anim_to_y(OS_ChartWin* cw, double y0, double y1)
     }
 }
 
+/* 用户反馈优化：X 轴滚动条（WS_HSCROLL）与视图双向同步。
+ *  - 手动 X 模式（fit_x=0 且放大到小于全量）→ 显示滚动条：thumb 位置=可见窗起点，
+ *    page=可见窗宽（占全量比例），拖拽 thumb 平移时间窗到想观察的点；
+ *  - 跟随模式（fit_x=1）/ 全局显示 → 隐藏滚动条（视图自动管理）。
+ * 滚动条尺度：0..1000 整数刻度映射 full0..full1，避免 int64 µs 超出滚动条 int 范围。 */
+#define SCROLL_SCALE 1000
+
+static void chart_sync_scrollbar(OS_ChartWin* cw, const OS_ChartView* v)
+{
+    SCROLLINFO si;
+    int show = 0;
+    int64_t full_span, view_span;
+    int pos, page;
+    if (v->have_t && v->full1 > v->full0 && !cw->fit_x && !cw->view_all) {
+        full_span = v->full1 - v->full0;
+        view_span = v->x1 - v->x0;
+        if (view_span > 0 && view_span < full_span) show = 1;
+    }
+    ShowScrollBar(cw->hwnd, SB_HORZ, show);
+    if (!show) return;
+    full_span = v->full1 - v->full0;
+    view_span = v->x1 - v->x0;
+    pos = (int)((v->x0 - v->full0) * SCROLL_SCALE / full_span);
+    page = (int)(view_span * SCROLL_SCALE / full_span);
+    if (page < 1) page = 1;
+    if (pos < 0) pos = 0;
+    if (pos > SCROLL_SCALE - page) pos = SCROLL_SCALE - page;
+    memset(&si, 0, sizeof(si));
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
+    si.nMin = 0;
+    si.nMax = SCROLL_SCALE;
+    si.nPage = (UINT)page;
+    si.nPos = pos;
+    SetScrollInfo(cw->hwnd, SB_HORZ, &si, TRUE);
+}
+
 static const wchar_t* g_chart_class = L"OSChartWin";
 static const COLORREF g_pal[] = {
     RGB(255, 220, 0), RGB(0, 230, 255), RGB(120, 255, 0), RGB(255, 80, 220),
@@ -543,6 +580,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
     plot.bottom -= 18;
     plot.right -= 6;
     chart_compute_view(cw, &v);
+    chart_sync_scrollbar(cw, &v); /* X 轴滚动条与视图同步（手动模式显示，跟随模式隐藏） */
     /* 标题栏 */
     {
         HBRUSH br = CreateSolidBrush(os_theme(TH_PANEL));
@@ -930,25 +968,27 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 cw->sel = hit;
                 InvalidateRect(hwnd, NULL, FALSE);
             } else {
-                /* F23: 绘图区内按下——
-                 *   Ctrl+左键 → 框选局部放大（boxing）
-                 *   普通左键 → 记录拖拽起点（位移超阈值平移视图，未位移松开=单击设测量标记） */
+                /* 用户反馈优化（原 Ctrl+框选手感不符）：绘图区内按下——
+                 *   普通左键拖拽 → 框选局部放大（boxing，示波器惯例：框住想看的区域即放大）
+                 *   Ctrl+左键拖拽 → 平移视图（pan）
+                 *   未位移松开 → 单击设测量标记（原 N13e 测量功能不变） */
                 chart_plot_rect(cw, &plot);
                 if (x >= plot.left && x <= plot.right && y >= plot.top && y <= plot.bottom) {
                     OS_ChartView v;
                     chart_compute_view(cw, &v);
                     if (LOWORD(wParam) & MK_CONTROL) {
-                        /* F23: 框选起点同步当前视图，框选映射始终基于此刻画面 */
-                        chart_sync_manual(cw, &v);
-                        cw->boxing = 1;
-                        cw->box0.x = cw->box1.x = x;
-                        cw->box0.y = cw->box1.y = y;
-                    } else {
+                        /* Ctrl+拖拽 = 平移 */
                         cw->drag0.x = x;
                         cw->drag0.y = y;
                         cw->drag_x0 = v.x0; cw->drag_x1 = v.x1;
                         cw->drag_y0 = v.ylo; cw->drag_y1 = v.yhi;
                         cw->dragging = 0;
+                    } else {
+                        /* 普通拖拽 = 框选局部放大：框选起点同步当前视图，映射基于此刻画面 */
+                        chart_sync_manual(cw, &v);
+                        cw->boxing = 1;
+                        cw->box0.x = cw->box1.x = x;
+                        cw->box0.y = cw->box1.y = y;
                     }
                     SetCapture(hwnd);
                     InvalidateRect(hwnd, NULL, TRUE);
@@ -1025,7 +1065,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             RECT plot;
             chart_plot_rect(cw, &plot);
             if (cw->boxing && GetCapture() == hwnd) {
-                /* F23: 框选结束——应用到局部缩放（纯函数映射 + 平滑动画） */
+                /* 普通左键拖拽 = 框选局部放大（纯函数映射 + 平滑动画） */
                 OS_ChartView v;
                 int x0 = cw->box0.x, x1 = cw->box1.x;
                 int y0 = cw->box0.y, y1 = cw->box1.y;
@@ -1033,6 +1073,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 int64_t nx0 = 0, nx1 = 0;
                 double nyhi = 0, nylo = 0;
                 int has_x = 0, has_y = 0;
+                int applied = 0;
                 if (x0 > x1) { t = x0; x0 = x1; x1 = t; }
                 if (y0 > y1) { t = y0; y0 = y1; y1 = t; }
                 if (x1 - x0 >= 6 && y1 - y0 >= 6 && plot.right > plot.left && plot.bottom > plot.top) {
@@ -1055,12 +1096,17 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                                (long long)(has_x ? nx0 : cw->vx0),
                                (long long)(has_x ? nx1 : cw->vx1),
                                has_y ? nylo : cw->vylo, has_y ? nyhi : cw->vyhi);
+                        applied = 1;
                     }
                 }
                 cw->boxing = 0;
-                ReleaseCapture();
-                InvalidateRect(hwnd, NULL, TRUE);
-                return 0;
+                if (applied) {
+                    ReleaseCapture();
+                    InvalidateRect(hwnd, NULL, TRUE);
+                    return 0;
+                }
+                /* 框太小（<6px，视为单击）或无可缩放数据 → 落到测量标记逻辑 */
+                cw->drag0.x = cw->drag0.y = 0;
             }
             if (cw->dragging && GetCapture() == hwnd) {
                 cw->dragging = 0;
@@ -1184,26 +1230,27 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     }
     case WM_TIMER:
         /* F23: 平滑缩放动画——逐帧向目标插值（X/Y 独立），差值过小直接吸附收敛，
-         * 避免整数插值步进为 0 导致永不收敛/定时器泄漏（跳变根因 D） */
+         * 避免整数插值步进为 0 导致永不收敛/定时器泄漏（跳变根因 D）。
+         * 每帧 45% 收敛（0.3 时 ~6-8 帧才到位，手感拖沓；0.45 约 3-4 帧，更跟手）。 */
         if (cw && wParam == CHART_ANIM_TIMER && cw->anim_on) {
             int done_x = 1, done_y = 1;
             if (cw->anim_x_on) {
                 int64_t d0 = cw->anim_x0 - cw->vx0;
                 int64_t d1 = cw->anim_x1 - cw->vx1;
                 int64_t s0, s1;
-                if (d0 > 1) { s0 = d0 * 3 / 10; if (s0 < 1) s0 = 1; cw->vx0 += s0; done_x = 0; }
-                else if (d0 < -1) { s0 = -d0 * 3 / 10; if (s0 < 1) s0 = 1; cw->vx0 -= s0; done_x = 0; }
+                if (d0 > 1) { s0 = d0 * 45 / 100; if (s0 < 1) s0 = 1; cw->vx0 += s0; done_x = 0; }
+                else if (d0 < -1) { s0 = -d0 * 45 / 100; if (s0 < 1) s0 = 1; cw->vx0 -= s0; done_x = 0; }
                 else cw->vx0 = cw->anim_x0;
-                if (d1 > 1) { s1 = d1 * 3 / 10; if (s1 < 1) s1 = 1; cw->vx1 += s1; done_x = 0; }
-                else if (d1 < -1) { s1 = -d1 * 3 / 10; if (s1 < 1) s1 = 1; cw->vx1 -= s1; done_x = 0; }
+                if (d1 > 1) { s1 = d1 * 45 / 100; if (s1 < 1) s1 = 1; cw->vx1 += s1; done_x = 0; }
+                else if (d1 < -1) { s1 = -d1 * 45 / 100; if (s1 < 1) s1 = 1; cw->vx1 -= s1; done_x = 0; }
                 else cw->vx1 = cw->anim_x1;
             }
             if (cw->anim_y_on) {
                 double dy0 = cw->anim_y0 - cw->vylo;
                 double dy1 = cw->anim_y1 - cw->vyhi;
-                if (dy0 > 1e-9 || dy0 < -1e-9) { cw->vylo += dy0 * 0.3; done_y = 0; }
+                if (dy0 > 1e-9 || dy0 < -1e-9) { cw->vylo += dy0 * 0.45; done_y = 0; }
                 else cw->vylo = cw->anim_y0;
-                if (dy1 > 1e-9 || dy1 < -1e-9) { cw->vyhi += dy1 * 0.3; done_y = 0; }
+                if (dy1 > 1e-9 || dy1 < -1e-9) { cw->vyhi += dy1 * 0.45; done_y = 0; }
                 else cw->vyhi = cw->anim_y1;
             }
             if (done_x && done_y) {
@@ -1234,6 +1281,58 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             }
         }
         return 0;
+    /* 用户反馈优化：X 轴滚动条拖拽平移时间窗（滚动条只在手动 X 缩放后显示） */
+    case WM_HSCROLL: {
+        if (cw && LOWORD(wParam) != SB_ENDSCROLL) {
+            OS_ChartView v;
+            SCROLLINFO si;
+            int64_t full_span, view_span;
+            int pos, page;
+            chart_compute_view(cw, &v);
+            if (!v.have_t || v.full1 <= v.full0) return 0;
+            memset(&si, 0, sizeof(si));
+            si.cbSize = sizeof(si);
+            si.fMask = SIF_ALL;
+            GetScrollInfo(hwnd, SB_HORZ, &si);
+            full_span = v.full1 - v.full0;
+            view_span = v.x1 - v.x0;
+            if (view_span <= 0) view_span = full_span > 100 ? full_span / 100 : 1;
+            page = (int)si.nPage;
+            pos = (int)si.nPos;
+            switch (LOWORD(wParam)) {
+            case SB_THUMBTRACK:
+            case SB_THUMBPOSITION: pos = (int)lParam; break; /* 拇指拖动位置在 lParam */
+            case SB_LINELEFT:  pos -= SCROLL_SCALE / 100; break; /* 1% 微调 */
+            case SB_LINERIGHT: pos += SCROLL_SCALE / 100; break;
+            case SB_PAGELEFT:  pos -= page; break;               /* 一屏 */
+            case SB_PAGERIGHT: pos += page; break;
+            case SB_LEFT:      pos = 0; break;
+            case SB_RIGHT:     pos = SCROLL_SCALE; break;
+            default: return 0;
+            }
+            if (page < 1) page = 1;
+            if (page >= SCROLL_SCALE) page = SCROLL_SCALE;
+            if (pos < 0) pos = 0;
+            if (pos > SCROLL_SCALE - page) pos = SCROLL_SCALE - page;
+            cw->fit_x = 0; cw->view_all = 0;
+            cw->m0.x = cw->m1.x = -1; /* 平移后测量标记像素位置已失效 */
+            cw->vx0 = v.full0 + (int64_t)pos * full_span / SCROLL_SCALE;
+            cw->vx1 = cw->vx0 + view_span;
+            if (cw->vx1 > v.full1) { cw->vx1 = v.full1; cw->vx0 = cw->vx1 - view_span; }
+            /* 回写滚动条位置（LINE/PAGE 需显式更新） */
+            {
+                SCROLLINFO si2;
+                memset(&si2, 0, sizeof(si2));
+                si2.cbSize = sizeof(si2);
+                si2.fMask = SIF_POS;
+                si2.nPos = pos;
+                SetScrollInfo(hwnd, SB_HORZ, &si2, TRUE);
+            }
+            os_log(OS_LOG_DEBUG, "波形滚动条平移: X=[%lld,%lld]us", (long long)cw->vx0, (long long)cw->vx1);
+            InvalidateRect(hwnd, NULL, TRUE);
+        }
+        return 0;
+    }
     case WM_OS_CHART_FITALL:
         if (cw) {
             cw->view_all = 1; cw->fit_x = 1; cw->fit_y = 1;
@@ -1343,7 +1442,8 @@ void os_chart_register(void)
 
 HWND os_chart_create(HWND parent, int x, int y, int w, int h, const wchar_t* title)
 {
+    /* WS_HSCROLL：X 轴滚动条（用户反馈：缩放后拖拽滚动条平移时间窗到想观察的点） */
     return CreateWindowW(g_chart_class, title ? title : L"波形窗口",
-                         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP,
+                         WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_TABSTOP | WS_HSCROLL,
                          x, y, w, h, parent, NULL, g_app.hInst, NULL);
 }

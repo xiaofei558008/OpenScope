@@ -119,6 +119,7 @@ typedef struct OS_App {
     HANDLE hPoll;
     volatile LONG stop_poll;
     int poll_interval_ms;
+    int speed_khz;          /* 当前连接 SWD/JTAG 时钟 (kHz)，datasrv 块读合并成本模型用 */
     CRITICAL_SECTION ring_cs;
     OS_Sample ring[OS_RING_CAP];
     int ring_head, ring_tail;

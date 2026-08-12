@@ -14,15 +14,38 @@
 #define OS_POLL_STALL_MS 3000
 
 /* F21/Step1 高速采集：自由运行 + 连续地址块读 + UI 刷新节流。
- *  - OS_BATCH_MAX_GAP:  叶间间隔 ≤256 字节视为连续可合并，一次 J-Link 块读替代多次单叶读。
- *                       原值 8 太保守——6 个分散在 RAM 的变量几乎从不合并（≥12 字节即拆分），
- *                       N 变量 = N 次 USB 事务（每次 ~150µs），6ch 时周期飙到 ~900µs。
- *                       扩到 256 可将大多数变量合并为 ≤2 次块读（MCU RAM 区域通常安全可读），
- *                       实测 8ch 提速 ~5×（900→180µs/周期），显著减少采样失真。
- *  - OS_BATCH_MAX_RUN:  单块读上限字节（J-Link 安全块长，避免跨无效地址区间整块失败）。 */
-#define OS_BATCH_MAX_GAP   256
-#define OS_BATCH_MAX_RUN   512
+ * 瓶颈分析（J-Link Pro V4 实测）：每次 JLINKARM_ReadMem 事务固定开销 ~240µs（USB 往返
+ * + DLL 协议），线上传输时间 = 字节数×10bits/速度。SWD 时钟只影响后者——小尺寸读时
+ * 线上时间仅几 µs，所以 4MHz→12MHz 对单事务几乎无感；真正决定周期的是【事务次数】。
+ *
+ * 速度感知合并（成本模型）：两叶间隔 G 字节，合并 = 1 次事务 + 多读 G 字节垃圾；
+ * 拆分 = 2 次事务。合并划算条件：G×10/speed_khz ≤ 事务开销。
+ *   gap_limit = speed_khz × 25（事务开销按 250µs 计）
+ *   4MHz → 100B；12MHz → 300B；50MHz → 1250B（上限 4096）。
+ * 块读总长上限同理按线上时间预算：run_limit = speed_khz × 25（250µs 线上预算，下限 256）。 */
+#define OS_TX_OVERHEAD_US  250    /* 实测单事务开销（USB 往返 + DLL 协议） */
+#define OS_MERGE_WIRE_BIT  10     /* 每字节线上位成本（含协议开销，约 10bit/字节） */
+#define OS_BATCH_RUN_MIN   256    /* 块读长度下限（过小失去合并意义） */
+#define OS_BATCH_RUN_MAX   4096   /* 块读长度硬上限（跨无效内存风险） */
 #define OS_UI_THROTTLE_MS  16
+
+static int os_batch_gap_limit(void)
+{
+    int s = g_app.speed_khz > 0 ? g_app.speed_khz : 4000;
+    int lim = s * OS_TX_OVERHEAD_US / OS_MERGE_WIRE_BIT;
+    if (lim < 64) lim = 64;
+    if (lim > OS_BATCH_RUN_MAX) lim = OS_BATCH_RUN_MAX;
+    return lim;
+}
+
+static int os_batch_run_limit(void)
+{
+    int s = g_app.speed_khz > 0 ? g_app.speed_khz : 4000;
+    int lim = s * OS_TX_OVERHEAD_US / OS_MERGE_WIRE_BIT;
+    if (lim < OS_BATCH_RUN_MIN) lim = OS_BATCH_RUN_MIN;
+    if (lim > OS_BATCH_RUN_MAX) lim = OS_BATCH_RUN_MAX;
+    return lim;
+}
 
 /* 观测叶按地址排序后的批次项（高速模式收集表） */
 typedef struct {
@@ -111,7 +134,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
     /* Bug1: 大数组用堆，避免耗尽 1MB 线程栈导致无日志崩溃 */
     OS_Sample* batch = (OS_Sample*)malloc(OS_MAX_LEAVES * sizeof(OS_Sample));
     WatchLeaf* wl = (WatchLeaf*)malloc(OS_MAX_LEAVES * sizeof(WatchLeaf));
-    uint8_t* buf = (uint8_t*)malloc(OS_BATCH_MAX_RUN + 1);
+    uint8_t* buf = (uint8_t*)malloc(OS_BATCH_RUN_MAX + 1);
     int fail_count = 0;          /* Bug10: 仅用于失败日志节流（前 3 次），不再用于中断 */
     ULONGLONG last_ok_ms = GetTickCount64(); /* 最近一次成功读取时间戳（停摆判定起点） */
     ULONGLONG cycle_us = qpc_now_us();       /* 自计时：本周期起点 */
@@ -119,6 +142,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
     LONGLONG  cycle_sum_us = 0;
     int       cycle_cnt = 0;
     LONG      rate_samples = 0;
+    LONG      rate_tx = 0;                   /* 速率窗口内累计读事务数 */
     (void)p;
     if (!batch || !wl || !buf) {
         os_log(OS_LOG_ERROR, "采集线程内存分配失败");
@@ -131,6 +155,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
     while (!g_app.stop_poll) {
         int n = 0, i, nw = 0, run_first;
         int connected = 0;
+        int tx_count = 0;   /* 本周期 J-Link 读事务次数（合并效果诊断） */
         uint64_t run_addr, run_end;
         if (g_app.driver && g_app.driver->command) {
             g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &connected);
@@ -144,7 +169,9 @@ static DWORD WINAPI poll_thread(LPVOID p)
                    OS_POLL_STALL_MS / 1000);
             break;
         }
-        /* 收集观测叶并按地址排序，把连续叶合并成块读（一次读事务） */
+        /* 收集观测叶并按地址排序，把连续叶合并成块读（一次读事务）。
+         * 合并判定用速度感知成本模型（os_batch_gap_limit/run_limit）：
+         * 50MHz 时跨 1KB 空隙合并仍划算，4MHz 时 100B 以上就拆分为妙。 */
         for (i = 0; i < g_app.leaf_count; i++) {
             OS_Leaf* L = &g_app.leaves[i];
             uint32_t sz;
@@ -157,7 +184,10 @@ static DWORD WINAPI poll_thread(LPVOID p)
             wl[nw].size = sz;
             nw++;
         }
+        tx_count = 0;
         if (nw > 0) {
+            int gap_lim = os_batch_gap_limit();
+            int run_lim = os_batch_run_limit();
             qsort(wl, nw, sizeof(WatchLeaf), cmp_watch_leaf);
             run_first = 0;
             run_addr = wl[0].addr;
@@ -165,10 +195,11 @@ static DWORD WINAPI poll_thread(LPVOID p)
             for (i = 1; i < nw; i++) {
                 uint64_t a = wl[i].addr;
                 uint64_t end = a + wl[i].size;
-                if (a > run_end + OS_BATCH_MAX_GAP ||
-                    end - run_addr > OS_BATCH_MAX_RUN) {
+                if (a > run_end + (uint64_t)gap_lim ||
+                    end - run_addr > (uint64_t)run_lim) {
                     read_run(wl, run_first, i - run_first, buf, batch, &n,
                              &fail_count, &last_ok_ms);
+                    tx_count++;
                     run_first = i;
                     run_addr = a;
                     run_end = end;
@@ -178,6 +209,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
             }
             read_run(wl, run_first, nw - run_first, buf, batch, &n,
                      &fail_count, &last_ok_ms);
+            tx_count++;
         }
         if (n > 0) {
             os_ds_push_batch(batch, n);
@@ -197,15 +229,18 @@ static DWORD WINAPI poll_thread(LPVOID p)
             cycle_sum_us += (LONGLONG)(now - cycle_us);
             cycle_cnt++;
             rate_samples += n;
+            rate_tx += tx_count;
             if (now - rate_win_us >= 1000000ULL) {
-                os_log(OS_LOG_INFO, "采集速率: %ld 样本/s，周期 %.0f µs（%d 个变量）",
+                os_log(OS_LOG_INFO, "采集速率: %ld 样本/s，周期 %.0f µs（%d 个变量，%ld 次读/周期）",
                        rate_samples,
                        cycle_cnt ? (double)cycle_sum_us / cycle_cnt : 0.0,
-                       g_app.watch_count);
+                       g_app.watch_count,
+                       cycle_cnt ? rate_tx / cycle_cnt : 0);
                 rate_win_us = now;
                 cycle_sum_us = 0;
                 cycle_cnt = 0;
                 rate_samples = 0;
+                rate_tx = 0;
             }
             cycle_us = now;
         }

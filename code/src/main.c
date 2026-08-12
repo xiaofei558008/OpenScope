@@ -164,6 +164,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_app.tree_w = 340;
     g_app.log_h = 170;
     g_app.poll_interval_ms = 0; /* F21/Step1: 0=自由运行高速采集；>0=定时周期（ms） */
+    g_app.speed_khz = 4000;    /* 默认 4000kHz（未连接时块读合并模型用） */
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);

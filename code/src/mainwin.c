@@ -1186,6 +1186,7 @@ static void cmd_connect(void)
         os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
         cfg.speed_khz = atoi(sb8);
         if (cfg.speed_khz < 0) cfg.speed_khz = 0;
+        g_app.speed_khz = cfg.speed_khz; /* 采集线程块读合并成本模型按实际速度计算 */
     }
     emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
@@ -1264,8 +1265,10 @@ void os_mainwin_cfg_init(void)
 {
     HWND h;
     const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
-    /* N8: 更多速度预置（kHz），下拉可编辑允许手工输入任意值 */
-    static const int speeds[] = { 0, 50, 100, 200, 400, 1000, 2000, 4000, 5000, 8000, 10000, 12000 };
+    /* N8: 更多速度预置（kHz），下拉可编辑允许手工输入任意值。
+     * J-Link Pro/Ultra+ SWD/JTAG 最高 50MHz——加入 20/30/40/50MHz 预置；
+     * 更高速度缩短块读的线上传输时间（合并跨空隙读取时尤为关键）。 */
+    static const int speeds[] = { 0, 50, 100, 200, 400, 1000, 2000, 4000, 5000, 8000, 10000, 12000, 15000, 20000, 25000, 30000, 40000, 50000 };
     int i;
     h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
     if (h) {

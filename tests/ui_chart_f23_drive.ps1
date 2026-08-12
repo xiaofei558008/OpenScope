@@ -208,9 +208,10 @@ try {
     # ---- 2. 左键拖拽平移视图 ----
     # 先记录平移前 X 区间
     $before = Log-LastRange '波形 X 轴缩放.*目标'
+    # Ctrl+左键拖拽 = 平移视图（新语义：普通拖拽=框选放大，Ctrl+拖拽=平移）
     # 按下起点（绘图区中部），再移动 +80px 向右（时间窗向过去方向平移）
     $down = ($px -band 0xFFFF) -bor (($py -band 0xFFFF) -shl 16)
-    [OsChartF23Ui]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$down) | Out-Null  # WM_LBUTTONDOWN
+    [OsChartF23Ui]::SendMessage($chart, 0x201, [IntPtr](1 -bor 0x08), [IntPtr]$down) | Out-Null  # Ctrl+DOWN
     Start-Sleep -Milliseconds 80
     $mvx = $px + 80
     $move = ($mvx -band 0xFFFF) -bor (($py -band 0xFFFF) -shl 16)
@@ -219,17 +220,17 @@ try {
     $up = $move
     [OsChartF23Ui]::SendMessage($chart, 0x202, [IntPtr]0, [IntPtr]$up) | Out-Null     # WM_LBUTTONUP
     Start-Sleep -Milliseconds 200
-    Check (Log-Has '波形拖拽平移结束') "左键拖拽平移结束日志"
+    Check (Log-Has '波形拖拽平移结束') "Ctrl+左键拖拽平移结束日志"
     $afterDrag = Log-LastRange '波形拖拽平移结束: X=\['
     if ($before -ne $null -and $afterDrag -ne $null) {
         # 向右拖 80px -> X 窗左移 -> vx0 变小
-        Check ($afterDrag[0] -lt $before[0]) "拖拽平移 X 窗左移 (vx0 $($before[0]) -> $($afterDrag[0]))"
+        Check ($afterDrag[0] -lt $before[0]) "Ctrl+拖拽平移 X 窗左移 (vx0 $($before[0]) -> $($afterDrag[0]))"
     } else {
         Check $false "拖拽平移区间可解析（before=$($before -join ',') after=$($afterDrag -join ',')）"
     }
 
-    # ---- 3. Ctrl+左键框选局部放大 ----
-    # 框选区域：左上按下（Ctrl），向右下拖（垂直+水平跨度均 > 6px 才应用）
+    # ---- 3. 普通左键框选局部放大（新语义：无需 Ctrl） ----
+    # 框选区域：左上按下（无修饰键），向右下拖（垂直+水平跨度均 > 6px 才应用）
     $b0x = [int]($cw * 0.35)
     $b1x = [int]($cw * 0.9)
     if ($b0x -lt 60) { $b0x = 60 }
@@ -239,14 +240,14 @@ try {
     if ($b1y -gt ($ch - 20)) { $b1y = $ch - 20 }
     if ($b1y -le $b0y) { $b1y = $b0y + 40 }
     $lpd = ($b0x -band 0xFFFF) -bor (($b0y -band 0xFFFF) -shl 16)
-    [OsChartF23Ui]::SendMessage($chart, 0x201, [IntPtr](1 -bor 0x08), [IntPtr]$lpd) | Out-Null  # Ctrl+DOWN
+    [OsChartF23Ui]::SendMessage($chart, 0x201, [IntPtr]1, [IntPtr]$lpd) | Out-Null  # 普通 DOWN
     Start-Sleep -Milliseconds 80
     $lpm = ($b1x -band 0xFFFF) -bor (($b1y -band 0xFFFF) -shl 16)
     [OsChartF23Ui]::SendMessage($chart, 0x200, [IntPtr]0, [IntPtr]$lpm) | Out-Null             # MOVE
     Start-Sleep -Milliseconds 120
     [OsChartF23Ui]::SendMessage($chart, 0x202, [IntPtr]0, [IntPtr]$lpm) | Out-Null             # UP
     Start-Sleep -Milliseconds 200
-    Check (Log-Has '波形框选缩放') "Ctrl+框选缩放日志"
+    Check (Log-Has '波形框选缩放') "普通左键框选缩放日志"
     $boxRange = Log-LastRange '波形框选缩放: X=\['
     if ($boxRange -ne $null -and $afterDrag -ne $null) {
         $bs = $boxRange[1] - $boxRange[0]
@@ -255,6 +256,21 @@ try {
         Check ($bs -gt 0 -and $bs -lt $as) "框选缩放区间收窄（$bs < $as us）"
     } else {
         Check $false "框选缩放区间可解析"
+    }
+
+    # ---- 4. X 轴滚动条平移（用户反馈优化：缩放后滚动条拖拽平移时间窗） ----
+    # 框选后已进入手动 X 模式（fit_x=0），滚动条应已显示；SB_THUMBTRACK 拖到 5% 位置
+    # （框选区域在 ~35-90% 位置，拖到 5% 应明显向过去平移）
+    $scrollBefore = Log-LastRange '波形框选缩放: X=\['
+    [OsChartF23Ui]::SendMessage($chart, 0x114, [IntPtr]5, [IntPtr]50) | Out-Null  # WM_HSCROLL SB_THUMBTRACK pos=50
+    Start-Sleep -Milliseconds 200
+    Check (Log-Has '波形滚动条平移') "X 轴滚动条平移日志"
+    $scrollAfter = Log-LastRange '波形滚动条平移: X=\['
+    if ($scrollBefore -ne $null -and $scrollAfter -ne $null) {
+        # 拖到 5% 位置（时间窗向过去平移），X 窗左移 -> vx0 变小
+        Check ($scrollAfter[0] -lt $scrollBefore[0]) "滚动条平移 X 窗左移（vx0 $($scrollBefore[0]) -> $($scrollAfter[0])）"
+    } else {
+        Check $false "滚动条平移区间可解析"
     }
 
     Check (-not $proc.HasExited) "进程未闪退"
