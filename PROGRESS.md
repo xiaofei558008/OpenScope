@@ -252,6 +252,11 @@
   - 🔧 **auto.py**：一键构建+单元测试+打包（可选 --skip-tests / --skip-package / --publish / --quiet）。
   - 回归：本机 PowerShell 5.1 实测（此前误判需 pwsh 7——测试脚本无 #Requires）：**ui_chart_f23 13/13、ui_tree_multisel 10/10、ui_tree_fold 27/27、ui_tile 15/15、ui_chart_bug5 8/8、ui_chart_flicker 8/8、ui_windows 8/8、ui_help 5/5、ui_elf_rebind 7/7 全部 ALL PASS**；单元测试（elf/enc/replay/chartview/tilecalc/jlink/bug9 四速度）全 PASS；构建 0 error/0 warning。
   - 需求 9：checkpoint-33 本地提交 git（不推送，用户要求先本地测试）。
+  - **checkpoint-33 补充（2026-08-13）**：用户复测"停止采集后波形仍不能任意缩放/滚轮只能显示一小段/不能拖拽"——上一轮修复未命中真正根因。
+    - 🔴 **真正根因**：`chart_compute_view` 的 `full0/full1`（缩放/框选/拖拽的夹紧边界）与可见窗口（`chart_vis_start` 最后 npoints=600 点）混用。录制超过 600 点后任何交互（view_all=0）都把"全量范围"截断到最后 600 点窗口：滚轮目标被夹进尾窗（无论鼠标位置）、拖拽被夹在尾窗、且 `chart_vis_start` 同时限制绘图——出尾窗后曲线消失。此前回归测试数据均 <600 点（回放 81 点；2000 点 CSV 被回放时序截断），全部漏检。
+    - 修复：`chart_vis_start` 增加 fit_x 参数（手动/全局覆盖全部历史，仅跟随模式限最后 600 点）；full0/full1 改 O(1)（环形缓冲时间有序，最旧/最新样本即边界）+ 扫描窗右沿提前退出；手动窗 Y 值域跟随可见段；绘图循环 t>x1 提前 break；新增 `WM_OS_CHART_SHOT`（WM_APP+42）渲染 BMP 测试钩子。
+    - 回归：新增 `ui_chart_long_zoom_drive.ps1`（2000 点 >600，10 断言：早期放大目标落早期区域/曲线像素级实际渲染 449 亮色点/缩小突破尾窗跨度 450000µs/拖拽在数据范围内）；12 个 UI 脚本全 PASS + 单元测试全 PASS。
+  - 需求 9：checkpoint-33 补充本地提交 git（不推送）。
 
 - **checkpoint-30（2026-08-10）**：request.md 特性 23 加"仔细实现"前缀重新仔细实现（波形丝滑缩放/拖拽/框选，消除全部跳变根因），v1.16.0。
   - 通读 chartwin.c F23 定位 5 个跳变根因并逐一修复：
