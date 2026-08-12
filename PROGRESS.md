@@ -243,6 +243,16 @@
   - 版本 1.17.1：未重新打包（按用户要求不推送、先本地测试）。
   - 需求 9：checkpoint-32 本地提交 git（不推送）。
 
+- **checkpoint-33（2026-08-12）**：用户反馈实测三问题（缩放/框选/拖拽无效、6ch 采样失真、SWD 速度疑未生效）+ auto.py 一键构建打包，v1.17.1。
+  - 🔴 **缩放/框选/拖拽"无效"根因——WM_MOUSEWHEEL 路由**：Windows 把 WM_MOUSEWHEEL 发给键盘焦点窗口而非光标下窗口。用户点击左侧变量树后焦点在树，此后在波形区滚轮消息被树吞掉（chart_proc 的滚轮/框选/拖拽逻辑本身完整）。修复：主窗口 `WM_MOUSEWHEEL` 用 `WindowFromPoint` 找到光标下子窗口并 `SendMessage` 转发；新增回归断言"滚轮发给主窗口→波形窗口收到并产生缩放日志"。
+  - ⚡ **6ch 采样失真**：`OS_BATCH_MAX_GAP` 8→256 字节。原值太保守，分散在 RAM 的 6 个变量（通常间隔 ≥16B）从不合并 → 6 次独立 USB 读事务/周期（~900µs）；合并后 ≤2 次（~180µs），提速 ~5×。
+  - 📦 **深历史缓冲**：`OS_CHART_HIST` 8192→65536（高速下原 ~1s 即满；现 ~8s 回看窗口）。
+  - 📡 **SWD 速度诊断**：SetSpeed 日志带 kHz 单位 + 失败标注（rc≠0 明确提示"将用 DLL 默认速度"）；speed=0 明确标注自适应。用户可在日志搜 `SetSpeed` 确认实际下发速度。
+  - 🧪 **测试夹具竞态修复**：`chart_replay_long.csv` 原 2000 行×100µs=200ms 模拟时间，回放按真实时钟 ~200ms 播完——ui_chart_bug5 在 ~350ms 后才添加变量，图表从未收到样本（have_t=0）滚轮缩放静默跳过（时序竞态，checkpoint-25 已记录过偶发）。改为 750µs 间隔（1.5s 跨度），竞态消除。
+  - 🔧 **auto.py**：一键构建+单元测试+打包（可选 --skip-tests / --skip-package / --publish / --quiet）。
+  - 回归：本机 PowerShell 5.1 实测（此前误判需 pwsh 7——测试脚本无 #Requires）：**ui_chart_f23 13/13、ui_tree_multisel 10/10、ui_tree_fold 27/27、ui_tile 15/15、ui_chart_bug5 8/8、ui_chart_flicker 8/8、ui_windows 8/8、ui_help 5/5、ui_elf_rebind 7/7 全部 ALL PASS**；单元测试（elf/enc/replay/chartview/tilecalc/jlink/bug9 四速度）全 PASS；构建 0 error/0 warning。
+  - 需求 9：checkpoint-33 本地提交 git（不推送，用户要求先本地测试）。
+
 - **checkpoint-30（2026-08-10）**：request.md 特性 23 加"仔细实现"前缀重新仔细实现（波形丝滑缩放/拖拽/框选，消除全部跳变根因），v1.16.0。
   - 通读 chartwin.c F23 定位 5 个跳变根因并逐一修复：
     - **A（最严重）滚轮缩放动画从陈旧视图起跳**：live 跟随（fit_x=1）下 vx0/vx1 从不写回（calloc 为 0），首次滚轮缩放把 fit_x 置 0 后动画从 0 起跳，整图先跳到时间 0 再弹回。新增 `chart_sync_manual()` 在缩放/框选前把当前自动视图同步进 vx0/vx1/vylo/vyhi，动画/平移永远从当前实际画面起步。
