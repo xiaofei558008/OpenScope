@@ -192,6 +192,19 @@ try {
         Check $false "滚轮缩放目标区间可解析（r1=$($r1 -join ',') r2=$($r2 -join ',')）"
     }
 
+    # ---- 1b. WM_MOUSEWHEEL 转发回归：滚轮消息发给【主窗口】（焦点在其他控件时
+    #          Windows 的实际路由），主窗口须用 WindowFromPoint 转发给光标下的波形窗口 ----
+    $fwdCount = 0
+    if (Test-Path $log) { $fwdCount = @(Get-Content $log -Encoding UTF8 | Select-String -Pattern '波形 X 轴缩放.*目标').Count }
+    [OsChartF23Ui]::SendMessage($main, 0x20A, [IntPtr]$wp, [IntPtr]$lp) | Out-Null  # 发给主窗口
+    Start-Sleep -Milliseconds 500
+    $fwdOk = $false
+    if (Test-Path $log) {
+        $fwdAfter = @(Get-Content $log -Encoding UTF8 | Select-String -Pattern '波形 X 轴缩放.*目标').Count
+        $fwdOk = ($fwdAfter -gt $fwdCount)
+    }
+    Check $fwdOk "主窗口 WM_MOUSEWHEEL 转发到光标下波形窗口（$fwdCount -> 新缩放日志）"
+
     # ---- 2. 左键拖拽平移视图 ----
     # 先记录平移前 X 区间
     $before = Log-LastRange '波形 X 轴缩放.*目标'
