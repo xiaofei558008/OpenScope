@@ -124,6 +124,12 @@ int os_layout_save_to(const wchar_t* path)
     active = os_mainwin_active_tab();
     write_utf8_line(f, "active=%d", active);
     write_utf8_line(f, "theme=%d", os_theme_dark() ? 1 : 0); /* F20 */
+    {
+        /* 用户需求：记住上次加载的 ELF/OUT，启动时自动加载 */
+        char elf8[MAX_PATH * 3];
+        os_wide_to_utf8_buf(g_app.elf_path, elf8, sizeof(elf8));
+        write_utf8_line(f, "elf=%s", elf8);
+    }
     write_utf8_line(f, "wins=%d", g_app.win_count);
     for (i = 0; i < g_app.win_count; i++) {
         OS_WinItem* wi = &g_app.wins[i];
@@ -202,6 +208,7 @@ typedef struct LayoutWin {
 typedef struct LayoutData {
     int main_x, main_y, main_w, main_h;
     int tree_w, log_h, active;
+    char elf[MAX_PATH * 3]; /* 上次加载的 ELF/OUT 路径（启动自动加载） */
     LayoutWin wins[OS_MAX_WINS];
     int nwins;
 } LayoutData;
@@ -266,6 +273,7 @@ int os_layout_load_from(const wchar_t* path)
                 else if (!strcmp(key, "tree_auto")) g_app.tree_auto = atoi(val);     /* N9(d) */
                 else if (!strcmp(key, "active")) ld->active = atoi(val);
                 else if (!strcmp(key, "theme")) os_theme_set_dark(atoi(val)); /* F20 */
+                else if (!strcmp(key, "elf")) _snprintf(ld->elf, sizeof(ld->elf), "%s", val);
             } else {
                 if (!strcmp(key, "type")) _snprintf(cur->type, sizeof(cur->type), "%s", val);
                 else if (!strcmp(key, "title")) _snprintf(cur->title, sizeof(cur->title), "%s", val);
@@ -336,6 +344,19 @@ int os_layout_load_from(const wchar_t* path)
     }
     if (ld->active >= 0 && ld->active < g_app.win_count)
         os_mainwin_select_tab(ld->active);
+    /* 用户需求：启动自动加载上次的 ELF/OUT。窗口已创建、变量先挂接
+     * （ELF 尚未加载时进 pending），随后加载 ELF 触发 pending 自动补挂。
+     * 文件已删除/移动时只警告不弹窗（load 失败路径本就不弹窗）。 */
+    if (ld->elf[0]) {
+        wchar_t welf[MAX_PATH];
+        os_utf8_to_wide_buf(ld->elf, welf, MAX_PATH);
+        if (_waccess(welf, 0) == 0) {
+            if (os_mainwin_open_elf(welf) == 0)
+                os_log(OS_LOG_INFO, "已自动加载上次 ELF: %ls", welf);
+        } else {
+            os_log(OS_LOG_WARN, "上次的 ELF 文件不存在，跳过自动加载: %ls", welf);
+        }
+    }
     os_log(OS_LOG_INFO, "布局已加载: %ls (%d 个窗口)", path, ld->nwins);
     free(ld);
     ok = 1;

@@ -1114,6 +1114,8 @@ static int load_elf_path(const wchar_t* path)
            path, os_elf_bits(g_app.elf), os_elf_arch_name(g_app.elf));
     refresh_status();
     os_mainwin_update_buttons();
+    /* 用户需求：记住本次 ELF——立即持久化，中途崩溃下次启动也能自动加载 */
+    if (g_app.hMain && IsWindow(g_app.hMain)) os_layout_save_auto();
     return 0;
 }
 
