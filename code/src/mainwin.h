@@ -34,5 +34,7 @@ void os_tab_edit_focus_check(void);
 void os_mainwin_cfg_init(void);
 /* F20: 把当前主题应用到主窗口各控件（树/日志/状态栏/窗口列表）颜色 */
 void os_mainwin_apply_theme(void);
+/* 回放全量加载入口（--replay-all 启动钩子/回放按钮共用）：加载 + 挂接桶 + 全局展示 */
+void os_mainwin_replay_all(const wchar_t* path);
 
 #endif

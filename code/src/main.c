@@ -148,6 +148,8 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
                                                                      MAX_PATH, L"%s", tok + 13);
         else if (wcsncmp(tok, L"--replay=", 9) == 0) _snwprintf(g_app.replay_path,
                                                                 MAX_PATH, L"%s", tok + 9);
+        else if (wcsncmp(tok, L"--replay-all=", 13) == 0) _snwprintf(g_app.replay_all_path,
+                                                                     MAX_PATH, L"%s", tok + 13);
         else if (first) { *elf = tok; first = 0; }
         tok = sp ? sp + 1 : NULL;
     }
@@ -205,6 +207,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                    sel, os_vartree_select_leaf(g_app.hTree, sel));
         if (g_app.replay_path[0] && os_replay_start(g_app.replay_path) == 0)
             SetTimer(hMain, 2, 10, NULL); /* 测试钩子：--replay 自动开始离线回放 */
+        if (g_app.replay_all_path[0])
+            /* 测试钩子：--replay-all=<csv> 启动即全量加载（桶缓存 + 全部显示） */
+            os_mainwin_replay_all(g_app.replay_all_path);
         if (!no_layout && lsv) os_layout_save_to(lsv);
     }
     {

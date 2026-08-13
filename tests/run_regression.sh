@@ -35,12 +35,14 @@ NON_JLINK=(
   ui_chart_long_zoom_drive.ps1
   ui_tree_find_drive.ps1
   ui_num_minmax_drive.ps1
+  ui_replay_all_drive.ps1
 )
 JLINK=(
   ui_record_dialog_drive.ps1
   ui_connect_drive.ps1
   ui_speed12000_drive.ps1
   ui_speed_verify_drive.ps1
+  ui_spool_drive.ps1
 )
 
 run_one() { # <script> <exe> <label>

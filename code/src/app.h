@@ -15,9 +15,29 @@
 #define OS_MAX_GROUP         8   /* N11: 一个 tab 最多容纳的窗口数 */
 #define OS_MAX_CHART_SERIES  16
 /* 高速采集下 8192 点 ≈1 秒即满（6ch @8k/s）；扩到 65536 提供 ~8 秒深历史，
- * 缩放回看足够，同时保持每系列 65536×24B≈1.5MB 内存可控。 */
+ * 缩放回看足够，同时保持每系列 65536×24B≈1.5MB 内存可控。
+ * 更长的历史由回放全量桶缓存（OS_Bucket）承载——波形"全部显示"不依赖 RAM 环。 */
 #define OS_CHART_HIST        65536
 #define OS_MAX_NUM_ROWS      128
+
+/* 长时间采集自动落盘：RAM 上限 10MB，超出写时间戳命名 CSV（用户需求）。 */
+#define OS_SPOOL_RAM_CAP_BYTES (10 * 1024 * 1024)
+
+/* 回放全量显示的桶缓存：每系列最多 8192 个 min/max 桶覆盖整个文件时间跨度。
+ * 槽位按叶 id 直接索引（与 g_app.leaves 对齐），数组大小必须 = OS_MAX_LEAVES。 */
+#define OS_BUCKET_NB         8192
+
+typedef struct {
+    double mn, mx;   /* 桶内最小/最大值 */
+    int    n;        /* 桶内样本数（0=空桶） */
+} OS_Bucket;
+
+typedef struct {
+    char      name[256];  /* 叶变量全名（按名挂接到波形系列） */
+    OS_Bucket* b;
+    int       nb;
+    int64_t   t0, t1;     /* 全量时间跨度 (us) */
+} OS_BucketSeries;
 
 #define WM_OS_SAMPLES     (WM_APP + 1)
 #define WM_OS_ACQ_STATE   (WM_APP + 2)
@@ -135,8 +155,21 @@ typedef struct OS_App {
     wchar_t shot_path[MAX_PATH]; /* --shot=<路径>：窗口创建后自动截图调试 */
     wchar_t rename_tab[MAX_PATH]; /* --rename-tab=<名>：首个窗口创建后自动重命名（测试钩子） */
     wchar_t replay_path[MAX_PATH]; /* --replay=<csv>：启动后自动离线回放（测试钩子） */
+    wchar_t replay_all_path[MAX_PATH]; /* --replay-all=<csv>：启动后自动全量加载（测试钩子） */
 
     struct OS_Replay* replay;
+
+    /* 长时间采集自动落盘（RAM ≤10MB → 时间戳 CSV） */
+    OS_Sample* spool_ram;
+    int        spool_cnt, spool_cap;
+    FILE*      spool_f;
+    wchar_t    spool_path[MAX_PATH];
+    int        spool_active;
+
+    /* 回放全量桶缓存（"全部显示到波形窗口"的数据源）。
+     * 按叶 id 索引（与 leaves 对齐）——必须与 OS_MAX_LEAVES 等长，越界会破坏堆。 */
+    OS_BucketSeries buckets[OS_MAX_LEAVES];
+    int bucket_count;
 
     OS_WinItem wins[OS_MAX_WINS];
     int win_count;

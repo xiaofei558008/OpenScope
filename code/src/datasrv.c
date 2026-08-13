@@ -270,9 +270,11 @@ int os_ds_start(void)
     }
     g_app.stop_poll = 0;
     g_app.acq_state = OS_ACQ_RUNNING;
+    os_spool_begin(); /* 长时间采集自动落盘：RAM ≤10MB → 时间戳 CSV */
     g_app.hPoll = CreateThread(NULL, 0, poll_thread, NULL, 0, NULL);
     if (!g_app.hPoll) {
         g_app.acq_state = OS_ACQ_STOPPED;
+        os_spool_end();
         os_log(OS_LOG_ERROR, "创建采集线程失败");
         return -1;
     }
@@ -296,6 +298,7 @@ void os_ds_stop(void)
     }
     g_app.acq_state = OS_ACQ_STOPPED;
     os_ds_drain(); /* F21/Step1: UI 节流后环内可能残留末批样本，停止时一次性排空 */
+    os_spool_end(); /* 落盘收尾：RAM 残余转盘 + 关文件 */
     os_log(OS_LOG_INFO, "采集已停止");
 }
 
@@ -304,6 +307,7 @@ void os_ds_push_batch(OS_Sample* samples, int n)
     int i;
     static ULONGLONG s_last_ui_ms; /* F21/Step1: UI 排空节流（~60Hz），环内样本全收 */
     if (n <= 0 || !samples) return;
+    os_spool_push(samples, n); /* 长时间采集自动落盘（RAM ≤10MB → CSV） */
     EnterCriticalSection(&g_app.ring_cs);
     for (i = 0; i < n; i++) {
         g_app.ring[g_app.ring_head] = samples[i];

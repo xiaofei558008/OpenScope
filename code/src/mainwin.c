@@ -1368,6 +1368,50 @@ static void cmd_log_stop(void)
     os_mainwin_update_buttons();
 }
 
+/* 回放全量加载后：把桶缓存按变量名挂接到全部波形窗口系列 */
+static void chart_attach_all_buckets(void)
+{
+    int i, k, g;
+    for (i = 0; i < g_app.win_count; i++) {
+        OS_WinItem* wi = &g_app.wins[i];
+        if (wi->is_module) continue;
+        for (g = 0; g < wi->group_count; g++) {
+            HWND w = wi->group[g];
+            char nm[300];
+            if (!w || !IsWindow(w) || !os_chart_is(w)) continue;
+            for (k = 0; ; k++) {
+                int id;
+                if (!os_chart_var_name(w, k, nm, sizeof(nm))) break;
+                id = os_vartree_find_by_name(nm);
+                if (id >= 0 && id < OS_MAX_LEAVES &&
+                    g_app.buckets[id].b && g_app.buckets[id].nb > 0) {
+                    os_chart_attach_buckets(w, id, g_app.buckets[id].b,
+                                            g_app.buckets[id].nb,
+                                            g_app.buckets[id].t0,
+                                            g_app.buckets[id].t1);
+                }
+            }
+        }
+    }
+}
+
+/* 回放全量加载入口（回放按钮 / --replay-all 启动钩子共用） */
+void os_mainwin_replay_all(const wchar_t* path)
+{
+    if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
+    KillTimer(g_app.hMain, 2);
+    /* 用户需求：回放 = 加载记录数据全部显示到波形窗口（全量加载 + 桶缓存渲染，
+     * 非实时节奏回放） */
+    if (os_replay_load_all(path) != 0) {
+        MessageBoxW(g_app.hMain, L"无法打开回放文件", L"回放", MB_OK | MB_ICONERROR);
+        return;
+    }
+    chart_attach_all_buckets();
+    chart_broadcast(WM_OS_CHART_FITALL); /* 整体展示全部已录波形 */
+    refresh_status();
+    os_mainwin_update_buttons();
+}
+
 static void cmd_replay_open(void)
 {
     OPENFILENAMEW ofn;
@@ -1380,14 +1424,7 @@ static void cmd_replay_open(void)
     ofn.nMaxFile = MAX_PATH;
     ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
     if (!GetOpenFileNameW(&ofn)) return;
-    if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
-    if (os_replay_start(file) != 0) {
-        MessageBoxW(g_app.hMain, L"无法打开回放文件", L"回放", MB_OK | MB_ICONERROR);
-        return;
-    }
-    SetTimer(g_app.hMain, 2, 10, NULL);
-    refresh_status();
-    os_mainwin_update_buttons();
+    os_mainwin_replay_all(file);
 }
 
 static void cmd_replay_stop(void)

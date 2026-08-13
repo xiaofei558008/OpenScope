@@ -15,6 +15,12 @@ typedef struct OS_Series {
     int64_t ts[OS_CHART_HIST];
     double val[OS_CHART_HIST];
     int head, count;
+    /* 回放全量桶缓存（长时间采集落盘 CSV 的"全部显示"数据源）。
+     * 存在时优先渲染桶 min/max 包络，覆盖整个文件时间跨度；
+     * RAM 环仅用于实时采集/实时回放。 */
+    OS_Bucket* buckets;
+    int nbuckets;
+    int64_t b_t0, b_t1;
 } OS_Series;
 
 /* 当前可视视图：X 时间窗 + Y 值域 */
@@ -199,6 +205,22 @@ void os_chart_add_var(HWND hwnd, int leaf_id)
     cw->series[cw->series_count].leaf_id = leaf_id;
     if (L) _snprintf(cw->series[cw->series_count].name, 256, "%s", L->name);
     cw->series[cw->series_count].color = g_pal[cw->series_count % 8];
+    /* 回放全量桶缓存已加载 → 新系列直接挂接并整体展示（全部显示） */
+    if (leaf_id >= 0 && leaf_id < OS_MAX_LEAVES &&
+        g_app.buckets[leaf_id].b && g_app.buckets[leaf_id].nb > 0) {
+        cw->series[cw->series_count].buckets = g_app.buckets[leaf_id].b;
+        cw->series[cw->series_count].nbuckets = g_app.buckets[leaf_id].nb;
+        cw->series[cw->series_count].b_t0 = g_app.buckets[leaf_id].t0;
+        cw->series[cw->series_count].b_t1 = g_app.buckets[leaf_id].t1;
+        cw->view_all = 1;
+        cw->fit_x = 1;
+        cw->fit_y = 1;
+        os_log(OS_LOG_INFO, "波形桶缓存: %s %d 桶 [%lld,%lld]us",
+               cw->series[cw->series_count].name,
+               cw->series[cw->series_count].nbuckets,
+               (long long)cw->series[cw->series_count].b_t0,
+               (long long)cw->series[cw->series_count].b_t1);
+    }
     cw->series_count++;
     /* N9(a): 加入窗口的变量自动纳入采集（观测勾选），否则 poll 线程
      * 只采集 watched 叶子，多变量显示恒为 0。 */
@@ -246,6 +268,9 @@ void os_chart_rebind(HWND hwnd)
             cw->series[i].leaf_id = id;
             cw->series[i].head = 0;
             cw->series[i].count = 0;
+            /* 重绑后旧桶缓存作废（加载新文件时重新挂接） */
+            cw->series[i].buckets = NULL;
+            cw->series[i].nbuckets = 0;
             ok++;
             i++;
         } else {
@@ -268,6 +293,32 @@ int os_chart_is(HWND hwnd)
 {
     OS_ChartWin* cw = cw_from_hwnd(hwnd);
     return cw ? 1 : 0;
+}
+
+/* 回放全量加载后挂接桶缓存（按叶 id 找到系列）。清空历史环，
+ * 波形从此以桶包络渲染整个文件时间跨度。 */
+void os_chart_attach_buckets(HWND hwnd, int leaf_id, OS_Bucket* b, int nb,
+                             int64_t t0, int64_t t1)
+{
+    OS_ChartWin* cw = cw_from_hwnd(hwnd);
+    int i;
+    if (!cw || !b || nb <= 0 || t1 <= t0) return;
+    for (i = 0; i < cw->series_count; i++) {
+        if (cw->series[i].leaf_id == leaf_id) {
+            cw->series[i].buckets = b;
+            cw->series[i].nbuckets = nb;
+            cw->series[i].b_t0 = t0;
+            cw->series[i].b_t1 = t1;
+            cw->series[i].head = 0;
+            cw->series[i].count = 0; /* 环让位给桶 */
+            cw->view_all = 1;  /* 整体展示整个文件跨度 */
+            cw->fit_x = 1;
+            cw->fit_y = 1;
+            os_log(OS_LOG_INFO, "波形桶缓存: %s %d 桶 [%lld,%lld]us",
+                   cw->series[i].name, nb, (long long)t0, (long long)t1);
+        }
+    }
+    InvalidateRect(hwnd, NULL, TRUE);
 }
 
 /* 图例命中：返回鼠标所指的系列下标（未命中返回 -1） */
@@ -333,13 +384,20 @@ static void chart_compute_view(OS_ChartWin* cw, OS_ChartView* v)
         OS_Series* sr = &cw->series[i];
         int start = chart_vis_start(sr, cw->view_all, cw->fit_x, cw->npoints);
         int64_t scan_hi;  /* 扫描上界（手动窗右沿提前退出；跟随/全局无上界） */
-        if (sr->count <= 0) continue;
+        if (sr->count <= 0 && !(sr->buckets && sr->nbuckets > 0)) continue;
+        /* 回放全量桶缓存：全量范围 = 桶时间跨度（环为空时也有效） */
+        if (sr->buckets && sr->nbuckets > 0 && sr->b_t1 > sr->b_t0) {
+            v->have_t = 1;
+            v->have_data = 1;
+            if (sr->b_t0 < v->full0) v->full0 = sr->b_t0;
+            if (sr->b_t1 > v->full1) v->full1 = sr->b_t1;
+        }
         /* O(1) 全量数据范围：环形缓冲按时间追加，最旧样本=最小 ts、最新=最大 ts。
          * 用户反馈修复（关键）：full0/full1 必须是【全部】样本的数据范围——滚轮缩放/
          * 框选/拖拽的夹紧边界。旧实现与可见窗口（最后 npoints=600 点）混用：录制超过
          * 600 点后 full 被截断到最后 600 点窗口，任何缩放/平移都被夹在那个小窗内——
          * "停止采集后只能显示一小段波形、不能拖拽"的根因。 */
-        {
+        if (sr->count > 0) {
             int oidx = (sr->head - sr->count) % OS_CHART_HIST;
             int nidx = (sr->head - 1 + OS_CHART_HIST) % OS_CHART_HIST;
             int64_t ot, nt;
@@ -388,6 +446,28 @@ static void chart_compute_view(OS_ChartWin* cw, OS_ChartView* v)
         if (cw->view_all) { v->x0 = v->full0; v->x1 = v->full1; }
         else if (cw->fit_x) { v->x0 = vis0; v->x1 = vis1; }
         else { v->x0 = cw->vx0; v->x1 = cw->vx1; }
+    }
+    /* 桶缓存系列的 Y 值域：按可见 X 窗扫描桶（fit_y 自动时；
+     * 手动 X 窗的 wylo/wyhi 不覆盖桶——这里同样按窗扫描扩展） */
+    if (cw->fit_y && v->have_t && v->x1 > v->x0) {
+        for (i = 0; i < cw->series_count; i++) {
+            OS_Series* sr = &cw->series[i];
+            double b0, b1;
+            int bi, be;
+            if (!sr->buckets || sr->nbuckets <= 0 || sr->b_t1 <= sr->b_t0) continue;
+            b0 = (double)(v->x0 - sr->b_t0) * sr->nbuckets / (sr->b_t1 - sr->b_t0);
+            b1 = (double)(v->x1 - sr->b_t0) * sr->nbuckets / (sr->b_t1 - sr->b_t0);
+            bi = (int)b0;
+            if (bi < 0) bi = 0;
+            be = (int)b1 + 1;
+            if (be > sr->nbuckets - 1) be = sr->nbuckets - 1;
+            if (be < bi) continue;
+            for (; bi <= be; bi++) {
+                if (sr->buckets[bi].n <= 0) continue;
+                if (sr->buckets[bi].mn < v->ylo) v->ylo = sr->buckets[bi].mn;
+                if (sr->buckets[bi].mx > v->yhi) v->yhi = sr->buckets[bi].mx;
+            }
+        }
     }
     /* 决定 Y 值域（手动优先，否则自动 + 8% 边距） */
     if (!cw->fit_y) { v->ylo = cw->vylo; v->yhi = cw->vyhi; }
@@ -496,6 +576,72 @@ static void chart_type_name(const OS_Leaf* L, char* out, int cap)
     }
 }
 
+/* 回放全量桶缓存渲染：min/max 包络（max 折线 + min 折线 + 宽列竖线），
+ * 可见桶 ≤120 时画圆点。覆盖整个文件时间跨度，长时间采集"全部显示"的数据源。 */
+static void chart_draw_buckets(HDC hdc, OS_Series* sr,
+                               const RECT* plot, const RECT* lane, int64_t x0, int64_t x1,
+                               double ylo, double yhi)
+{
+    HPEN pen, old;
+    int i, i0, i1, vis;
+    int first_max = 1, first_min = 1;
+    double span;
+    int dots;
+    if (!sr->buckets || sr->nbuckets <= 0 || sr->b_t1 <= sr->b_t0) return;
+    if (x1 <= x0) return;
+    span = (double)(sr->b_t1 - sr->b_t0);
+    i0 = (int)((double)(x0 - sr->b_t0) * sr->nbuckets / span);
+    i1 = (int)((double)(x1 - sr->b_t0) * sr->nbuckets / span) + 1;
+    if (i0 < 0) i0 = 0;
+    if (i1 > sr->nbuckets - 1) i1 = sr->nbuckets - 1;
+    if (i1 < i0) return;
+    vis = i1 - i0 + 1;
+    dots = (vis > 0 && vis <= 120);
+    pen = CreatePen(PS_SOLID, 1, sr->color);
+    old = (HPEN)SelectObject(hdc, pen);
+    if (dots) {
+        HBRUSH dot_br = CreateSolidBrush(sr->color);
+        HBRUSH dot_obr = (HBRUSH)SelectObject(hdc, dot_br);
+        for (i = i0; i <= i1; i++) {
+            int64_t tm = sr->b_t0 + (int64_t)((i + 0.5) * span / sr->nbuckets);
+            int xp = map_x(plot, x0, x1, tm);
+            if (sr->buckets[i].n <= 0) continue;
+            {
+                int ymx = map_y(lane, sr->buckets[i].mx, ylo, yhi);
+                int ymn = map_y(lane, sr->buckets[i].mn, ylo, yhi);
+                Ellipse(hdc, xp - 2, ymx - 2, xp + 2, ymx + 2);
+                if (ymn != ymx) Ellipse(hdc, xp - 2, ymn - 2, xp + 2, ymn + 2);
+            }
+        }
+        SelectObject(hdc, dot_obr);
+        DeleteObject(dot_br);
+    } else {
+        /* 包络两条折线（max/min）+ 列宽 ≥2px 时竖线填充 */
+        for (i = i0; i <= i1; i++) {
+            int64_t t0b = sr->b_t0 + (int64_t)((double)i * span / sr->nbuckets);
+            int64_t t1b = sr->b_t0 + (int64_t)((double)(i + 1) * span / sr->nbuckets);
+            int64_t tm = sr->b_t0 + (int64_t)((i + 0.5) * span / sr->nbuckets);
+            int xm, xb0, xb1, ymx, ymn;
+            if (sr->buckets[i].n <= 0) { first_max = first_min = 1; continue; }
+            xm = map_x(plot, x0, x1, tm);
+            ymx = map_y(lane, sr->buckets[i].mx, ylo, yhi);
+            ymn = map_y(lane, sr->buckets[i].mn, ylo, yhi);
+            if (first_max) { MoveToEx(hdc, xm, ymx, NULL); first_max = 0; }
+            else LineTo(hdc, xm, ymx);
+            if (first_min) { MoveToEx(hdc, xm, ymn, NULL); first_min = 0; }
+            else LineTo(hdc, xm, ymn);
+            xb0 = map_x(plot, x0, x1, t0b);
+            xb1 = map_x(plot, x0, x1, t1b);
+            if (xb1 - xb0 >= 2 && ymn != ymx) {
+                MoveToEx(hdc, xb0, ymx, NULL);
+                LineTo(hdc, xb0, ymn);
+            }
+        }
+    }
+    SelectObject(hdc, old);
+    DeleteObject(pen);
+}
+
 /* 绘制一路曲线：折线 + （可见点少时）采样圆点 */
 static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
                               const RECT* plot, const RECT* lane, int64_t x0, int64_t x1,
@@ -507,6 +653,11 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
     int vis_npts = 0;
     HPEN pen, old;
     int dots;
+    /* 桶缓存存在 → 以桶包络渲染整个文件跨度（长时间采集"全部显示"），跳过环渲染 */
+    if (sr->buckets && sr->nbuckets > 0) {
+        chart_draw_buckets(hdc, sr, plot, lane, x0, x1, ylo, yhi);
+        return;
+    }
     /* Bug5 修复：圆点按“可见时间窗 [x0,x1] 内实际绘制的采样点数”判定，而非缓冲区总点数——
        否则录制时间越长 npts 越大，放大后圆点也全部消失。 */
     if (have_t && x1 > x0) {
@@ -579,6 +730,20 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
     DeleteObject(pen);
 }
 
+/* 桶序列在时间 t 处的近似值（min/max 均值），无桶/无覆盖返回 0 */
+static int chart_val_at_time_bk(const OS_Series* sr, int64_t t, double* v)
+{
+    int i;
+    if (!sr->buckets || sr->nbuckets <= 0 || sr->b_t1 <= sr->b_t0) return 0;
+    if (t < sr->b_t0 || t > sr->b_t1) return 0;
+    i = (int)((double)(t - sr->b_t0) * sr->nbuckets / (sr->b_t1 - sr->b_t0));
+    if (i < 0) i = 0;
+    if (i >= sr->nbuckets) i = sr->nbuckets - 1;
+    if (sr->buckets[i].n <= 0) return 0;
+    *v = (sr->buckets[i].mn + sr->buckets[i].mx) / 2.0;
+    return 1;
+}
+
 /* N13e/g: 在像素 (px,py) 处取时间 + 最近系列样本，设置测量锚点 */
 static void chart_set_mark(OS_ChartWin* cw, const OS_ChartView* v, const RECT* plot, int px, int py)
 {
@@ -591,15 +756,24 @@ static void chart_set_mark(OS_ChartWin* cw, const OS_ChartView* v, const RECT* p
     best_t = t;
     for (i = 0; i < cw->series_count; i++) {
         OS_Series* sr = &cw->series[i];
-        int idx = chart_sample_at_time(sr, cw->view_all, cw->fit_x, cw->npoints, t);
-        double vv, d;
+        double vv, d, bkv;
+        int64_t st;
         int x, y;
-        if (idx < 0 || idx >= OS_CHART_HIST || sr->count <= 0) continue;
-        vv = sr->val[idx];
-        x = map_x(plot, v->x0, v->x1, sr->ts[idx]);
+        if (sr->buckets && sr->nbuckets > 0) {
+            /* 桶缓存系列：取桶 min/max 均值近似 */
+            if (!chart_val_at_time_bk(sr, t, &bkv)) continue;
+            vv = bkv;
+            st = t;
+        } else {
+            int idx = chart_sample_at_time(sr, cw->view_all, cw->fit_x, cw->npoints, t);
+            if (idx < 0 || idx >= OS_CHART_HIST || sr->count <= 0) continue;
+            vv = sr->val[idx];
+            st = sr->ts[idx];
+        }
+        x = map_x(plot, v->x0, v->x1, st);
         y = map_y(plot, vv, v->ylo, v->yhi);
         d = (double)(x - px) * (x - px) + (double)(y - py) * (y - py);
-        if (d < best_d) { best_d = d; best_i = i; best_v = vv; best_t = sr->ts[idx]; }
+        if (d < best_d) { best_d = d; best_i = i; best_v = vv; best_t = st; }
     }
     if (best_i < 0) return;
     if (cw->m0.x >= 0 && cw->m1.x >= 0) { cw->m0.x = cw->m1.x = -1; }
@@ -825,12 +999,22 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
                 for (ii = 0; ii < cw->series_count; ii++) {
                     OS_Series* sr = &cw->series[ii];
                     const OS_Leaf* L = os_vartree_leaf(sr->leaf_id);
-                    int idx;
+                    double hval;
+                    int have_hval = 0;
                     char line[340], tn[64];
-                    if (!L || sr->count <= 0) continue;
-                    idx = chart_sample_at_time(sr, cw->view_all, cw->fit_x, cw->npoints, t);
+                    if (!L) continue;
+                    if (sr->buckets && sr->nbuckets > 0) {
+                        /* 桶缓存系列：HUD 显示桶 min/max 均值 */
+                        if (!chart_val_at_time_bk(sr, t, &hval)) continue;
+                        have_hval = 1;
+                    } else if (sr->count > 0) {
+                        int idx = chart_sample_at_time(sr, cw->view_all, cw->fit_x, cw->npoints, t);
+                        hval = sr->val[idx];
+                        have_hval = 1;
+                    }
+                    if (!have_hval) continue;
                     chart_type_name(L, tn, 64);
-                    _snprintf(line, 340, "%s = %.6g (%s)", L->name, sr->val[idx], tn);
+                    _snprintf(line, 340, "%s = %.6g (%s)", L->name, hval, tn);
                     if (nlines < 8) {
                         if (nlines) strncat(buf, "\n", sizeof(buf) - strlen(buf) - 1);
                         strncat(buf, line, sizeof(buf) - strlen(buf) - 1);
@@ -1483,6 +1667,8 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 for (k = 0; k < cw->series_count; k++) {
                     cw->series[k].head = 0;
                     cw->series[k].count = 0;
+                    cw->series[k].buckets = NULL; /* 桶缓存一并清除 */
+                    cw->series[k].nbuckets = 0;
                 }
                 InvalidateRect(hwnd, NULL, TRUE);
             }
