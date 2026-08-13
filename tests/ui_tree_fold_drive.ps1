@@ -202,6 +202,21 @@ try {
     Check ([OsTreeFoldUi]::IsWindowVisible($tree)) "自动隐藏模式下悬停细条自动展开"
     [OsTreeFoldUi]::SendMessage($main, 0x8009, [IntPtr]0, [IntPtr]0) | Out-Null  # 恢复钉住
 
+    # 4d) 拖拽分隔条到最左（x<60）→ 完全隐藏（用户操作路径：鼠标拽着分隔线往左拉；
+    #     旧实现 120px 下限夹紧"拉不过去"）
+    [OsTreeFoldUi]::SendMessage($main, 0x8003, [IntPtr]30, [IntPtr]0) | Out-Null  # WM_OS_SPLIT x=30
+    Start-Sleep -Milliseconds 200
+    Check (-not [OsTreeFoldUi]::IsWindowVisible($tree)) "拖拽分隔条到左侧后变量树完全隐藏"
+    $strip = Find-ChildByClass $main "OSTreeStrip"
+    Check ($strip -ne [IntPtr]::Zero -and [OsTreeFoldUi]::IsWindowVisible($strip)) "拖拽隐藏后左侧细条可见"
+    Check (Log-Has '拖拽分隔条到左侧') "日志记录拖拽分隔条隐藏"
+
+    # 4e) 从隐藏态细条位置向右拖出（x≥16）→ 展开并按拖拽位置设宽
+    [OsTreeFoldUi]::SendMessage($main, 0x8003, [IntPtr]200, [IntPtr]0) | Out-Null  # WM_OS_SPLIT x=200
+    Start-Sleep -Milliseconds 200
+    Check ([OsTreeFoldUi]::IsWindowVisible($tree)) "向右拖拽分隔条后变量树展开"
+    Check (Log-Has '变量栏展开: 拖拽分隔条') "日志记录拖拽分隔条展开"
+
     # 5) 钩子 WM_OS_TREE_HIDE=0 展开
     [OsTreeFoldUi]::SendMessage($main, 0x8021, [IntPtr]0, [IntPtr]0) | Out-Null
     Start-Sleep -Milliseconds 200

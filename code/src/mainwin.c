@@ -2848,10 +2848,30 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_layout_save_auto(); /* 关闭时保存布局，便于下次恢复 */
         DestroyWindow(hwnd);
         return 0;
-    case WM_OS_SPLIT:
-        if ((int)wParam > 120 && (int)wParam < 900) g_app.tree_w = (int)wParam;
+    case WM_OS_SPLIT: {
+        /* 用户反馈优化：拖拽分隔条到最左（x<60）即完全隐藏变量栏——旧实现 120px
+         * 下限夹紧，"拉不过去"；从隐藏态细条位置向右拖（x≥16）则展开并按拖拽
+         * 位置设定宽度。宽度的可用下限同步放宽到 60px（窄树仍可用）。 */
+        int x = (int)wParam;
+        if (g_app.tree_hidden) {
+            if (x >= 16) {
+                g_app.tree_hidden = 0;
+                if (x < 60) x = 60;
+                if (x > 900) x = 900;
+                g_app.tree_w = x;
+                os_log(OS_LOG_INFO, "变量栏展开: 拖拽分隔条 (宽 %d)", x);
+            }
+        } else if (x < 60) {
+            g_app.tree_hidden = 1;
+            os_log(OS_LOG_INFO, "变量栏已完全隐藏: 拖拽分隔条到左侧");
+        } else {
+            if (x > 900) x = 900;
+            if (x < 60) x = 60;
+            g_app.tree_w = x;
+        }
         layout();
         return 0;
+    }
     case WM_OS_SPLIT_V: {
         /* F14: 消息栏上下拉伸：log_h = 主窗口高 - 34(工具行) - 27(状态栏+分隔条) - 分隔条 y */
         RECT rv;
