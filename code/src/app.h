@@ -44,6 +44,7 @@
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 #define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */
 #define IDM_HELP_DOC 2702 /* 需求12：帮助菜单"帮助文档" + F1 快捷键 */
+#define IDM_TREE_FIND 2703 /* Ctrl+H 快速搜索变量（加速键，main.c 消息循环层拦截） */
 
 typedef enum {
     OS_ACQ_STOPPED = 0,

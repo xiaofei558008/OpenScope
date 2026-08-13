@@ -251,6 +251,61 @@ int os_vartree_search(const char* needle, int max, int* out_ids)
     return n;
 }
 
+/* Ctrl+H 快速搜索：按叶 id（lParam=id+1）在树中递归查找节点 */
+static HTREEITEM tree_find_by_leaf_id(HWND tree, HTREEITEM h, int leaf_id)
+{
+    HTREEITEM child;
+    TVITEMW item;
+    memset(&item, 0, sizeof(item));
+    item.mask = TVIF_PARAM;
+    item.hItem = h;
+    if (TreeView_GetItem(tree, &item) && item.lParam == (LPARAM)(leaf_id + 1))
+        return h;
+    child = (HTREEITEM)SendMessageW(tree, TVM_GETNEXTITEM, TVGN_CHILD, (LPARAM)h);
+    while (child) {
+        HTREEITEM r = tree_find_by_leaf_id(tree, child, leaf_id);
+        if (r) return r;
+        child = (HTREEITEM)SendMessageW(tree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)child);
+    }
+    return NULL;
+}
+
+/* Ctrl+H 快速搜索：按叶 id 列表定位变量——展开全部祖先、滚动到可见、
+ * 多选显示（首个为光标项）。返回定位到的个数。 */
+int os_vartree_locate_ids(HWND hTree, const int* ids, int n)
+{
+    HTREEITEM found = NULL, h;
+    int i, ok = 0;
+    if (!hTree || !ids || n <= 0) return 0;
+    for (i = 0; i < n; i++) {
+        HTREEITEM item, parent;
+        h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+        while (h && !found) {
+            found = tree_find_by_leaf_id(hTree, h, ids[i]);
+            h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)h);
+        }
+        if (!found) { found = NULL; continue; }
+        item = found;
+        /* 展开全部祖先链 */
+        parent = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_PARENT, (LPARAM)item);
+        while (parent) {
+            SendMessageW(hTree, TVM_EXPAND, TVE_EXPAND, (LPARAM)parent);
+            parent = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_PARENT, (LPARAM)parent);
+        }
+        if (i == 0) {
+            /* 首个：光标选中 + 滚动可见 */
+            SendMessageW(hTree, TVM_SELECTITEM, TVGN_CARET, (LPARAM)item);
+            SendMessageW(hTree, TVM_ENSUREVISIBLE, 0, (LPARAM)item);
+        } else {
+            /* 其余：多选高亮（树已开 TVS_EX_MULTISELECT） */
+            TreeView_SetItemState(hTree, item, TVIS_SELECTED, TVIS_SELECTED);
+        }
+        ok++;
+        found = NULL;
+    }
+    return ok;
+}
+
 const OS_Leaf* os_vartree_leaf(int id)
 {
     if (id < 0 || id >= g_app.leaf_count) return NULL;

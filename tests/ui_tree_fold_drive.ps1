@@ -44,6 +44,11 @@ public class OsTreeFoldUi {
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+    [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h, ref POINT p);
+    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int left, top, right, bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int x, y; }
     public delegate bool EnumProc(IntPtr h, IntPtr l);
 }
 "@
@@ -175,6 +180,27 @@ try {
     Start-Sleep -Milliseconds 700   # 等 3~4 个 200ms 轮询 tick，若 Bug18 未修复此处会被强制展开
     Check (-not [OsTreeFoldUi]::IsWindowVisible($tree)) "钉住状态下变量栏仍保持完全隐藏（不被 tick 强制展开）"
     Check (Log-Has '变量栏已完全隐藏') "隐藏状态未被钉住分支破坏"
+
+    # 4b) 钉住模式悬停回归（用户反馈"不能全部缩进全隐藏"的根因）：
+    #     旧实现钉住态光标停在细条上（x≤10）200ms 后悬停判定把树重新弹出——
+    #     双击分隔条隐藏后光标恰好就在细条位置，树立刻弹回。
+    #     修复后：钉住模式悬停细条不展开，必须显式点击。
+    #     光标须用【客户区坐标】换算（GetWindowRect 含边框，直接用会落在 x<0 区域）。
+    $mwr = New-Object OsTreeFoldUi+RECT
+    [OsTreeFoldUi]::GetWindowRect($main, [ref]$mwr) | Out-Null
+    $mainH = $mwr.bottom - $mwr.top
+    $cpt = New-Object OsTreeFoldUi+POINT
+    $cpt.x = 4; $cpt.y = [int]($mainH / 2)
+    [OsTreeFoldUi]::ClientToScreen($main, [ref]$cpt) | Out-Null
+    [OsTreeFoldUi]::SetCursorPos($cpt.x, $cpt.y) | Out-Null  # 真实光标移到细条上（客户区 x=4）
+    Start-Sleep -Milliseconds 700   # 3~4 个 tick
+    Check (-not [OsTreeFoldUi]::IsWindowVisible($tree)) "钉住模式下悬停细条不自动展开（保持完全隐藏）"
+
+    # 4c) 自动隐藏模式（tree_auto=1）悬停细条仍自动展开（自动隐藏 UX 不被破坏）
+    [OsTreeFoldUi]::SendMessage($main, 0x8009, [IntPtr]1, [IntPtr]0) | Out-Null  # WM_OS_TREE_AUTOHIDE=1
+    Start-Sleep -Milliseconds 700   # 光标已在细条上，3~4 个 tick 内应悬停展开
+    Check ([OsTreeFoldUi]::IsWindowVisible($tree)) "自动隐藏模式下悬停细条自动展开"
+    [OsTreeFoldUi]::SendMessage($main, 0x8009, [IntPtr]0, [IntPtr]0) | Out-Null  # 恢复钉住
 
     # 5) 钩子 WM_OS_TREE_HIDE=0 展开
     [OsTreeFoldUi]::SendMessage($main, 0x8021, [IntPtr]0, [IntPtr]0) | Out-Null

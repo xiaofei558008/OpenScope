@@ -942,8 +942,11 @@ static void tree_auto_tick(void)
     x = pt.x;
     if (g_app.tree_hidden) {
         /* 隐藏态（手动完全隐藏或自动隐藏）：光标进入左侧细条即展开。
-         * Bug18: 先判断隐藏态——手动隐藏后即使钉住也不被下面钉住分支强制展开。 */
-        if (x >= 0 && x <= 10) tree_auto_expand(L"悬停细条");
+         * 用户反馈修复：旧实现不区分模式——钉住状态（默认）下双击分隔条隐藏后，
+         * 光标恰好停在细条上（x≤10），200ms 后悬停判定立即把树重新弹出，
+         * "不能全部缩进左侧全隐藏"的根因。只有自动隐藏模式（tree_auto=1）
+         * 才悬停展开；钉住模式必须显式点击细条/双击分隔条展开。 */
+        if (g_app.tree_auto && x >= 0 && x <= 10) tree_auto_expand(L"悬停细条");
         return;
     }
     if (!g_app.tree_auto) {
@@ -1728,16 +1731,21 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
 }
 
 /* N13a: 共享对话框运行：多选结果写入 pr */
-static int run_pick_dialog(HWND owner, PickResult* pr)
+static int run_pick_dialog_titled(HWND owner, PickResult* pr, const wchar_t* title)
 {
     HWND dlg;
     pr->count = 0;
-    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgPick", L"添加变量（模糊搜索·支持多选）",
+    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgPick", title,
                           WS_POPUP | WS_CAPTION | WS_SYSMENU,
                           CW_USEDEFAULT, CW_USEDEFAULT, 460, 400, owner, NULL, g_app.hInst, pr);
     if (!dlg) return -1;
     run_modal(dlg, owner);
     return (pr->count > 0) ? 0 : -1;
+}
+
+static int run_pick_dialog(HWND owner, PickResult* pr)
+{
+    return run_pick_dialog_titled(owner, pr, L"添加变量（模糊搜索·支持多选）");
 }
 
 /* N13a: 多选版本：成功返回 0，out_ids 写入全部选中叶变量 id，out_count 为个数；取消返回 -1 */
@@ -1755,6 +1763,25 @@ int os_dlg_pick_vars(HWND owner, int* out_ids, int max_out, int* out_count)
     for (i = 0; i < n; i++) out_ids[i] = pr.ids[i];
     if (out_count) *out_count = n;
     return 0;
+}
+
+/* Ctrl+H 快速搜索：模糊搜索弹窗 → 定位选中变量到左侧树（展开祖先/滚动/多选） */
+static void tree_find_vars(HWND hwnd)
+{
+    PickResult pr;
+    int ids[512], n = 0, i, ok;
+    if (g_app.leaf_count <= 0) {
+        MessageBoxW(hwnd, L"请先加载 ELF 文件", L"搜索变量", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (run_pick_dialog_titled(hwnd, &pr, L"搜索变量（模糊搜索·Ctrl+H）") != 0) return;
+    n = pr.count;
+    if (n > 512) n = 512;
+    for (i = 0; i < n; i++) ids[i] = pr.ids[i];
+    /* 树若已收起则展开，确保定位结果可见 */
+    if (g_app.tree_hidden) tree_auto_expand(L"搜索定位");
+    ok = os_vartree_locate_ids(g_app.hTree, ids, n);
+    os_log(OS_LOG_INFO, "搜索定位变量: 选中 %d 个，定位 %d 个", n, ok);
 }
 
 int os_dlg_pick_var(HWND owner, int* out_leaf_id)
@@ -3161,6 +3188,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_TREE_RELOAD: os_mainwin_reload_elf(); break;
         case IDM_TREE_ADD_CHART: tree_add_to_native(1); break;
         case IDM_TREE_ADD_NUM: tree_add_to_native(0); break;
+        case IDM_TREE_FIND: tree_find_vars(hwnd); break; /* Ctrl+H 快速搜索变量 */
         case IDM_LOG_COPY: log_copy_selected(); break;
         case IDM_LOG_CLEAR: log_clear_all(); break;
         case IDM_TAB_CLOSE:

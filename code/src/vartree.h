@@ -26,5 +26,7 @@ int os_vartree_missing_count(void);
 const char* os_vartree_missing_at(int i);
 /* 按完整叶名称在变量树中定位并选中（供命令行测试钩子/自动化使用） */
 int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name);
+/* Ctrl+H 快速搜索：按叶 id 列表定位变量（展开祖先、滚动可见、多选），返回定位个数 */
+int os_vartree_locate_ids(HWND hTree, const int* ids, int n);
 
 #endif

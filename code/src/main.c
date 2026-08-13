@@ -208,13 +208,17 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         if (!no_layout && lsv) os_layout_save_to(lsv);
     }
     {
-        /* 需求12：F1 弹出帮助文档（加速键在消息循环层拦截，子控件焦点同样生效） */
-        ACCEL acc[1];
+        /* 需求12：F1 弹出帮助文档；Ctrl+H 快速搜索变量。
+         * 加速键在消息循环层拦截，子控件焦点同样生效。 */
+        ACCEL acc[2];
         HACCEL hAcc;
         acc[0].fVirt = FVIRTKEY;
         acc[0].key = VK_F1;
         acc[0].cmd = IDM_HELP_DOC;
-        hAcc = CreateAcceleratorTableW(acc, 1);
+        acc[1].fVirt = FVIRTKEY | FCONTROL;
+        acc[1].key = 'H';
+        acc[1].cmd = IDM_TREE_FIND;
+        hAcc = CreateAcceleratorTableW(acc, 2);
         while (GetMessage(&msg, NULL, 0, 0)) {
             /* N3: 就地重命名编辑框的回车/ESC 在分发前拦截（不子类化编辑框） */
             HWND te = os_tab_edit_hwnd();
