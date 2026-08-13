@@ -4,8 +4,8 @@
 [Setup]
 AppId={{7D3E1A05-8B2C-4A9F-9D46-OpenScope-2026}
 AppName=OpenScope
-AppVersion=1.17.0.0
-AppVerName=OpenScope 1.17.0
+AppVersion=1.17.1.0
+AppVerName=OpenScope 1.17.1
 AppPublisher=OpenScope
 AppCopyright=Copyright (C) 2026 OpenScope
 DefaultDirName={autopf}\OpenScope
@@ -15,18 +15,18 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 OutputDir=..\dist
-OutputBaseFilename=OpenScope-Setup-1.17.0
+OutputBaseFilename=OpenScope-Setup-1.17.1
 SetupIconFile=..\assets\openscope.ico
 UninstallDisplayIcon={app}\OpenScope.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-VersionInfoVersion=1.17.0.0
+VersionInfoVersion=1.17.1.0
 VersionInfoCompany=OpenScope
 VersionInfoDescription=OpenScope - MCU Variable Acquisition and Calibration
 VersionInfoProductName=OpenScope
-VersionInfoProductVersion=1.17.0.0
-VersionInfoOriginalFileName=OpenScope-Setup-1.17.0.exe
+VersionInfoProductVersion=1.17.1.0
+VersionInfoOriginalFileName=OpenScope-Setup-1.17.1.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
