@@ -181,18 +181,28 @@ try {
         $stillOpen = Find-Dlg $proc.Id
         Check ($stillOpen -ne [IntPtr]::Zero) "添加后对话框保持打开"
 
-        # ---- 5. 列表右键菜单出现（#32768 弹出菜单）后 WM_CANCELMODE 关闭 ----
+        # ---- 5. 列表右键菜单出现（#32768）→ 关闭 → 不得再次弹出 ----
+        # 真实右键链：WM_RBUTTONUP → ListView 先发 NM_RCLICK 再发 WM_CONTEXTMENU。
+        # 用户反馈 bug：旧实现两个通知都弹菜单 → 第一个关闭后第二个立即弹出
+        # （"点击任意选项后再次弹窗"）。修复后只响应 WM_CONTEXTMENU，关闭后无第二弹。
         # 注意：必须 PostMessage 触发（TrackPopupMenu 内部模态循环，
         # SendMessage 会同步阻塞等菜单关闭，与后续 CANCELMODE 互相死锁）
         $list = Find-ChildByClass $dlg "SysListView32"
         if ($list -ne [IntPtr]::Zero) {
-            [OsTreeFindUi]::PostMessage($list, [OsTreeFindUi]::WM_CONTEXTMENU, $list, [IntPtr]0) | Out-Null
+            # 真实右键释放（WM_RBUTTONUP = 0x205，wParam=MK_RBUTTON=2）走完整通知链
+            [OsTreeFindUi]::PostMessage($list, 0x205, [IntPtr]2, [IntPtr]0) | Out-Null
             Start-Sleep -Milliseconds 400
             $menu = Find-ByClass $proc.Id "#32768"
             Check ($menu -ne [IntPtr]::Zero) "列表右键弹出上下文菜单（#32768）"
             if ($menu -ne [IntPtr]::Zero) {
                 [OsTreeFindUi]::PostMessage($dlg, [OsTreeFindUi]::WM_CANCELMODE, [IntPtr]0, [IntPtr]0) | Out-Null
-                Start-Sleep -Milliseconds 300
+                Start-Sleep -Milliseconds 700   # 等第二个菜单（旧 bug）出现的机会
+                $menu2 = Find-ByClass $proc.Id "#32768"
+                Check ($menu2 -eq [IntPtr]::Zero) "关闭菜单后不再次弹出（无双弹窗）"
+                if ($menu2 -ne [IntPtr]::Zero) {
+                    [OsTreeFindUi]::PostMessage($dlg, [OsTreeFindUi]::WM_CANCELMODE, [IntPtr]0, [IntPtr]0) | Out-Null
+                    Start-Sleep -Milliseconds 300
+                }
             }
         } else {
             Check $false "列表 SysListView32 存在"

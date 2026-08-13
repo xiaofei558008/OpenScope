@@ -1718,8 +1718,14 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_CONTEXTMENU:
-        /* 列表上的右键（含测试注入）→ 添加变量上下文菜单 */
-        pick_show_add_menu(dlg);
+        /* 列表右键（含测试注入）→ 添加变量上下文菜单。
+         * 用户反馈修复：旧实现同时处理 NM_RCLICK 和 WM_CONTEXTMENU——真实右键时
+         * ListView 先发 NM_RCLICK（弹出菜单1），菜单1关闭后继续处理右键释放又发
+         * WM_CONTEXTMENU（弹出菜单2）→ "点击任意选项后再次弹窗"。
+         * 只保留 WM_CONTEXTMENU（右键链的最后一环，其后无后续弹窗）；
+         * 且仅当右键来自变量列表时才弹出（编辑框等其他区域不弹）。 */
+        if ((HWND)wParam == GetDlgItem(dlg, IDD_PICK_LIST))
+            pick_show_add_menu(dlg);
         return 0;
     case WM_NOTIFY: {
         NMHDR* h = (NMHDR*)lParam;
@@ -1729,11 +1735,6 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
                 PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
                 pick_collect(dlg, st);
                 DestroyWindow(dlg);
-                return 0;
-            }
-            if (h->code == NM_RCLICK) {
-                /* 用户反馈：搜索/选变量列表右键直接添加到窗口（对话框保持打开） */
-                pick_show_add_menu(dlg);
                 return 0;
             }
             if (h->code == LVN_KEYDOWN) {
