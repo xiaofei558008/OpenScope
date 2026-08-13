@@ -10,12 +10,14 @@
 
 #define OS_MAGIC_NUM 0x4E554D31u /* 'NUM1' */
 
-/* 列定义：0=实时勾选框, 1=变量, 2=地址, 3=数值 */
+/* 列定义：0=实时勾选框, 1=变量, 2=地址, 3=数值, 4=最小值, 5=最大值 */
 #define NUM_COL_CHECK 0
 #define NUM_COL_NAME  1
 #define NUM_COL_ADDR  2
 #define NUM_COL_VAL   3
 #define NUM_COL_VALIDX 3
+#define NUM_COL_MIN   4
+#define NUM_COL_MAX   5
 
 typedef struct OS_NumWin {
     DWORD magic;
@@ -27,6 +29,10 @@ typedef struct OS_NumWin {
     int count;
     HWND edit;       /* 就地编辑 EDIT 控件（NULL=无） */
     int edit_row;    /* 正在编辑的行 */
+    /* 用户反馈：min/max 列——记录运行过程中每个变量的最小/最大值 */
+    double vmin[OS_MAX_NUM_ROWS];
+    double vmax[OS_MAX_NUM_ROWS];
+    int    has_mm[OS_MAX_NUM_ROWS];  /* 1=已收到首个样本（有有效 min/max） */
 } OS_NumWin;
 
 static const wchar_t* g_num_class = L"OSNumWin";
@@ -54,6 +60,47 @@ static int num_row_of(OS_NumWin* nw, int leaf_id)
 
 static void num_end_edit(OS_NumWin* nw, int commit); /* 定义在下方就地编辑区 */
 
+/* min/max 显示格式：整型类按整数（%.0f），浮点按 %.6g */
+static void num_fmt_val(const OS_Leaf* L, double v, char* out, int cap)
+{
+    if (!L) { _snprintf(out, cap, "%.6g", v); return; }
+    if (L->kind == OS_TYPE_FLOAT) _snprintf(out, cap, "%.6g", v);
+    else _snprintf(out, cap, "%.0f", v);
+}
+
+/* 更新第 row 行的 min/max 并刷新显示（首个样本初始化，之后取极值） */
+static void num_update_minmax(OS_NumWin* nw, int row, double v)
+{
+    wchar_t wmin[64], wmax[64];
+    char tmin[64], tmax[64];
+    const OS_Leaf* L = os_vartree_leaf(nw->leaf_ids[row]);
+    if (row < 0 || row >= nw->count || !nw->list) return;
+    if (!nw->has_mm[row]) {
+        nw->vmin[row] = nw->vmax[row] = v;
+        nw->has_mm[row] = 1;
+    } else {
+        if (v < nw->vmin[row]) nw->vmin[row] = v;
+        if (v > nw->vmax[row]) nw->vmax[row] = v;
+    }
+    num_fmt_val(L, nw->vmin[row], tmin, sizeof(tmin));
+    num_fmt_val(L, nw->vmax[row], tmax, sizeof(tmax));
+    os_utf8_to_wide_buf(tmin, wmin, 64);
+    os_utf8_to_wide_buf(tmax, wmax, 64);
+    ListView_SetItemText(nw->list, row, NUM_COL_MIN, wmin);
+    ListView_SetItemText(nw->list, row, NUM_COL_MAX, wmax);
+}
+
+/* 重置第 row 行 min/max（添加/重绑时清空为 "-"） */
+static void num_reset_minmax(OS_NumWin* nw, int row)
+{
+    nw->has_mm[row] = 0;
+    nw->vmin[row] = nw->vmax[row] = 0;
+    if (nw->list) {
+        ListView_SetItemText(nw->list, row, NUM_COL_MIN, L"-");
+        ListView_SetItemText(nw->list, row, NUM_COL_MAX, L"-");
+    }
+}
+
 void os_num_push(HWND hwnd, const OS_Sample* s)
 {
     OS_NumWin* nw = num_from_hwnd(hwnd);
@@ -70,6 +117,8 @@ void os_num_push(HWND hwnd, const OS_Sample* s)
     ListView_SetItemText(nw->list, row, NUM_COL_NAME, wname);
     ListView_SetItemText(nw->list, row, NUM_COL_ADDR, waddr);
     ListView_SetItemText(nw->list, row, NUM_COL_VAL, wval);
+    /* min/max 跟随实时样本更新 */
+    num_update_minmax(nw, row, s->value);
 }
 
 void os_num_add_var(HWND hwnd, int leaf_id)
@@ -95,6 +144,7 @@ void os_num_add_var(HWND hwnd, int leaf_id)
     ListView_SetItemText(nw->list, nw->count, NUM_COL_VAL, L"");
     nw->leaf_ids[nw->count] = leaf_id;
     _snprintf(nw->names[nw->count], 256, "%s", L ? L->name : "");
+    num_reset_minmax(nw, nw->count); /* min/max 列初始 "-"，首个样本后开始记录 */
     nw->count++;
     /* N9(a): 加入窗口的变量自动纳入采集（观测勾选），否则多变量恒为 0 */
     os_vartree_set_watch(leaf_id, 1);
@@ -151,6 +201,7 @@ void os_num_rebind(HWND hwnd)
             _snwprintf(waddr, 64, L"0x%llX", (unsigned long long)(L ? L->address : 0));
             ListView_SetItemText(nw->list, i, NUM_COL_ADDR, waddr);
             ListView_SetItemText(nw->list, i, NUM_COL_VAL, L"");
+            num_reset_minmax(nw, i); /* 重绑后地址可能已变，min/max 历史作废 */
             ok++;
             i++;
         } else {
@@ -215,8 +266,21 @@ static void num_end_edit(OS_NumWin* nw, int commit)
         err[0] = 0;
         os_wide_to_utf8_buf(wtext, utf8, sizeof(utf8));
         if (os_ds_write_leaf(nw->leaf_ids[row], utf8, err, sizeof(err)) == 0) {
+            const OS_Leaf* L = os_vartree_leaf(nw->leaf_ids[row]);
+            uint8_t raw[8];
+            int sz = 0;
+            OS_Sample tmp;
             /* 写入成功：回读样本会刷新该行（若未冻结）；冻结时直接显示写入值 */
             ListView_SetItemText(nw->list, row, NUM_COL_VAL, wtext);
+            /* min/max 同步记录手动写入值（解析为数值后并入极值） */
+            if (L && os_parse_text(utf8, raw, 8, &sz, L->kind, L->is_signed, 0, 0, 0,
+                                   L->enums, L->enum_count)) {
+                memset(&tmp, 0, sizeof(tmp));
+                os_format_raw(tmp.text, sizeof(tmp.text), raw, sz, L->kind, L->is_signed,
+                              L->is_ptr, L->is_bitfield, L->bit_offset, L->bit_size,
+                              &tmp.value, L->enums, L->enum_count);
+                num_update_minmax(nw, row, tmp.value);
+            }
             os_log(OS_LOG_INFO, "数值窗口就地写入 行%d: %s", row, utf8);
         } else {
             os_log(OS_LOG_ERROR, "数值窗口写入失败: %s", err[0] ? err : "未知错误");
@@ -288,7 +352,8 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         else _snwprintf(p->title, 128, L"数值窗口");
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)p);
         p->list = CreateWindowW(WC_LISTVIEWW, L"",
-                                WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+                                WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS |
+                                WS_HSCROLL,
                                 0, 0, 10, 10, hwnd, NULL, g_app.hInst, NULL);
         ListView_SetExtendedListViewStyle(p->list,
             LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES | LVS_EX_CHECKBOXES);
@@ -299,21 +364,41 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         col.pszText = L"实时";
         ListView_InsertColumn(p->list, NUM_COL_CHECK, &col);
         col.fmt = LVCFMT_LEFT;
-        col.cx = 200;
+        col.cx = 190;
         col.pszText = L"变量";
         ListView_InsertColumn(p->list, NUM_COL_NAME, &col);
         col.cx = 90;
         col.pszText = L"地址";
         ListView_InsertColumn(p->list, NUM_COL_ADDR, &col);
-        col.cx = 140;
+        col.cx = 120;
         col.pszText = L"数值";
         ListView_InsertColumn(p->list, NUM_COL_VAL, &col);
+        /* 用户反馈：min/max 列——记录运行过程中变量的最小/最大值 */
+        col.fmt = LVCFMT_RIGHT;
+        col.cx = 100;
+        col.pszText = L"最小值";
+        ListView_InsertColumn(p->list, NUM_COL_MIN, &col);
+        col.pszText = L"最大值";
+        ListView_InsertColumn(p->list, NUM_COL_MAX, &col);
         SendMessage(p->list, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         os_num_apply_theme(hwnd); /* F20: 应用当前主题颜色 */
         return TRUE;
     }
     case WM_NCDESTROY:
         if (nw) free(nw);
+        return 0;
+    case WM_OS_NUM_TEST_DUMP:
+        /* 测试钩子：逐行日志输出 min/max（跨进程无法读 ListView 文本，回归断言用日志） */
+        if (nw) {
+            int k;
+            for (k = 0; k < nw->count; k++) {
+                if (nw->has_mm[k])
+                    os_log(OS_LOG_INFO, "数值minmax: 行%d min=%g max=%g",
+                           k, nw->vmin[k], nw->vmax[k]);
+                else
+                    os_log(OS_LOG_INFO, "数值minmax: 行%d 无样本", k);
+            }
+        }
         return 0;
     case WM_SIZE: {
         if (nw && nw->list) MoveWindow(nw->list, 0, 0, LOWORD(lParam), HIWORD(lParam), TRUE);

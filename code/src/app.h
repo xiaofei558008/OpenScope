@@ -41,6 +41,7 @@
 #define WM_OS_CHART_QUERY (WM_APP + 41)  /* 测试钩子（发给波形窗口）：返回 (series_count<<16)|series[0].count */
 #define WM_OS_CHART_SHOT  (WM_APP + 42)  /* 测试钩子（发给波形窗口）：渲染当前视图存 BMP 到 exe 目录 chart_shot.bmp */
 #define WM_OS_PICK_TEST_ADD (WM_APP + 43) /* 测试钩子（发给搜索/选变量对话框）：等价右键菜单添加 (wParam=1 波形, 0 数值) */
+#define WM_OS_NUM_TEST_DUMP (WM_APP + 44) /* 测试钩子（发给数值窗口）：逐行日志输出 min/max（回归断言用） */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 #define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */
