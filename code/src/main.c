@@ -208,15 +208,16 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         if (!no_layout && lsv) os_layout_save_to(lsv);
     }
     {
-        /* 需求12：F1 弹出帮助文档；Ctrl+H 快速搜索变量。
-         * 加速键在消息循环层拦截，子控件焦点同样生效。 */
+        /* 需求12：F1 弹出帮助文档；Ctrl+F 快速搜索变量（用户指定，原 Ctrl+H）。
+         * 加速键在消息循环层拦截，子控件焦点同样生效；波形窗口的纯 F 键
+         * （全局显示）不受影响——FCONTROL 修饰要求按住 Ctrl。 */
         ACCEL acc[2];
         HACCEL hAcc;
         acc[0].fVirt = FVIRTKEY;
         acc[0].key = VK_F1;
         acc[0].cmd = IDM_HELP_DOC;
         acc[1].fVirt = FVIRTKEY | FCONTROL;
-        acc[1].key = 'H';
+        acc[1].key = 'F';
         acc[1].cmd = IDM_TREE_FIND;
         hAcc = CreateAcceleratorTableW(acc, 2);
         while (GetMessage(&msg, NULL, 0, 0)) {

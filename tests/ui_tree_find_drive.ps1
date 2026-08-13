@@ -1,8 +1,10 @@
-﻿# OpenScope Ctrl+H 快速搜索变量回归：
-#   1. 真实键盘 Ctrl+H（keybd_event）-> 加速键表 -> 弹窗"搜索变量（模糊搜索·Ctrl+H）"
+﻿# OpenScope Ctrl+F 快速搜索变量回归：
+#   1. 真实键盘 Ctrl+F（keybd_event）-> 加速键表 -> 弹窗"搜索变量（模糊搜索·Ctrl+F）"
 #   2. 编辑框输入模糊关键字 -> 列表刷新
-#   3. WM_OS_PICK_TEST_SELECT 选中前 2 项 -> 确定
-#   4. 日志 "搜索定位变量: 选中 2 个，定位 2 个" + 变量树展开可见
+#   3. WM_OS_PICK_TEST_SELECT 选中前 2 项
+#   4. 测试钩子添加（等价右键菜单）：波形窗口 2 个 + 数值窗口 2 个（对话框保持打开）
+#   5. 列表右键菜单出现（#32768）后关闭
+#   6. 确定 -> 日志 "搜索定位变量: 选中 2 个，定位 2 个" + 变量树展开可见
 param(
     [string]$Elf = "D:\OpenScope\tests\linix_stm32l031_v1.2.out",
     [string]$ExePath = ""
@@ -25,6 +27,7 @@ public class OsTreeFindUi {
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr h, StringBuilder sb, int max);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
@@ -36,8 +39,10 @@ public class OsTreeFindUi {
     public const uint WM_SETTEXT = 0x0C;
     public const uint WM_COMMAND = 0x111;
     public const byte VK_CONTROL = 0x11;
-    public const byte VK_H = 0x48;
+    public const byte VK_F = 0x46;
     public const uint KEYUP = 0x2;
+    public const uint WM_CONTEXTMENU = 0x7B;
+    public const uint WM_CANCELMODE = 0x1F;
     public delegate bool EnumProc(IntPtr h, IntPtr l);
 }
 "@
@@ -108,7 +113,7 @@ try {
     # 等模块加载/J-Link 扫描完成（ShowWindow 在模块加载后才执行），避免过早注入按键
     Start-Sleep -Milliseconds 2000
 
-    # ---- 1. 真实 Ctrl+H 键盘输入 -> 加速键表 -> 搜索弹窗 ----
+    # ---- 1. 真实 Ctrl+F 键盘输入 -> 加速键表 -> 搜索弹窗 ----
     # （与 ui_help_drive 的 F1 注入同一模式：挂接当前前台窗口线程输入后 SetForegroundWindow）
     $fg = [OsTreeFindUi]::GetForegroundWindow()
     $fgTid = [uint32]0
@@ -123,8 +128,8 @@ try {
     }
     Start-Sleep -Milliseconds 400
     [OsTreeFindUi]::keybd_event([OsTreeFindUi]::VK_CONTROL, 0, 0, [UIntPtr]::Zero)
-    [OsTreeFindUi]::keybd_event([OsTreeFindUi]::VK_H, 0, 0, [UIntPtr]::Zero)
-    [OsTreeFindUi]::keybd_event([OsTreeFindUi]::VK_H, 0, [OsTreeFindUi]::KEYUP, [UIntPtr]::Zero)
+    [OsTreeFindUi]::keybd_event([OsTreeFindUi]::VK_F, 0, 0, [UIntPtr]::Zero)
+    [OsTreeFindUi]::keybd_event([OsTreeFindUi]::VK_F, 0, [OsTreeFindUi]::KEYUP, [UIntPtr]::Zero)
     [OsTreeFindUi]::keybd_event([OsTreeFindUi]::VK_CONTROL, 0, [OsTreeFindUi]::KEYUP, [UIntPtr]::Zero)
     $dlg = [IntPtr]::Zero
     for ($i = 0; $i -lt 25 -and $dlg -eq [IntPtr]::Zero; $i++) {
@@ -146,7 +151,7 @@ try {
         }
         [OsTreeFindUi]::EnumWindows($cbD, [IntPtr]::Zero) | Out-Null
     }
-    Check ($dlg -ne [IntPtr]::Zero) "Ctrl+H 弹出搜索对话框（OSDlgPick）"
+    Check ($dlg -ne [IntPtr]::Zero) "Ctrl+F 弹出搜索对话框（OSDlgPick）"
 
     if ($dlg -ne [IntPtr]::Zero) {
         $sb = New-Object System.Text.StringBuilder 256
@@ -160,20 +165,47 @@ try {
         }
         Start-Sleep -Milliseconds 300
 
-        # ---- 3. 测试钩子选中前 2 项 -> 确定 ----
+        # ---- 3. 测试钩子选中前 2 项 ----
         # WM_OS_PICK_TEST_SELECT = WM_APP+30 = 0x801E（对话框内程序化选中范围 [start, start+cnt)）
         [OsTreeFindUi]::SendMessage($dlg, 0x801E, [IntPtr]0, [IntPtr]2) | Out-Null
         Start-Sleep -Milliseconds 100
+
+        # ---- 4. 测试钩子添加（等价右键菜单）：波形 + 数值（对话框保持打开） ----
+        # WM_OS_PICK_TEST_ADD = WM_APP+43 = 0x802B（wParam=1 波形, 0 数值）
+        [OsTreeFindUi]::SendMessage($dlg, 0x802B, [IntPtr]1, [IntPtr]0) | Out-Null
+        Start-Sleep -Milliseconds 200
+        Check (Log-Has '搜索对话框添加变量: 2 个到波形窗口') "搜索列表添加 2 个到波形窗口"
+        [OsTreeFindUi]::SendMessage($dlg, 0x802B, [IntPtr]0, [IntPtr]0) | Out-Null
+        Start-Sleep -Milliseconds 200
+        Check (Log-Has '搜索对话框添加变量: 2 个到数值窗口') "搜索列表添加 2 个到数值窗口"
+        $stillOpen = Find-Dlg $proc.Id
+        Check ($stillOpen -ne [IntPtr]::Zero) "添加后对话框保持打开"
+
+        # ---- 5. 列表右键菜单出现（#32768 弹出菜单）后 WM_CANCELMODE 关闭 ----
+        # 注意：必须 PostMessage 触发（TrackPopupMenu 内部模态循环，
+        # SendMessage 会同步阻塞等菜单关闭，与后续 CANCELMODE 互相死锁）
+        $list = Find-ChildByClass $dlg "SysListView32"
+        if ($list -ne [IntPtr]::Zero) {
+            [OsTreeFindUi]::PostMessage($list, [OsTreeFindUi]::WM_CONTEXTMENU, $list, [IntPtr]0) | Out-Null
+            Start-Sleep -Milliseconds 400
+            $menu = Find-ByClass $proc.Id "#32768"
+            Check ($menu -ne [IntPtr]::Zero) "列表右键弹出上下文菜单（#32768）"
+            if ($menu -ne [IntPtr]::Zero) {
+                [OsTreeFindUi]::PostMessage($dlg, [OsTreeFindUi]::WM_CANCELMODE, [IntPtr]0, [IntPtr]0) | Out-Null
+                Start-Sleep -Milliseconds 300
+            }
+        } else {
+            Check $false "列表 SysListView32 存在"
+        }
+
+        # ---- 6. 确定 -> 关闭 + 定位日志 + 变量树展开可见 ----
         # IDD_PICK_OK = 2401
         [OsTreeFindUi]::SendMessage($dlg, [OsTreeFindUi]::WM_COMMAND, [IntPtr]2401, [IntPtr]0) | Out-Null
         Start-Sleep -Milliseconds 300
-
         $closed = $true
         $again = Find-Dlg $proc.Id
         if ($again -ne [IntPtr]::Zero) { $closed = $false }
         Check $closed "确定后弹窗关闭"
-
-        # ---- 4. 定位日志 + 变量树展开可见 ----
         Check (Log-Has '搜索定位变量: 选中 2 个，定位 2 个') "搜索定位变量日志（选中 2 定位 2）"
         $tree = Find-ChildByClass $main "SysTreeView32"
         Check ($tree -ne [IntPtr]::Zero -and [OsTreeFindUi]::IsWindowVisible($tree)) "定位后变量树可见（搜索自动展开）"

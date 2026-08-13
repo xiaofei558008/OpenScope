@@ -73,6 +73,8 @@ static int g_emu_count = -1; /* 最近一次 J-Link 扫描到的设备数（-1=�
 #define IDD_PICK_CANCEL  2402
 #define IDD_PICK_EDIT    2403
 #define IDD_PICK_LIST    2404
+#define IDM_PICK_ADD_CHART 2405 /* 搜索/选变量对话框列表右键：添加到波形窗口 */
+#define IDM_PICK_ADD_NUM   2406 /* 搜索/选变量对话框列表右键：添加到数值窗口 */
 #define IDD_EDIT_OK      2411
 #define IDD_EDIT_CANCEL  2412
 #define IDD_EDIT_TEXT    2413
@@ -1597,6 +1599,28 @@ static void pick_collect(HWND dlg, PickState* st)
     st->pr->count = out;
 }
 
+/* 前向声明：pick_proc 的右键添加复用树右键的批量添加逻辑（定义在后面） */
+static void add_ids_to_native(int chart, const int* ids, int n);
+
+/* 用户反馈：搜索/选变量对话框列表右键菜单——添加选中项到波形/数值窗口。
+ * 对话框保持打开，可连续添加；无选中项时菜单置灰。 */
+static void pick_show_add_menu(HWND dlg)
+{
+    HMENU m = CreatePopupMenu();
+    POINT pt;
+    int has_sel = 0, i2;
+    HWND hList = GetDlgItem(dlg, IDD_PICK_LIST);
+    int n2 = hList ? (int)SendMessageW(hList, LVM_GETITEMCOUNT, 0, 0) : 0;
+    for (i2 = 0; i2 < n2 && !has_sel; i2++)
+        if (SendMessageW(hList, LVM_GETITEMSTATE, (WPARAM)i2, LVIS_SELECTED) & LVIS_SELECTED)
+            has_sel = 1;
+    AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_PICK_ADD_CHART, L"添加到波形窗口");
+    AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_PICK_ADD_NUM, L"添加到数值窗口");
+    GetCursorPos(&pt);
+    TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, dlg, NULL);
+    DestroyMenu(m);
+}
+
 static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
@@ -1678,6 +1702,25 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         }
         return 0;
     }
+    case WM_OS_PICK_TEST_ADD: {
+        /* 测试钩子：等价右键菜单"添加到波形/数值窗口"（wParam=1 波形, 0 数值）。
+         * 对话框保持打开，可连续多次添加。 */
+        PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+        int ids[512], i, n;
+        if (!st || !st->pr) return 0;
+        pick_collect(dlg, st); /* 回填选中项 */
+        n = st->pr->count;
+        if (n > 512) n = 512;
+        for (i = 0; i < n; i++) ids[i] = st->pr->ids[i];
+        add_ids_to_native(wParam ? 1 : 0, ids, n);
+        os_log(OS_LOG_INFO, "搜索对话框添加变量: %d 个到%s", n,
+               wParam ? "波形窗口" : "数值窗口");
+        return 0;
+    }
+    case WM_CONTEXTMENU:
+        /* 列表上的右键（含测试注入）→ 添加变量上下文菜单 */
+        pick_show_add_menu(dlg);
+        return 0;
     case WM_NOTIFY: {
         NMHDR* h = (NMHDR*)lParam;
         if (h && h->idFrom == IDD_PICK_LIST) {
@@ -1686,6 +1729,11 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
                 PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
                 pick_collect(dlg, st);
                 DestroyWindow(dlg);
+                return 0;
+            }
+            if (h->code == NM_RCLICK) {
+                /* 用户反馈：搜索/选变量列表右键直接添加到窗口（对话框保持打开） */
+                pick_show_add_menu(dlg);
                 return 0;
             }
             if (h->code == LVN_KEYDOWN) {
@@ -1724,6 +1772,30 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         case IDD_PICK_CANCEL:
             DestroyWindow(dlg);
             return 0;
+        case IDM_PICK_ADD_CHART: { /* 列表右键：添加到波形窗口（对话框保持打开） */
+            PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+            int ids[512], i, n;
+            if (!st || !st->pr) return 0;
+            pick_collect(dlg, st);
+            n = st->pr->count;
+            if (n > 512) n = 512;
+            for (i = 0; i < n; i++) ids[i] = st->pr->ids[i];
+            add_ids_to_native(1, ids, n);
+            os_log(OS_LOG_INFO, "搜索对话框添加变量: %d 个到波形窗口", n);
+            return 0;
+        }
+        case IDM_PICK_ADD_NUM: { /* 列表右键：添加到数值窗口 */
+            PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+            int ids[512], i, n;
+            if (!st || !st->pr) return 0;
+            pick_collect(dlg, st);
+            n = st->pr->count;
+            if (n > 512) n = 512;
+            for (i = 0; i < n; i++) ids[i] = st->pr->ids[i];
+            add_ids_to_native(0, ids, n);
+            os_log(OS_LOG_INFO, "搜索对话框添加变量: %d 个到数值窗口", n);
+            return 0;
+        }
         }
         break;
     }
@@ -1774,7 +1846,7 @@ static void tree_find_vars(HWND hwnd)
         MessageBoxW(hwnd, L"请先加载 ELF 文件", L"搜索变量", MB_OK | MB_ICONINFORMATION);
         return;
     }
-    if (run_pick_dialog_titled(hwnd, &pr, L"搜索变量（模糊搜索·Ctrl+H）") != 0) return;
+    if (run_pick_dialog_titled(hwnd, &pr, L"搜索变量（模糊搜索·Ctrl+F）") != 0) return;
     n = pr.count;
     if (n > 512) n = 512;
     for (i = 0; i < n; i++) ids[i] = pr.ids[i];
@@ -2014,12 +2086,13 @@ static HWND active_win_hwnd(void)
     return NULL;
 }
 
-/* Bug4: 添加到原生波形/数值窗口（全部选中变量）：优先当前激活窗口，否则已有同类型窗口，否则新建 */
-static void tree_add_to_native(int chart)
+/* Bug4: 将叶 id 列表批量添加到原生波形/数值窗口（chart=1 波形，0 数值）：
+ * 优先当前激活窗口，否则已有同类型窗口，否则新建。树右键与搜索对话框共用。 */
+static void add_ids_to_native(int chart, const int* ids, int n)
 {
-    int ids[512], n = 0, i;
+    int i;
     HWND w;
-    if ((n = tree_selected_ids(ids, 512)) <= 0) return;
+    if (!ids || n <= 0) return;
     w = active_win_hwnd();
     if (!w || g_app.wins[g_cur_tab].is_module ||
         (chart ? !os_chart_is(w) : !os_num_is(w))) {
@@ -2039,8 +2112,15 @@ static void tree_add_to_native(int chart)
             if (chart) os_chart_add_var(w, ids[i]);
             else os_num_add_var(w, ids[i]);
         }
-        os_log(OS_LOG_INFO, "树右键批量添加变量: %d 个", n);
     }
+}
+
+static void tree_add_to_native(int chart)
+{
+    int ids[512], n = 0;
+    if ((n = tree_selected_ids(ids, 512)) <= 0) return;
+    add_ids_to_native(chart, ids, n);
+    os_log(OS_LOG_INFO, "树右键批量添加变量: %d 个", n);
 }
 
 
