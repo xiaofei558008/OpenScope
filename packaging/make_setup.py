@@ -3,7 +3,8 @@
 
 流程：
   1. 从 code/src/version.rc 读取版本号（唯一来源，保证与 exe 版本一致）；
-  2. 若 assets/openscope.ico 缺失则用 make_icon.py 生成；
+  2. 生成安装界面资源：assets/openscope.ico（缺失时 make_icon.py）+ 左侧广告栏
+     packaging/wizard_sidebar.bmp（icon/isolator.jpg 居中裁剪 164x314，每次重新生成）；
   3. 调用本地 tools/innosetup/ISCC.exe 编译 packaging/openscope.iss；
   4. 产出 dist/OpenScope-Setup-<display>.exe。
 
@@ -21,6 +22,8 @@ ISCC = os.path.join(ROOT, "tools", "innosetup", "ISCC.exe")
 ISS = os.path.join(ROOT, "packaging", "openscope.iss")
 VERSION_RC = os.path.join(ROOT, "code", "src", "version.rc")
 ICON = os.path.join(ROOT, "assets", "openscope.ico")
+SIDEBAR_JPG = os.path.join(ROOT, "icon", "isolator.jpg")
+SIDEBAR_BMP = os.path.join(ROOT, "packaging", "wizard_sidebar.bmp")
 
 
 def read_version():
@@ -46,6 +49,31 @@ def ensure_icon():
     r = subprocess.run([sys.executable, icon_py], cwd=ROOT)
     if r.returncode:
         raise SystemExit("[make_setup] icon generation failed")
+
+
+def ensure_sidebar_banner():
+    """生成安装向导左侧广告栏图片 packaging/wizard_sidebar.bmp。
+    Inno Setup 只支持 BMP；向导图标准尺寸 164x314（96dpi，运行时随 DPI 等比拉伸）。
+    每次打包重新生成，替换 icon/isolator.jpg 后下次打包即生效。"""
+    if not os.path.isfile(SIDEBAR_JPG):
+        raise SystemExit(f"[make_setup] 广告栏图片缺失: {SIDEBAR_JPG}")
+    try:
+        from PIL import Image
+    except ImportError:
+        raise SystemExit("[make_setup] 生成广告栏图片需要 Pillow，请先执行: pip install pillow")
+    w, h = 164, 314
+    src = Image.open(SIDEBAR_JPG).convert("RGB")
+    sw, sh = src.size
+    ratio = w / h
+    if sw / sh > ratio:  # 原图偏宽：居中裁左右
+        cw = int(round(sh * ratio))
+        box = ((sw - cw) // 2, 0, (sw + cw) // 2, sh)
+    else:                # 原图偏高：居中裁上下
+        ch = int(round(sw / ratio))
+        box = (0, (sh - ch) // 2, sw, (sh + ch) // 2)
+    src.crop(box).resize((w, h), Image.Resampling.LANCZOS).save(SIDEBAR_BMP, "BMP")
+    print(f"[make_setup] 广告栏: {os.path.relpath(SIDEBAR_JPG, ROOT)} "
+          f"-> {os.path.relpath(SIDEBAR_BMP, ROOT)} ({w}x{h} BMP)")
 
 
 def main():
@@ -77,6 +105,7 @@ def main():
                          "请先将 Inno Setup 安装到 tools\\innosetup\\（ISCC.exe 位于该目录）。")
     os.makedirs(os.path.join(ROOT, "dist"), exist_ok=True)
     ensure_icon()
+    ensure_sidebar_banner()
     cmd = [ISCC, ISS]
     print(f"[make_setup] ISCC {full} -> dist/OpenScope-Setup-{display}.exe")
     r = subprocess.run(cmd, cwd=ROOT)

@@ -25,3 +25,4 @@ tests/data.csv
 tools/
 dist/
 _tmp_*.exe
+packaging/wizard_sidebar.bmp
