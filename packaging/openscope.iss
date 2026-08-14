@@ -141,26 +141,36 @@ end;
 procedure CurPageChanged(CurPageID: Integer);
 var
   R: WinRect;
+  Shift: Integer;
+  PageW: Integer;
 begin
   { 引擎每次换页把 InnerPage 重置回客户区 (0,0)；SetWindowPos 对子窗口使用客户区
     坐标，直接校准到 [侧栏宽, 客户区宽]，幂等且无需状态 }
+  Shift := WizardForm.WizardBitmapImage.Width;
   GetWindowRect(WizardForm.InnerPage.Handle, R);
   SetWindowPos(WizardForm.InnerPage.Handle, 0,
-    WizardForm.WizardBitmapImage.Width, 0,
-    WizardForm.ClientWidth - WizardForm.WizardBitmapImage.Width,
+    Shift, 0,
+    WizardForm.ClientWidth - Shift,
     R.Bottom - R.Top, $4 or $10);
+  { 部分页面（欢迎/完成/准备安装等）在容器移位前完成布局，仍占满整个客户区，
+    会盖住左侧图片栏：按页面 ID 手动把当前页移到容器客户区原点（幂等）。
+    页面是容器的子窗口，坐标为容器客户区坐标。 }
+  PageW := WizardForm.ClientWidth - Shift;
+  if CurPageID = wpWelcome then
+    SetWindowPos(WizardForm.WelcomePage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
+  if CurPageID = wpSelectDir then
+    SetWindowPos(WizardForm.SelectDirPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
+  if CurPageID = wpSelectTasks then
+    SetWindowPos(WizardForm.SelectTasksPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
+  if CurPageID = wpReady then
+    SetWindowPos(WizardForm.ReadyPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
+  if CurPageID = wpPreparing then
+    SetWindowPos(WizardForm.PreparingPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
+  if CurPageID = wpInstalling then
+    SetWindowPos(WizardForm.InstallingPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
+  if CurPageID = wpFinished then
+    SetWindowPos(WizardForm.FinishedPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
   { 默认向导位图在内部页会被隐藏，强制在所有页面显示 }
   WizardForm.WizardBitmapImage.Visible := True;
-  { 欢迎/完成页文字被容器连带右移，左移回原位（页面激活后原生坐标才就绪） }
-  if CurPageID = wpWelcome then
-  begin
-    WizardForm.WelcomeLabel1.Left := WizardForm.WelcomeLabel1.Left - WizardForm.WizardBitmapImage.Width;
-    WizardForm.WelcomeLabel2.Left := WizardForm.WelcomeLabel2.Left - WizardForm.WizardBitmapImage.Width;
-  end;
-  if CurPageID = wpFinished then
-  begin
-    WizardForm.FinishedHeadingLabel.Left := WizardForm.FinishedHeadingLabel.Left - WizardForm.WizardBitmapImage.Width;
-    WizardForm.FinishedLabel.Left := WizardForm.FinishedLabel.Left - WizardForm.WizardBitmapImage.Width;
-  end;
 end;
 
