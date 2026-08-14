@@ -17,6 +17,7 @@ PrivilegesRequired=admin
 OutputDir=..\dist
 OutputBaseFilename=OpenScope-Setup-1.17.2
 SetupIconFile=..\assets\openscope.ico
+WizardImageFile=wizard_sidebar.bmp
 UninstallDisplayIcon={app}\OpenScope.exe
 Compression=lzma2/max
 SolidCompression=yes
@@ -62,9 +63,10 @@ Name: "{autodesktop}\OpenScope"; Filename: "{app}\OpenScope.exe"; Tasks: desktop
 Filename: "{app}\OpenScope.exe"; Description: "{cm:LaunchProgram,OpenScope}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-{ 左侧广告栏：每个安装页左侧显示 icon\isolator.jpg 裁剪图（164x314）+ 两行宣传文字。
+{ 左侧广告栏：每个安装页左侧显示 icon\isolator.bmp/jpg 裁剪图（164x314）+ 两行宣传文字。
   图片由 make_setup.py 每次打包重新生成 wizard_sidebar.bmp，经 [Files] dontcopy 打进
-  安装器，运行时 ExtractTemporaryFile 解出后加载。
+  安装器，运行时 ExtractTemporaryFile 解出后加载进默认向导位图控件
+  （Inno 自己的渲染路径，欢迎/完成页原生支持，内部页由 CurPageChanged 强制显示）。
   内部页容器 InnerPage 默认铺满整个客户区（modern 风格）会盖住图片：
   InitializeWizard 解除其对齐，CurPageChanged 每次换页按客户区坐标校准其位置
   （引擎每次换页会把它重置回客户区原点）。}
@@ -89,17 +91,11 @@ procedure InitializeWizard;
 var
   BmpPath: string;
 begin
-  { 隐藏默认向导横幅与右上角小图标，左侧区域交给自定义广告栏 }
-  WizardForm.WizardBitmapImage.Visible := False;
-  WizardForm.WizardSmallBitmapImage.Visible := False;
-
-  { 内部页容器解除对齐（否则属性赋值会被布局引擎重置）并缩到广告栏右侧 }
-  WizardForm.InnerPage.Align := alNone;
-  WizardForm.InnerPage.Left := WizardForm.WizardBitmapImage.Width;
-  WizardForm.InnerPage.Width := WizardForm.ClientWidth - WizardForm.InnerPage.Left;
-
+  { 欢迎/完成页的图片由 [Setup] WizardImageFile 编译期嵌入（官方机制）。
+    内部页用自定义 TBitmapImage 覆盖左侧栏；右上角小图标隐藏 }
   ExtractTemporaryFile('wizard_sidebar.bmp');
   BmpPath := ExpandConstant('{tmp}\wizard_sidebar.bmp');
+  WizardForm.WizardSmallBitmapImage.Visible := False;
 
   SidebarImage := TBitmapImage.Create(WizardForm);
   SidebarImage.Parent := WizardForm;
@@ -110,11 +106,16 @@ begin
   SidebarImage.Stretch := True;
   SidebarImage.Bitmap.LoadFromFile(BmpPath);
 
+  { 内部页容器解除对齐（否则属性赋值会被布局引擎重置）并缩到广告栏右侧 }
+  WizardForm.InnerPage.Align := alNone;
+  WizardForm.InnerPage.Left := WizardForm.WizardBitmapImage.Width;
+  WizardForm.InnerPage.Width := WizardForm.ClientWidth - WizardForm.InnerPage.Left;
+
   { 中文宣传语：苹果风格（PingFang 在 Windows 无内置，微软雅黑最接近） }
   SidebarTextCn := TNewStaticText.Create(WizardForm);
   SidebarTextCn.Parent := WizardForm;
   SidebarTextCn.Left := 6;
-  SidebarTextCn.Top := SidebarImage.Top + SidebarImage.Height + 12;
+  SidebarTextCn.Top := WizardForm.WizardBitmapImage.Top + WizardForm.WizardBitmapImage.Height + 12;
   SidebarTextCn.Width := 152;
   SidebarTextCn.Height := 22;
   SidebarTextCn.Caption := '晶圆上的生物提供技术支持';
@@ -148,6 +149,8 @@ begin
     WizardForm.WizardBitmapImage.Width, 0,
     WizardForm.ClientWidth - WizardForm.WizardBitmapImage.Width,
     R.Bottom - R.Top, $4 or $10);
+  { 默认向导位图在内部页会被隐藏，强制在所有页面显示 }
+  WizardForm.WizardBitmapImage.Visible := True;
   { 欢迎/完成页文字被容器连带右移，左移回原位（页面激活后原生坐标才就绪） }
   if CurPageID = wpWelcome then
   begin
@@ -160,3 +163,4 @@ begin
     WizardForm.FinishedLabel.Left := WizardForm.FinishedLabel.Left - WizardForm.WizardBitmapImage.Width;
   end;
 end;
+

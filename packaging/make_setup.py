@@ -22,7 +22,8 @@ ISCC = os.path.join(ROOT, "tools", "innosetup", "ISCC.exe")
 ISS = os.path.join(ROOT, "packaging", "openscope.iss")
 VERSION_RC = os.path.join(ROOT, "code", "src", "version.rc")
 ICON = os.path.join(ROOT, "assets", "openscope.ico")
-SIDEBAR_JPG = os.path.join(ROOT, "icon", "isolator.jpg")
+SIDEBAR_SRC_BMP = os.path.join(ROOT, "icon", "isolator.bmp")   # 优先：用户提供
+SIDEBAR_JPG = os.path.join(ROOT, "icon", "isolator.jpg")        # 兜底
 SIDEBAR_BMP = os.path.join(ROOT, "packaging", "wizard_sidebar.bmp")
 
 
@@ -54,15 +55,17 @@ def ensure_icon():
 def ensure_sidebar_banner():
     """生成安装向导左侧广告栏图片 packaging/wizard_sidebar.bmp。
     Inno Setup 只支持 BMP；向导图标准尺寸 164x314（96dpi，运行时随 DPI 等比拉伸）。
-    每次打包重新生成，替换 icon/isolator.jpg 后下次打包即生效。"""
-    if not os.path.isfile(SIDEBAR_JPG):
-        raise SystemExit(f"[make_setup] 广告栏图片缺失: {SIDEBAR_JPG}")
+    图片源优先 icon/isolator.bmp（用户提供），缺失时退回 icon/isolator.jpg。
+    每次打包重新生成，替换图片后下次打包即生效。"""
+    src_file = SIDEBAR_SRC_BMP if os.path.isfile(SIDEBAR_SRC_BMP) else SIDEBAR_JPG
+    if not os.path.isfile(src_file):
+        raise SystemExit(f"[make_setup] 广告栏图片缺失: {src_file}（icon/isolator.bmp 或 isolator.jpg）")
     try:
         from PIL import Image
     except ImportError:
         raise SystemExit("[make_setup] 生成广告栏图片需要 Pillow，请先执行: pip install pillow")
     w, h = 164, 314
-    src = Image.open(SIDEBAR_JPG).convert("RGB")
+    src = Image.open(src_file).convert("RGB")
     sw, sh = src.size
     ratio = w / h
     if sw / sh > ratio:  # 原图偏宽：居中裁左右
@@ -72,7 +75,7 @@ def ensure_sidebar_banner():
         ch = int(round(sw / ratio))
         box = (0, (sh - ch) // 2, sw, (sh + ch) // 2)
     src.crop(box).resize((w, h), Image.Resampling.LANCZOS).save(SIDEBAR_BMP, "BMP")
-    print(f"[make_setup] 广告栏: {os.path.relpath(SIDEBAR_JPG, ROOT)} "
+    print(f"[make_setup] 广告栏: {os.path.relpath(src_file, ROOT)} ({sw}x{sh}) "
           f"-> {os.path.relpath(SIDEBAR_BMP, ROOT)} ({w}x{h} BMP)")
 
 
