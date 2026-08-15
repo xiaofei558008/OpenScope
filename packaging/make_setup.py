@@ -24,7 +24,9 @@ VERSION_RC = os.path.join(ROOT, "code", "src", "version.rc")
 ICON = os.path.join(ROOT, "assets", "openscope.ico")
 SIDEBAR_SRC_BMP = os.path.join(ROOT, "icon", "isolator.bmp")   # 优先：用户提供
 SIDEBAR_JPG = os.path.join(ROOT, "icon", "isolator.jpg")        # 兜底
-SIDEBAR_BMP = os.path.join(ROOT, "packaging", "wizard_sidebar.bmp")
+SIDEBAR_BMP = os.path.join(ROOT, "packaging", "wizard_sidebar.bmp")    # 第 1 张（iso1/iso0）
+SIDEBAR_BMP2 = os.path.join(ROOT, "packaging", "wizard_sidebar2.bmp")  # 第 2 张（iso2）
+SIDEBAR_BMP3 = os.path.join(ROOT, "packaging", "wizard_sidebar3.bmp")  # 第 3 张（iso3）
 
 
 def read_version():
@@ -53,51 +55,49 @@ def ensure_icon():
 
 
 def ensure_sidebar_banner():
-    """生成安装向导左侧广告栏图片 packaging/wizard_sidebar.bmp（164x314）。
-    按 iso1(缺则 iso0)、iso2、iso3 顺序纵向拼接三张产品图：
-    每张等比缩放到 164 宽、上下留 8px 间距，总高度不超 314（等比再缩小）。
-    三张都缺失时退回 icon/isolator.bmp / isolator.jpg 单图裁剪。
+    """生成安装向导左侧广告栏图片（每张 164x314，单图等比缩放居中、白底）。
+    三张产品图分别对应三个安装步骤：
+      wizard_sidebar.bmp  = iso1（缺则 iso0）——编译期嵌入，欢迎/完成页
+      wizard_sidebar2.bmp = iso2                  ——选择目录页/安装中页
+      wizard_sidebar3.bmp = iso3                  ——选择任务页
+    缺失的图生成空白横幅占位；三张都缺失时退回 isolator.bmp/jpg 单图裁剪。
     每次打包重新生成，替换图片后下次打包即生效。"""
     try:
         from PIL import Image
     except ImportError:
         raise SystemExit("[make_setup] 生成广告栏图片需要 Pillow，请先执行: pip install pillow")
     w, h = 164, 314
-    gap = 8
 
-    def _join(srcs):
-        imgs = [Image.open(os.path.join(ROOT, s)).convert("RGB") for s in srcs]
-        scaled = [im.resize((w, max(1, round(im.height * w / im.width))),
-                            Image.Resampling.LANCZOS) for im in imgs]
-        total = sum(im.height for im in scaled) + gap * (len(scaled) - 1)
-        if total > h:  # 超高一并等比缩小
-            k = (h - gap * (len(scaled) - 1)) / sum(im.height for im in scaled)
-            scaled = [im.resize((w, max(1, round(im.height * k))),
-                                Image.Resampling.LANCZOS) for im in scaled]
-            total = sum(im.height for im in scaled) + gap * (len(scaled) - 1)
+    def _fit(src_path):
+        """单图等比缩放居中放入 164x314 白底横幅"""
+        im = Image.open(src_path).convert("RGB")
+        k = min(w / im.width, h / im.height)
+        im = im.resize((max(1, round(im.width * k)), max(1, round(im.height * k))),
+                       Image.Resampling.LANCZOS)
         canvas = Image.new("RGB", (w, h), (255, 255, 255))
-        y = (h - total) // 2  # 整体垂直居中
-        for im in scaled:
-            canvas.paste(im, (0, y))
-            y += im.height + gap
-        canvas.save(SIDEBAR_BMP, "BMP")
-        return ", ".join(os.path.basename(s) for s in srcs)
+        canvas.paste(im, ((w - im.width) // 2, (h - im.height) // 2))
+        return canvas
 
     iso1 = os.path.join(ROOT, "icon", "iso1.bmp")
     iso0 = os.path.join(ROOT, "icon", "iso0.bmp")
     iso2 = os.path.join(ROOT, "icon", "iso2.bmp")
     iso3 = os.path.join(ROOT, "icon", "iso3.bmp")
-    # 顺序：iso1（缺则 iso0）、iso2、iso3；缺的跳过
-    seq = []
     first = iso1 if os.path.isfile(iso1) else iso0
-    for f in (first, iso2, iso3):
-        if os.path.isfile(f):
-            seq.append(os.path.relpath(f, ROOT))
-    if seq:
-        names = _join(seq)
-        print(f"[make_setup] 广告栏: 拼接 {names} -> {os.path.relpath(SIDEBAR_BMP, ROOT)} ({w}x{h} BMP)")
+    slots = [(first, SIDEBAR_BMP), (iso2, SIDEBAR_BMP2), (iso3, SIDEBAR_BMP3)]
+    found = 0
+    for src, out in slots:
+        if os.path.isfile(src):
+            _fit(src).save(out, "BMP")
+            found += 1
+            print(f"[make_setup] 广告栏: {os.path.relpath(src, ROOT)} "
+                  f"-> {os.path.relpath(out, ROOT)} ({w}x{h} BMP)")
+        else:
+            Image.new("RGB", (w, h), (255, 255, 255)).save(out, "BMP")
+            print(f"[make_setup] 广告栏: {os.path.relpath(src, ROOT)} 缺失，"
+                  f"{os.path.relpath(out, ROOT)} 用空白横幅占位")
+    if found:
         return
-    # 兜底：单图裁剪
+    # 兜底：isolator 单图裁剪
     src_file = SIDEBAR_SRC_BMP if os.path.isfile(SIDEBAR_SRC_BMP) else SIDEBAR_JPG
     if not os.path.isfile(src_file):
         raise SystemExit(f"[make_setup] 广告栏图片缺失: {src_file}（icon/iso*.bmp 或 isolator.*）")

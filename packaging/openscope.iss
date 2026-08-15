@@ -51,8 +51,10 @@ Type: filesandordirs; Name: "{app}\modules"
 Source: "..\bin\Release\OpenScope.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dll\jlink.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 Source: "..\dll\JLink_x64.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
-; 左侧广告栏图片（make_setup.py 从 icon\isolator.jpg 生成，[Code] 运行时加载，不安装到目标机）
+; 左侧广告栏图片（make_setup.py 从 icon\iso*.bmp 生成，[Code] 运行时按页面加载，不安装到目标机）
 Source: "wizard_sidebar.bmp"; Flags: dontcopy
+Source: "wizard_sidebar2.bmp"; Flags: dontcopy
+Source: "wizard_sidebar3.bmp"; Flags: dontcopy
 
 [Icons]
 Name: "{group}\OpenScope"; Filename: "{app}\OpenScope.exe"
@@ -63,13 +65,14 @@ Name: "{autodesktop}\OpenScope"; Filename: "{app}\OpenScope.exe"; Tasks: desktop
 Filename: "{app}\OpenScope.exe"; Description: "{cm:LaunchProgram,OpenScope}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-{ 左侧广告栏：每个安装页左侧显示 icon\isolator.bmp/jpg 裁剪图（164x314）+ 两行宣传文字。
-  图片由 make_setup.py 每次打包重新生成 wizard_sidebar.bmp，经 [Files] dontcopy 打进
-  安装器，运行时 ExtractTemporaryFile 解出后加载进默认向导位图控件
-  （Inno 自己的渲染路径，欢迎/完成页原生支持，内部页由 CurPageChanged 强制显示）。
-  内部页容器 InnerPage 默认铺满整个客户区（modern 风格）会盖住图片：
-  InitializeWizard 解除其对齐，CurPageChanged 每次换页按客户区坐标校准其位置
-  （引擎每次换页会把它重置回客户区原点）。}
+{ 左侧广告栏：每个安装页左侧按步骤展示一张产品图（164x314 横幅，图片居中缩放）：
+    欢迎/准备安装 = iso1，目录/安装中 = iso2，任务 = iso3（完成页由嵌入的 iso1 显示）。
+  图片由 make_setup.py 从 icon\iso*.bmp 生成三张 wizard_sidebarN.bmp，[Files] dontcopy
+  打进安装器后运行时解出；欢迎/完成页由 [Setup] WizardImageFile 编译期嵌入渲染
+  （Inno 官方机制），内部页用窗口化 STATIC 位图覆盖层（窗体级非窗口化图片控件
+  在内部页不绘制），换页用 STM_SETIMAGE 切换。
+  内部页容器 InnerPage 默认铺满整个客户区（modern 风格）会盖住左栏：
+  CurPageChanged 每次换页按客户区坐标校准容器与当前页位置（引擎会重置）。}
 type
   WinRect = record
     Left: Integer;
@@ -79,32 +82,51 @@ type
   end;
 
 var
-  SidebarImage: TBitmapImage;
+  SidebarWnd: HWND;
+  SidebarHbm1: THandle;
+  SidebarHbm2: THandle;
+  SidebarHbm3: THandle;
   SidebarTextCn: TNewStaticText;
   SidebarTextUrl: TNewStaticText;
+  SidebarCopyright: TNewStaticText;
+  SidebarGithub: TNewStaticText;
 
 function SetWindowPos(hWnd: HWND; hWndInsertAfter: HWND; X, Y, cx, cy: Integer;
   uFlags: Cardinal): BOOL; external 'SetWindowPos@user32.dll stdcall';
 function GetWindowRect(hWnd: HWND; var R: WinRect): BOOL; external 'GetWindowRect@user32.dll stdcall';
+function CreateWindowEx(dwExStyle: DWORD; lpClassName, lpWindowName: string;
+  dwStyle: DWORD; X, Y, nWidth, nHeight: Integer; hWndParent: HWND; hMenu: THandle;
+  hInstance: THandle; lpParam: LongInt): HWND; external 'CreateWindowExW@user32.dll stdcall';
+function LoadImage(hInst: THandle; name: string; typ: Cardinal; cx, cy: Integer;
+  fuLoad: Cardinal): THandle; external 'LoadImageW@user32.dll stdcall';
+function SendMessageW(hWnd: HWND; Msg: Cardinal; wParam: LongInt; lParam: LongInt): LongInt;
+  external 'SendMessageW@user32.dll stdcall';
 
 procedure InitializeWizard;
-var
-  BmpPath: string;
 begin
   { 欢迎/完成页的图片由 [Setup] WizardImageFile 编译期嵌入（官方机制）。
-    内部页用自定义 TBitmapImage 覆盖左侧栏；右上角小图标隐藏 }
+    内部页用窗口化 STATIC 位图覆盖层绘制左侧栏图片（窗体级非窗口化图片控件
+    在内部页不绘制）；右上角小图标隐藏 }
   ExtractTemporaryFile('wizard_sidebar.bmp');
-  BmpPath := ExpandConstant('{tmp}\wizard_sidebar.bmp');
+  ExtractTemporaryFile('wizard_sidebar2.bmp');
+  ExtractTemporaryFile('wizard_sidebar3.bmp');
   WizardForm.WizardSmallBitmapImage.Visible := False;
 
-  SidebarImage := TBitmapImage.Create(WizardForm);
-  SidebarImage.Parent := WizardForm;
-  SidebarImage.Left := WizardForm.WizardBitmapImage.Left;
-  SidebarImage.Top := WizardForm.WizardBitmapImage.Top;
-  SidebarImage.Width := WizardForm.WizardBitmapImage.Width;
-  SidebarImage.Height := WizardForm.WizardBitmapImage.Height;
-  SidebarImage.Stretch := True;
-  SidebarImage.Bitmap.LoadFromFile(BmpPath);
+  { 三张产品位图一次加载并缩放到图片栏控件尺寸（横幅内照片已上下左右居中，
+    SS_BITMAP 不拉伸，由 LoadImage 的 cx/cy 缩放实现满栏居中显示）；
+    换页用 STM_SETIMAGE 切换 }
+  SidebarHbm1 := LoadImage(0, ExpandConstant('{tmp}\wizard_sidebar.bmp'), 0,
+    WizardForm.WizardBitmapImage.Width, WizardForm.WizardBitmapImage.Height, $10);
+  SidebarHbm2 := LoadImage(0, ExpandConstant('{tmp}\wizard_sidebar2.bmp'), 0,
+    WizardForm.WizardBitmapImage.Width, WizardForm.WizardBitmapImage.Height, $10);
+  SidebarHbm3 := LoadImage(0, ExpandConstant('{tmp}\wizard_sidebar3.bmp'), 0,
+    WizardForm.WizardBitmapImage.Width, WizardForm.WizardBitmapImage.Height, $10);
+  SidebarWnd := CreateWindowEx(0, 'STATIC', '',
+    $40000000 or $10000000 or $0E,             { WS_CHILD | WS_VISIBLE | SS_BITMAP }
+    WizardForm.WizardBitmapImage.Left, WizardForm.WizardBitmapImage.Top,
+    WizardForm.WizardBitmapImage.Width, WizardForm.WizardBitmapImage.Height,
+    WizardForm.Handle, 0, 0, 0);
+  SendMessageW(SidebarWnd, $0172, 0, SidebarHbm1);   { STM_SETIMAGE, IMAGE_BITMAP }
 
   { 内部页容器解除对齐（否则属性赋值会被布局引擎重置）并缩到广告栏右侧 }
   WizardForm.InnerPage.Align := alNone;
@@ -136,6 +158,35 @@ begin
   SidebarTextUrl.Font.Name := 'Consolas';
   SidebarTextUrl.Font.Size := 9;
   SidebarTextUrl.Font.Color := $3C3C3C;
+
+  { 版权说明（仅第一页显示） }
+  SidebarCopyright := TNewStaticText.Create(WizardForm);
+  SidebarCopyright.Parent := WizardForm;
+  SidebarCopyright.Left := 6;
+  SidebarCopyright.Top := SidebarTextUrl.Top + SidebarTextUrl.Height + 14;
+  SidebarCopyright.Width := 152;
+  SidebarCopyright.Height := 20;
+  SidebarCopyright.Caption := 'Copyright (C) 2026 OpenScope';
+  SidebarCopyright.Color := clWindow;
+  SidebarCopyright.Font.Name := 'Microsoft YaHei';
+  SidebarCopyright.Font.Size := 8;
+  SidebarCopyright.Font.Color := $3C3C3C;
+  SidebarCopyright.Visible := False;
+
+  { GitHub 仓库地址（仅第一页显示） }
+  SidebarGithub := TNewStaticText.Create(WizardForm);
+  SidebarGithub.Parent := WizardForm;
+  SidebarGithub.Left := 6;
+  SidebarGithub.Top := SidebarCopyright.Top + SidebarCopyright.Height + 2;
+  SidebarGithub.Width := 152;
+  SidebarGithub.Height := 28;
+  SidebarGithub.Caption := 'github.com/xiaofei558008/OpenScope';
+  SidebarGithub.WordWrap := True;
+  SidebarGithub.Color := clWindow;
+  SidebarGithub.Font.Name := 'Consolas';
+  SidebarGithub.Font.Size := 7;
+  SidebarGithub.Font.Color := $3C3C3C;
+  SidebarGithub.Visible := False;
 end;
 
 procedure CurPageChanged(CurPageID: Integer);
@@ -172,5 +223,18 @@ begin
     SetWindowPos(WizardForm.FinishedPage.Handle, 0, 0, 0, PageW, R.Bottom - R.Top, $4 or $10);
   { 默认向导位图在内部页会被隐藏，强制在所有页面显示 }
   WizardForm.WizardBitmapImage.Visible := True;
+  { 三个步骤各一张产品图：欢迎/准备安装=iso1，目录/安装中=iso2，任务=iso3，
+    完成页由嵌入的 iso1 显示（覆盖层同步切到 iso1，保持一致） }
+  if CurPageID = wpSelectDir then
+    SendMessageW(SidebarWnd, $0172, 0, SidebarHbm2)
+  else if CurPageID = wpSelectTasks then
+    SendMessageW(SidebarWnd, $0172, 0, SidebarHbm3)
+  else if (CurPageID = wpPreparing) or (CurPageID = wpInstalling) then
+    SendMessageW(SidebarWnd, $0172, 0, SidebarHbm2)
+  else
+    SendMessageW(SidebarWnd, $0172, 0, SidebarHbm1);
+  { 版权说明与 GitHub 仓库地址仅第一页（欢迎页）显示 }
+  SidebarCopyright.Visible := (CurPageID = wpWelcome);
+  SidebarGithub.Visible := (CurPageID = wpWelcome);
 end;
 
