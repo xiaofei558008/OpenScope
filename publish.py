@@ -189,7 +189,7 @@ def build_page(items, archives=()):
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>OpenScope 软件下载 - 晶圆上的生物</title>
+<title>OpenScope 软件下载</title>
 <style>
   * {{ margin: 0; padding: 0; box-sizing: border-box; }}
   body {{ font-family: -apple-system, "Segoe UI", "Microsoft YaHei", Roboto, sans-serif;
@@ -232,6 +232,8 @@ def build_page(items, archives=()):
            border-left: 4px solid {COLOR_ACCENT}; font-size: 14px; line-height: 1.8; color: #475569; }}
   .notes a {{ color: {COLOR_ACCENT}; }}
   .footer {{ text-align: center; color: #94a3b8; font-size: 13px; padding: 20px; }}
+  .footer a {{ color: #475569; text-decoration: none; }}
+  .footer a:hover {{ color: {COLOR_PRIMARY}; }}
 </style>
 </head>
 <body>
@@ -243,8 +245,8 @@ def build_page(items, archives=()):
   </div>
   <div class="container">
     <h1>OpenScope 软件下载</h1>
-    <p class="lead">OpenScope 是晶圆上的生物（www.opendebugger.com）开发的 MCU 变量采集与校准工具，配合 J-Link 隔离器使用。<br>
-    支持 SWD / JTAG 接口，实时采集变量、CSV 记录与回放、波形/数值/示波器窗口，适用于嵌入式调试与电机/编码器等场景。</p>
+    <p class="lead">OpenScope 是一款 MCU 变量采集与校准工具，可通过 J-Link 仿真器连接目标芯片使用。<br>
+    支持 SWD / JTAG 接口，实时采集变量、CSV 记录与回放、波形/数值窗口，适用于嵌入式调试与电机/编码器等场景。</p>
 
     {latest_card}
 
@@ -265,7 +267,7 @@ def build_page(items, archives=()):
       <br><b>支持：</b>如有使用问题，请联系我们或关注公众号获取技术支持。
     </div>
   </div>
-  <div class="footer">© 2026 晶圆上的生物 · OpenScope · www.opendebugger.com</div>
+  <div class="footer">© 2026 OpenScope · www.opendebugger.com<br><a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener">粤ICP备2025480013号-1</a></div>
 </body>
 </html>
 """
