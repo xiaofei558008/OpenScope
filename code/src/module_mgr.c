@@ -81,28 +81,25 @@ int os_modmgr_load(void)
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 
-    /* 选择驱动模块：优先 JLink */
+    /* AD-13：收集全部驱动模块（多驱动可选）；默认选中 JLink，无 JLink 时选首个驱动 */
     g_app.driver = NULL;
     g_app.driver_ctx = NULL;
+    g_app.driver_count = 0;
     {
-        int i;
+        int i, jlink_idx = -1;
         for (i = 0; i < g_app.mod_count; i++) {
             OS_Module* m = &g_app.mods[i];
-            if ((m->capabilities & OS_CAP_DRIVER) && name_has_jlink(m->name)) {
-                g_app.driver = m;
-                g_app.driver_ctx = g_app.mod_ctx[i];
-                break;
+            if (m->capabilities & OS_CAP_DRIVER) {
+                if (jlink_idx < 0 && name_has_jlink(m->name)) jlink_idx = g_app.driver_count;
+                g_app.drivers[g_app.driver_count] = m;
+                g_app.driver_ctxs[g_app.driver_count] = g_app.mod_ctx[i];
+                g_app.driver_count++;
             }
         }
-        if (!g_app.driver) {
-            for (i = 0; i < g_app.mod_count; i++) {
-                OS_Module* m = &g_app.mods[i];
-                if (m->capabilities & OS_CAP_DRIVER) {
-                    g_app.driver = m;
-                    g_app.driver_ctx = g_app.mod_ctx[i];
-                    break;
-                }
-            }
+        if (g_app.driver_count > 0) {
+            int sel = (jlink_idx >= 0) ? jlink_idx : 0;
+            g_app.driver = g_app.drivers[sel];
+            g_app.driver_ctx = g_app.driver_ctxs[sel];
         }
     }
     /* 窗口模块列表 */
@@ -123,6 +120,35 @@ int os_modmgr_load(void)
     else
         os_log(OS_LOG_WARN, "未找到驱动模块（J-Link 等）");
     return loaded;
+}
+
+int os_modmgr_driver_count(void)
+{
+    return g_app.driver_count;
+}
+
+const char* os_modmgr_driver_name(int idx)
+{
+    if (idx < 0 || idx >= g_app.driver_count) return NULL;
+    return g_app.drivers[idx]->name;
+}
+
+int os_modmgr_driver_index(void)
+{
+    int i;
+    for (i = 0; i < g_app.driver_count; i++)
+        if (g_app.drivers[i] == g_app.driver) return i;
+    return -1;
+}
+
+int os_modmgr_select_driver(int idx)
+{
+    if (idx < 0 || idx >= g_app.driver_count) return OS_ERR_INVALID_ARG;
+    if (g_app.driver && g_app.driver->command && g_app.driver != g_app.drivers[idx])
+        g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+    g_app.driver = g_app.drivers[idx];
+    g_app.driver_ctx = g_app.driver_ctxs[idx];
+    return OS_ERR_OK;
 }
 
 void os_modmgr_shutdown(void)

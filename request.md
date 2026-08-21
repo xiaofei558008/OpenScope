@@ -20,6 +20,10 @@ BMAD管理和规划整个开发、测试流程；全程自动化，不再需要�
 10、每次BMAD执行完全部任务，请用windows 发出语音，“任务执行完毕”，提示我来检查；
 11、软件打包好之后，发布到云服务器上去，www.opendebugger.com，目录为：D:\OpenDebugger，里面包含request.md
 12、readme.md 内容写入帮助文档，F1键弹出帮助文档，帮助菜单下也添加一个帮助文档选项
+13、增加stlink支持，stlink驱动安装目录在C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\api\lib 下的CubeProgrammer_API.dll
+	参考：https://github.com/DigitalAllianceStudio/HSS_DataVisualizer 项目支持 stlink 和jlink
+	STM32G431RB nucleo 已经接入本电脑，可以随时查看；
+	开发完成后，进行stlink 的全量测试，修复bug，回归测试、单元测试都通过后结束任务；
 
 ## 新增特性：
 1、关闭软件时，记录软件的页面布局，方便下次启动软件后恢复上次调试界面；

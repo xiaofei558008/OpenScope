@@ -120,6 +120,34 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src module\stlink\tests\stlink_smoke.c ^
+    /Fe:tests\bin\stlink_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] stlink_smoke build failed
+  exit /b 1
+)
+
+echo Running stlink smoke (ST-Link module bind/scan/get_info)...
+tests\bin\stlink_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] stlink_smoke FAILED
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I code\src module\stlink\tests\stlink_target_smoke.c ^
+    /Fe:tests\bin\stlink_target_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] stlink_target_smoke build failed
+  exit /b 1
+)
+
+echo Running stlink target smoke (ST-Link connect/read/write/restore)...
+tests\bin\stlink_target_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] stlink_target_smoke FAILED
+  exit /b 1
+)
+
 echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
 tests\bin\bug9_smoke.exe Cortex-M4 50
 if errorlevel 1 (

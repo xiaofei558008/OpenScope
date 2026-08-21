@@ -47,7 +47,8 @@ enum {
     OS_CMD_HALT         = 8,
     OS_CMD_GO           = 9,
     OS_CMD_RESET        = 10,
-    OS_CMD_ELF_RELOADED = 11 /* ELF 重新加载后由框架广播，模块应重解析窗口变量 */
+    OS_CMD_ELF_RELOADED = 11, /* ELF 重新加载后由框架广播，模块应重解析窗口变量 */
+    OS_CMD_GET_FREQ     = 12  /* out: OS_FreqList* 驱动支持的速度档位(kHz)；不支持返回负错误码 */
 };
 
 /* 仿真口类型 */
@@ -90,6 +91,14 @@ typedef struct OS_MemReq {
     uint32_t size;
     void*    data;
 } OS_MemReq;
+
+/* OS_CMD_GET_FREQ 输出：驱动支持的速度档位（ST-Link 为枚举档位，J-Link 可不实现） */
+typedef struct OS_FreqList {
+    int swd[16];
+    int swd_n;
+    int jtag[16];
+    int jtag_n;
+} OS_FreqList;
 
 /* 采集样本：框架在轮询线程中生成，分发给窗口模块与绘图/记录器 */
 typedef struct OS_Sample {

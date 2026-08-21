@@ -57,6 +57,7 @@
 #define IDC_CFG_SPEED    2103
 #define IDC_CFG_EMU      2104
 #define IDC_CFG_REFRESH  2105
+#define IDC_CFG_DRIVER   2106 /* AD-13: 仿真器类型下拉（J-Link/ST-Link） */
 
 /* 芯片核心预置列表（J-Link "Device=" 名称）。
  * F17：纯 SWD/JTAG 内存读写/读 Flash 地址内容只需通用核心名（CoreSight AHB-AP 架构一致），
@@ -107,6 +108,8 @@ typedef struct ModWinMenuItem {
 static LRESULT theme_ctlcolor(HDC hdc, int edit);
 /* F20: 标准控件 SetWindowTheme 暗色化（定义在 os_mainwin_apply_theme 前，供对话框先使用） */
 static void ctrl_dark_theme(HWND h);
+/* AD-13: 当前驱动名（定义在连接配置段，cmd_connect 前向引用） */
+static const char* drv_name(void);
 
 static const wchar_t* g_main_class = L"OpenScopeMain";
 static const wchar_t* g_right_class = L"OSRightPanel";
@@ -681,8 +684,8 @@ static void layout(void)
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
-            { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 }, { IDC_CFG_SPEED, 92, 1 },
-            { IDC_CFG_EMU, 240, 1 }, { IDC_CFG_REFRESH, 48, 0 },
+            { IDC_CFG_DRIVER, 110, 1 }, { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 },
+            { IDC_CFG_SPEED, 92, 1 }, { IDC_CFG_EMU, 200, 1 }, { IDC_CFG_REFRESH, 48, 0 },
         };
         int i, x = 6;
         for (i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
@@ -1169,15 +1172,17 @@ static void cmd_connect(void)
     OS_ConnectCfg cfg;
     LRESULT ifi, emu, dci;
     if (!g_app.driver || !g_app.driver->command) {
-        os_log(OS_LOG_ERROR, "未加载驱动模块（jlink.dll）");
+        os_log(OS_LOG_ERROR, "未加载驱动模块");
         set_status(0, L"未加载驱动模块");
         return;
     }
-    /* 无仿真器：弹窗提示（需求：扫描不到 J-Link 设备时告知用户） */
+    /* 无仿真器：弹窗提示（需求：扫描不到设备时告知用户；驱动感知） */
     if (g_emu_count <= 0) {
-        MessageBoxW(g_app.hMain,
-                    L"没有发现 JLink 设备，请确认仿真器已插入 USB 并点击「刷新」。",
-                    L"J-Link", MB_OK | MB_ICONWARNING);
+        wchar_t msg[256], cap[64], dn[64];
+        os_utf8_to_wide_buf(drv_name(), dn, 64);
+        _snwprintf(msg, 256, L"没有发现 %s 设备，请确认仿真器已插入 USB 并点击「刷新」。", dn);
+        _snwprintf(cap, 64, L"%s", dn);
+        MessageBoxW(g_app.hMain, msg, cap, MB_OK | MB_ICONWARNING);
         return;
     }
     /* 直接读取界面配置，不再弹配置对话框 */
@@ -1217,8 +1222,8 @@ static void cmd_connect(void)
     g_app.connected = c;
     memset(&info, 0, sizeof(info));
     g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
-    os_log(OS_LOG_INFO, "已连接: %s（%s, J-Link DLL %s, HW %d, FW %d）",
-           info.emulator[0] ? info.emulator : "?", info.name, info.dll_version,
+    os_log(OS_LOG_INFO, "已连接: %s（%s, %s DLL %s, HW %d, FW %d）",
+           info.emulator[0] ? info.emulator : "?", info.name, drv_name(), info.dll_version,
            info.hw_version, info.fw_version);
     refresh_status();
     os_mainwin_update_buttons();
@@ -1235,12 +1240,19 @@ static void cmd_disconnect(void)
     os_mainwin_update_buttons();
 }
 
-/* 扫描 J-Link 设备并填充主界面下拉（返回设备数；不弹窗，结果进日志/下拉） */
+/* 当前驱动名（消息显示用） */
+static const char* drv_name(void)
+{
+    return (g_app.driver && g_app.driver->name[0]) ? g_app.driver->name : "J-Link";
+}
+
+/* 扫描当前驱动的设备并填充主界面下拉（返回设备数；不弹窗，结果进日志/下拉） */
 static int cfg_fill_emus(void)
 {
     OS_DeviceInfo items[16];
     OS_ScanReq req;
     HWND h;
+    wchar_t line[256];
     int i, n;
     if (!g_app.driver || !g_app.driver->command) return -1;
     memset(&req, 0, sizeof(req));
@@ -1253,30 +1265,99 @@ static int cfg_fill_emus(void)
     if (!h) return n;
     SendMessageW(h, CB_RESETCONTENT, 0, 0);
     for (i = 0; i < n && i < 16; i++) {
-        wchar_t line[256];
         _snwprintf(line, 256, L"%hs (SN:%hs)", items[i].name, items[i].serial);
         SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)line);
     }
     if (n > 0) {
         SendMessageW(h, CB_SETCURSEL, 0, 0);
     } else {
-        SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)L"未发现 J-Link 设备");
+        _snwprintf(line, 256, L"未发现 %hs 设备", drv_name());
+        SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)line);
         SendMessageW(h, CB_SETCURSEL, 0, 0);
     }
-    os_log(OS_LOG_INFO, "J-Link 设备扫描: %d 个", n);
+    os_log(OS_LOG_INFO, "%s 设备扫描: %d 个", drv_name(), n);
     return n;
 }
 
-/* 主界面连接配置初始化：MCU型号/接口/速度下拉 + 扫描设备列表（模块加载后调用） */
+/* AD-13：填充"仿真器"下拉（全部 OS_CAP_DRIVER 模块） */
+static void cfg_fill_drivers(void)
+{
+    HWND h = GetDlgItem(g_app.hMain, IDC_CFG_DRIVER);
+    int i, n = os_modmgr_driver_count();
+    if (!h) return;
+    SendMessageW(h, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < n; i++) {
+        const char* nm = os_modmgr_driver_name(i);
+        wchar_t w[64];
+        if (!nm) continue;
+        os_utf8_to_wide_buf(nm, w, 64);
+        SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)w);
+    }
+    {
+        int idx = os_modmgr_driver_index();
+        SendMessageW(h, CB_SETCURSEL, (WPARAM)(idx >= 0 ? idx : 0), 0);
+    }
+}
+
+/* 按当前驱动刷新速度下拉：驱动实现 OS_CMD_GET_FREQ（如 ST-Link 枚举档位）则用其档位，否则用 J-Link 预置 */
+static void cfg_fill_speeds(void)
+{
+    HWND h = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
+    OS_FreqList fl;
+    int i, iface, use_freq = 0;
+    static const int speeds[] = { 0, 50, 100, 200, 400, 1000, 2000, 4000, 5000, 8000, 10000, 12000, 15000, 20000, 25000, 30000, 40000, 50000 };
+    if (!h) return;
+    iface = (SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_IFACE), CB_GETCURSEL, 0, 0) == 1)
+                ? OS_IF_JTAG : OS_IF_SWD;
+    memset(&fl, 0, sizeof(fl));
+    if (g_app.driver && g_app.driver->command &&
+        g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_FREQ, NULL, &fl) == OS_ERR_OK) {
+        const int* f = (iface == OS_IF_JTAG) ? fl.jtag : fl.swd;
+        int fn = (iface == OS_IF_JTAG) ? fl.jtag_n : fl.swd_n;
+        if (fn > 0 && fn <= 16) {
+            use_freq = 1;
+            SendMessageW(h, CB_RESETCONTENT, 0, 0);
+            for (i = 0; i < fn; i++) {
+                wchar_t b[32];
+                if (f[i] <= 0) continue;
+                _snwprintf(b, 32, L"%d", f[i]);
+                SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)b);
+            }
+            SendMessageW(h, CB_SETCURSEL, 0, 0);
+        }
+    }
+    if (!use_freq) {
+        SendMessageW(h, CB_RESETCONTENT, 0, 0);
+        for (i = 0; i < (int)(sizeof(speeds) / sizeof(speeds[0])); i++) {
+            wchar_t b[32];
+            if (speeds[i] == 0) _snwprintf(b, 32, L"0 (自动)");
+            else _snwprintf(b, 32, L"%d", speeds[i]);
+            SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)b);
+        }
+        SendMessageW(h, CB_SETCURSEL, 7, 0); /* 默认 4000 */
+    }
+}
+
+/* AD-13：切换仿真器——断开旧连接、重指驱动、重扫设备 + 刷新速度档位 */
+static void cmd_select_driver(int idx)
+{
+    if (os_modmgr_select_driver(idx) != OS_ERR_OK) return;
+    g_app.connected = 0;
+    g_emu_count = -1;
+    cfg_fill_emus();
+    cfg_fill_speeds();
+    refresh_status();
+    os_mainwin_update_buttons();
+    os_log(OS_LOG_INFO, "切换仿真器: %s", drv_name());
+}
+
+/* 主界面连接配置初始化：仿真器/芯片核心/接口/速度下拉 + 扫描设备列表（模块加载后调用） */
 void os_mainwin_cfg_init(void)
 {
     HWND h;
     const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
-    /* N8: 更多速度预置（kHz），下拉可编辑允许手工输入任意值。
-     * J-Link Pro/Ultra+ SWD/JTAG 最高 50MHz——加入 20/30/40/50MHz 预置；
-     * 更高速度缩短块读的线上传输时间（合并跨空隙读取时尤为关键）。 */
-    static const int speeds[] = { 0, 50, 100, 200, 400, 1000, 2000, 4000, 5000, 8000, 10000, 12000, 15000, 20000, 25000, 30000, 40000, 50000 };
     int i;
+    cfg_fill_drivers();
     h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
     if (h) {
         for (i = 0; i < (int)(sizeof(g_devices) / sizeof(g_devices[0])); i++)
@@ -1288,16 +1369,7 @@ void os_mainwin_cfg_init(void)
         for (i = 0; i < 2; i++) SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)ifaces[i]);
         SendMessageW(h, CB_SETCURSEL, 0, 0);
     }
-    h = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
-    if (h) {
-        for (i = 0; i < (int)(sizeof(speeds) / sizeof(speeds[0])); i++) {
-            wchar_t b[32];
-            if (speeds[i] == 0) _snwprintf(b, 32, L"0 (自动)");
-            else _snwprintf(b, 32, L"%d", speeds[i]);
-            SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)b);
-        }
-        SendMessageW(h, CB_SETCURSEL, 7, 0); /* 默认 4000 */
-    }
+    cfg_fill_speeds();
     cfg_fill_emus();
 }
 
@@ -2817,23 +2889,27 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                                    g_app.hInst, NULL);
             SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
-        /* 连接配置控件（MCU型号/接口/速度/J-Link设备/刷新，随工具栏一行布局） */
+        /* 连接配置控件（仿真器/MCU核心/接口/速度/设备/刷新，随工具栏一行布局） */
         {
             HWND c;
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                              584, 5, 140, 200, hwnd, (HMENU)IDC_CFG_DEVICE, g_app.hInst, NULL);
+                              584, 5, 110, 120, hwnd, (HMENU)IDC_CFG_DRIVER, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             combo_install_theme(c); /* F20: 闭合面自绘（暗色） */
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                              650, 5, 62, 120, hwnd, (HMENU)IDC_CFG_IFACE, g_app.hInst, NULL);
-            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-            combo_install_theme(c);
-            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWN | WS_TABSTOP,
-                              716, 5, 92, 200, hwnd, (HMENU)IDC_CFG_SPEED, g_app.hInst, NULL);
+                              700, 5, 140, 200, hwnd, (HMENU)IDC_CFG_DEVICE, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             combo_install_theme(c);
             c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
-                              812, 5, 260, 120, hwnd, (HMENU)IDC_CFG_EMU, g_app.hInst, NULL);
+                              846, 5, 62, 120, hwnd, (HMENU)IDC_CFG_IFACE, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c);
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWN | WS_TABSTOP,
+                              914, 5, 92, 200, hwnd, (HMENU)IDC_CFG_SPEED, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c);
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
+                              1012, 5, 200, 120, hwnd, (HMENU)IDC_CFG_EMU, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             combo_install_theme(c);
             c = CreateWindowW(L"BUTTON", L"刷新", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
@@ -3258,14 +3334,22 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         break;
     }
     case WM_COMMAND:
+        /* AD-13：仿真器下拉切换（驱动感知） */
+        if (HIWORD(wParam) == CBN_SELCHANGE && LOWORD(wParam) == IDC_CFG_DRIVER) {
+            cmd_select_driver((int)SendMessageW((HWND)lParam, CB_GETCURSEL, 0, 0));
+            break;
+        }
         switch (LOWORD(wParam)) {
         case IDC_BTN_OPEN: cmd_open_elf(); break;
         case IDC_BTN_CONNECT: cmd_connect(); break;
         case IDC_BTN_DISCON: cmd_disconnect(); break;
         case IDC_CFG_REFRESH:
-            if (cfg_fill_emus() <= 0)
-                MessageBoxW(hwnd, L"没有发现 JLink 设备，请确认仿真器已插入 USB 并点击「刷新」。",
-                            L"J-Link", MB_OK | MB_ICONWARNING);
+            if (cfg_fill_emus() <= 0) {
+                wchar_t msg[256], dn[64];
+                os_utf8_to_wide_buf(drv_name(), dn, 64);
+                _snwprintf(msg, 256, L"没有发现 %s 设备，请确认仿真器已插入 USB 并点击「刷新」。", dn);
+                MessageBoxW(hwnd, msg, dn, MB_OK | MB_ICONWARNING);
+            }
             break;
         case IDC_BTN_START: cmd_start_acq(); break;
         case IDC_BTN_STOP: cmd_stop_acq(); break;

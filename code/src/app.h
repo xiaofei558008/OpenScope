@@ -134,6 +134,9 @@ typedef struct OS_App {
     int mod_count;
     OS_Module* driver;
     void* driver_ctx;
+    OS_Module* drivers[OS_MAX_MODULES];   /* AD-13: 全部 OS_CAP_DRIVER 模块（多驱动可选） */
+    void* driver_ctxs[OS_MAX_MODULES];
+    int driver_count;
     OS_Module* winmods[OS_MAX_MODULES];
     void* winmod_ctx[OS_MAX_MODULES];
     int winmod_count;

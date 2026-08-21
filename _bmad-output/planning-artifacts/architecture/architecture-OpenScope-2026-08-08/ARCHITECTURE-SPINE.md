@@ -7,8 +7,8 @@ paradigm: '插件化宿主（plugin-host）+ 分层：宿主框架 / 模块（�
 scope: 'OpenScope 全项目：类 CANape 的 MCU 变量采集与标定工具'
 status: final
 created: '2026-08-08'
-updated: '2026-08-08'
-binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, NFR1, NFR2, NFR3, NFR4, NFR5]
+updated: '2026-08-22'
+binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR13, NFR1, NFR2, NFR3, NFR4, NFR5]
 sources: [request.md, project-context.md]
 companions: []
 ---
@@ -110,6 +110,18 @@ flowchart TD
 - **Prevents:** 多消费者竞态、字节序/时钟分歧、读写交错
 - **Rule:** 环形缓冲与 `OS_Sample` 为框架独占；模块只经 `on_samples` 只读消费。`raw` 一律为目标机字节序（框架按叶子类型解码）；`ts_us` 统一用 `os_time_us()`。驱动模块内部用互斥序列化 READ/WRITE。
 
+### AD-12 — ST-Link 运行时动态绑定 CubeProgrammer_API.dll
+
+- **Binds:** FR13；`module/stlink`
+- **Prevents:** 编译期依赖 ST SDK 导入库；缺失 Qt/OpenSSL 等依赖 DLL 导致 LoadLibrary 失败
+- **Rule:** `stlink.dll` 用 `LoadLibrary` + `GetProcAddress` 绑定 `CubeProgrammer_API.dll`（`extern "C"` 导出，不链接 `.lib`）。加载前用 `SetDllDirectoryW` 把依赖 DLL 所在目录加入搜索路径：优先 `dll\stlink\`（随包自含），回退 `C:\Program Files\STMicroelectronics\STM32Cube\STM32CubeProgrammer\bin\`。绑定后必须先 `setDisplayCallbacks`（`logMessage` 桥接 `OS_Framework::log`）再 `setVerbosityLevel`。`readMemory` 的 `unsigned char**` 双重指针语义必须在模块 `mod_read` 内适配为调用方缓冲（`OS_MemReq::data`），并负责释放 DLL 分配的临时缓冲。
+
+### AD-13 — 多驱动可选：宿主不硬编码仿真器
+
+- **Binds:** FR13；`module_mgr.c`, `mainwin.c`, `app.h`
+- **Prevents:** 宿主写死 J-Link、新增驱动（ST-Link）无法被用户选择
+- **Rule:** 宿主把所有 `OS_CAP_DRIVER` 模块纳入 `g_app.drivers[]`；`g_app.driver` 始终指向"当前选中"驱动（默认 jlink，无 jlink 时首个驱动）。主界面提供"仿真器类型"下拉（J-Link/ST-Link）；切换驱动须：断开旧连接 → 重指 `g_app.driver` → 按新驱动重扫设备列表（`IDC_CFG_EMU`）→ 按新驱动刷新速度档位（ST-Link 用 `freq.swdFreq[]/jtagFreq[]` 枚举档位，J-Link 保持预置档位+手输 kHz）。`datasrv.c` 与写值路径仍只经 `g_app.driver` 命令通道（AD-2 不变），零改动。
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -127,6 +139,7 @@ flowchart TD
 | Win32 API + Common Controls | comctl32 v6（manifest 内嵌） |
 | ELF/DWARF 解析 | 自研 `code/src/elf.c`（ELF32/64, ARM Cortex-M） |
 | J-Link ARM DLL | `dll/JLink_x64.dll`（SEGGER JLink V966） |
+| ST-Link / CubeProgrammer API | `dll/stlink/CubeProgrammer_API.dll`（STM32CubeProgrammer，动态绑定 + `SetDllDirectoryW`） |
 | 构建 | MSBuild 18.8 / `build.bat` / `build.py` 包装 |
 | 版本管理 | git 2.55（checkpoint 提交） |
 
@@ -138,6 +151,7 @@ OpenScope/
     src/               #   UI(mainwin/ui/chartwin/numwin)、ELF、数据、模块管理
   module/              # 模块源码（一个功能一个子目录）
     jlink/             #   J-Link 驱动模块 → dll/jlink.dll
+    stlink/            #   ST-Link 驱动模块 → dll/stlink.dll（AD-12）
     scope/             #   波形窗口模块 → dll/scope.dll
   dll/                 # 模块产物 + JLink_x64.dll（依赖库，非模块）
   bin/Release/         # OpenScope.exe 输出
@@ -155,11 +169,12 @@ OpenScope/
 | FR5 窗口扩展/模糊搜索/曲线/写值 | `module/scope` + `code/src/chartwin.c` | AD-1, AD-6 |
 | FR6 模块化/单元测试 | `module_api.h`, `module_mgr.c` | AD-1, AD-6 |
 | FR7 J-Link 业务模块 | `module/jlink` | AD-2, AD-7 |
+| FR13 ST-Link 业务模块 | `module/stlink` | AD-2, AD-12, AD-13 |
 
 ## Deferred
 
 - MF4 二进制记录/导出（AD-8 后置；CSV 已覆盖 v1 需求）。
-- 多仿真器/多驱动热切换（当前单驱动：优先 J-Link）。
+- 多仿真器**热切换**（AD-13 已支持冷切换，即断开后经"仿真器"下拉换驱动；运行中不重连的在线切换仍延后）。
 - RTT/SWO 日志通道与变量采集并存。
 - 自动化脚本/API（如 CANape COM 式接口）。
 - 持久化配置（窗口布局、最近 ELF、连接参数保存/恢复）。

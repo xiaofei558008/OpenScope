@@ -55,3 +55,11 @@ development_status:
   4-2-variable-fuzzy-search-and-series-management: done
   4-3-realtime-curve-and-value-writeback: done
   epic-4-retrospective: optional
+
+  epic-12: done
+  12-1-stlink-driver-module-skeleton: done
+  12-2-stlink-scan-connect-disconnect-info: done
+  12-3-stlink-memory-read-write-and-deps: done
+  12-4-host-multi-driver-selection: done
+  12-5-stlink-full-test-and-release: done
+  epic-12-retrospective: optional
