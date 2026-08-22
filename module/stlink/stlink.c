@@ -162,25 +162,26 @@ void os_stlink_unbind(OS_StLinkApi* api)
     }
 }
 
-/* ST-Link 内部日志回调：wchar_t → UTF-8 → OS_Framework::log */
+/* ST-Link 内部日志回调：wchar_t → UTF-8 → OS_Framework::log。
+ * 只透传错误与警告，丢弃其余——readMemory 每次调用都会经 logMessage 打印 ~10 条
+ * "UPLOADING/Size/Address/Read progress/Reading data/r ap/Data read successfully/
+ *  Time elapsed"（多为 Info/Verbosity），高速采集下会刷爆 UI 消息队列 + 同步落盘，
+ * 导致界面卡死。DisplayManager MSGTYPE: 0=Normal 1=Info 2=GreenInfo 3=Title
+ * 4=Warning 5=Error 6..8=Verbosity 9=GreenInfoNoPopup 10=WarningNoPopup 11=ErrorNoPopup */
 static void stlink_log_cb(int msgType, const wchar_t* str)
 {
     char utf8[1024];
-    int level;
+    int level, len;
     if (!g_fw || !str) return;
-    /* DisplayManager MSGTYPE: 0=Normal 1=Info 2=GreenInfo 3=Title 4=Warning 5=Error
-     * 6..8=Verbosity 9=GreenInfoNoPopup 10=WarningNoPopup 11=ErrorNoPopup */
     if (msgType == 5 || msgType == 11) level = OS_LOG_ERROR;
     else if (msgType == 4 || msgType == 10) level = OS_LOG_WARN;
-    else if (msgType >= 6 && msgType <= 8) level = OS_LOG_DEBUG;
-    else level = OS_LOG_INFO;
-    {
-        int len = WideCharToMultiByte(CP_UTF8, 0, str, -1, utf8, sizeof(utf8) - 1, NULL, NULL);
-        if (len <= 0) { utf8[0] = 0; len = 1; }
-        utf8[len - 1] = 0;
-        while (len > 1 && (utf8[len - 2] == '\n' || utf8[len - 2] == '\r')) utf8[--len - 1] = 0;
-        g_fw->log(level, "ST-Link: %s", utf8);
-    }
+    else return;
+    len = WideCharToMultiByte(CP_UTF8, 0, str, -1, utf8, sizeof(utf8) - 1, NULL, NULL);
+    if (len <= 0) return;
+    utf8[len - 1] = 0;
+    while (len > 1 && (utf8[len - 2] == '\n' || utf8[len - 2] == '\r')) utf8[--len - 1] = 0;
+    if (utf8[0] == 0) return; /* 跳过空行 */
+    g_fw->log(level, "ST-Link: %s", utf8);
 }
 
 /* 进度条回调：官方示例把三者都设为真实函数，connectStLink 会调用进度条，
@@ -196,7 +197,8 @@ static void stlink_install_callbacks(void)
     cb.initProgressBar = stlink_init_progress_cb;
     cb.loadBar = stlink_load_bar_cb;
     if (g_ctx.api.set_display_callbacks) g_ctx.api.set_display_callbacks(cb);
-    if (g_ctx.api.set_verbosity_level) g_ctx.api.set_verbosity_level(1); /* 仅警告/错误/成功 */
+    /* verbosity 0 = 库不打印任何消息（readMemory 每次刷屏会卡死 UI）；错误由本模块自行记录 */
+    if (g_ctx.api.set_verbosity_level) g_ctx.api.set_verbosity_level(0);
 }
 
 /* ---------------- 连接/读写实现 ---------------- */

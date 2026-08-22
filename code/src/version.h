@@ -4,7 +4,7 @@
 #define OS_VERSION_H
 #define OS_VERSION_MAJOR 1
 #define OS_VERSION_MINOR 18
-#define OS_VERSION_PATCH 0
-#define OS_VERSION_STR  "1.18.0"
-#define OS_VERSION_WIDE L"1.18.0"
+#define OS_VERSION_PATCH 1
+#define OS_VERSION_STR  "1.18.1"
+#define OS_VERSION_WIDE L"1.18.1"
 #endif

@@ -148,6 +148,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src module\stlink\tests\stlink_log_quiet.c ^
+    /Fe:tests\bin\stlink_log_quiet.exe
+if errorlevel 1 (
+  echo [ERROR] stlink_log_quiet build failed
+  exit /b 1
+)
+
+echo Running stlink log-quiet smoke (采集时无日志刷屏)...
+tests\bin\stlink_log_quiet.exe
+if errorlevel 1 (
+  echo [ERROR] stlink_log_quiet FAILED
+  exit /b 1
+)
+
 echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
 tests\bin\bug9_smoke.exe Cortex-M4 50
 if errorlevel 1 (
