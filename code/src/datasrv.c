@@ -460,3 +460,9 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
     os_log(OS_LOG_INFO, "写入 %s = %s", L->name, text);
     return 0;
 }
+
+/* 需求 14：网络模块把远端样本注入采集通道（环 + 窗口显示）。 */
+void os_fw_push_sample(const OS_Sample* s)
+{
+    if (s) os_ds_push_batch((OS_Sample*)s, 1);
+}

@@ -77,10 +77,15 @@ static int push_samples_to(OS_WSConn* c)
     if (g_watch_count <= 0) return 0;
     for (i = 0; i < g_watch_count && n < 256; i++) {
         const OS_Sample* s = g_fw ? g_fw->leaf_sample(g_watch_ids[i]) : NULL;
-        if (s && s->size) { samples[n].ts_us = s->ts_us; samples[n].value = s->value; n++; }
+        if (s && s->size) {
+            samples[n].ts_us = s->ts_us;
+            samples[n].value = s->value;
+            samples[n].var_id = g_watch_ids[i];
+            n++;
+        }
     }
     if (n <= 0) return 0;
-    enc = os_net_codec_encode(samples, n, payload, sizeof(payload));
+    enc = os_net_codec_encode_flat(samples, n, payload, sizeof(payload));
     if (enc < 0) return -1;
     return send_msg(c, OS_NET_MSG_SAMPLE_BATCH, 0, payload, (uint32_t)enc);
 }
@@ -145,6 +150,32 @@ static void handle_msg(OS_WSConn* c, const OS_NetFrame* f)
         }
         n = os_net_encode_ack(code, code == 0 ? "ok" : "write failed", ack, sizeof(ack));
         if (n >= 0) send_msg(c, OS_NET_MSG_ACK, 0, ack, (uint32_t)n);
+        break;
+    }
+    case OS_NET_MSG_SAMPLE_BATCH: {
+        /* 远端样本 → 注入本地采集通道（波形/数值窗口显示） */
+        OS_NetSample samples[256];
+        int cnt = os_net_codec_decode_flat(f->payload, (int)f->len, samples, 256);
+        int i;
+        for (i = 0; i < cnt; i++) {
+            if (g_fw && g_fw->push_sample) {
+                OS_Sample s;
+                memset(&s, 0, sizeof(s));
+                s.ts_us = samples[i].ts_us;
+                s.value = samples[i].value;
+                s.var_id = samples[i].var_id;
+                s.size = 8;
+                if (g_fw->leaf_addr) s.address = g_fw->leaf_addr(samples[i].var_id);
+                _snprintf(s.text, sizeof(s.text), "%g", samples[i].value);
+                g_fw->push_sample(&s);
+            }
+        }
+        break;
+    }
+    case OS_NET_MSG_ELF_SYNC: {
+        OS_NetVar vars[512];
+        int cnt = os_net_decode_varlist(f->payload, (int)f->len, vars, 512);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 收到 ELF 变量表 %d 项", cnt);
         break;
     }
     default:

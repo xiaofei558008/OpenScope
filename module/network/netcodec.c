@@ -91,6 +91,35 @@ int os_net_codec_decode(const uint8_t* in, int len, OS_NetSample* s, int max)
     return n;
 }
 
+int os_net_codec_encode_flat(const OS_NetSample* s, int n, uint8_t* out, int cap)
+{
+    uint8_t* p = out; int i, w, rem = cap;
+    w = os_net_put_uvarint(p, rem, (uint64_t)n); if (w < 0) return -1; p += w; rem -= w;
+    for (i = 0; i < n; i++) {
+        w = os_net_put_uvarint(p, rem, (uint64_t)(uint32_t)s[i].var_id); if (w < 0) return -1; p += w; rem -= w;
+        w = put_u64le(p, rem, (uint64_t)s[i].ts_us); if (w < 0) return -1; p += w; rem -= w;
+        w = put_u64le(p, rem, f2u(s[i].value)); if (w < 0) return -1; p += w; rem -= w;
+    }
+    return (int)(p - out);
+}
+
+int os_net_codec_decode_flat(const uint8_t* in, int len, OS_NetSample* s, int max)
+{
+    uint64_t nv; int c, i, n, rem = len; const uint8_t* p = in;
+    if (os_net_get_uvarint(p, rem, &nv, &c) != 0) return -1; p += c; rem -= c;
+    n = (int)nv;
+    if (n < 0 || n > max) return -1;
+    for (i = 0; i < n; i++) {
+        if (os_net_get_uvarint(p, rem, &nv, &c) != 0) return -1; p += c; rem -= c;
+        s[i].var_id = (int)nv;
+        if (rem < 8) return -1;
+        s[i].ts_us = (int64_t)get_u64le(p); p += 8; rem -= 8;
+        if (rem < 8) return -1;
+        s[i].value = u2f(get_u64le(p)); p += 8; rem -= 8;
+    }
+    return n;
+}
+
 /* ---------------- 多核并行压缩 ---------------- */
 
 typedef struct EncJob {

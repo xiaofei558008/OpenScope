@@ -150,6 +150,8 @@ typedef struct OS_Framework {
     int  (*leaf_find)(const char* needle, int* ids, int max_ids);
     /* 叶变量绝对地址（网络 ELF 同步用，需求 14）。 */
     uint64_t (*leaf_addr)(int id);
+    /* 注入一个样本到采集通道（远端样本 → 本地波形/数值窗口显示，需求 14）。 */
+    void (*push_sample)(const OS_Sample* s);
 } OS_Framework;
 
 typedef struct OS_WindowType {

@@ -122,6 +122,21 @@ static void test_parallel(void)
     printf("  parallel: 1000 样本 %d 字节（8 线程）\n", enc);
 }
 
+static void test_flat(void)
+{
+    OS_NetSample in[8], out[8];
+    uint8_t buf[512];
+    int n = 8, enc, dec, i, ok = 1;
+    for (i = 0; i < n; i++) { in[i].var_id = 100 + i; in[i].ts_us = 2000000LL + i * 1000; in[i].value = 1.5 + i; }
+    enc = os_net_codec_encode_flat(in, n, buf, sizeof(buf));
+    CHECK(enc > 0, "flat 编码");
+    dec = os_net_codec_decode_flat(buf, enc, out, 8);
+    CHECK(dec == n, "flat 解码数量");
+    for (i = 0; i < n; i++)
+        if (out[i].var_id != in[i].var_id || out[i].ts_us != in[i].ts_us || out[i].value != in[i].value) { ok = 0; break; }
+    CHECK(ok, "flat 无损往返（含 var_id）");
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -131,6 +146,7 @@ int main(void)
     test_chunk();
     test_spool();
     test_parallel();
+    test_flat();
     if (g_fail == 0) { printf("ALL PASS\n"); return 0; }
     printf("FAILED: %d\n", g_fail);
     return 1;

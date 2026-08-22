@@ -120,6 +120,7 @@ static void init_fw(void)
     g_app.fw.on_elf_reloaded = os_fw_on_elf_reloaded;
     g_app.fw.leaf_find = os_fw_leaf_find;
     g_app.fw.leaf_addr = os_fw_leaf_addr;
+    g_app.fw.push_sample = os_fw_push_sample;
 }
 
 /* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */

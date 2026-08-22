@@ -194,6 +194,7 @@ int os_fw_write_leaf(int id, double value, char* err, int err_len);
 void os_fw_on_elf_reloaded(void);
 int os_fw_leaf_find(const char* needle, int* ids, int max_ids);
 uint64_t os_fw_leaf_addr(int id);
+void os_fw_push_sample(const OS_Sample* s);
 
 /* 主窗口控制（mainwin.c） */
 void os_mainwin_update_buttons(void);
