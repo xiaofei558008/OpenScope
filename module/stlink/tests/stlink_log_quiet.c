@@ -43,6 +43,10 @@ int main(void)
     cfg.iface = OS_IF_SWD; cfg.speed_khz = 4000; cfg.probe_index = -1;
     rc = m->command(ctx, OS_CMD_CONNECT, &cfg, NULL);
     printf("connect rc=%d (log_count=%d)\n", rc, g_log_count);
+    if (rc == OS_ERR_NO_DEVICE) {
+        printf("SKIP: 未发现可用 ST-Link\n");
+        m->deinit(ctx); FreeLibrary(h); return 0;
+    }
     if (rc != OS_ERR_OK) { m->deinit(ctx); FreeLibrary(h); return 2; }
 
     memset(&req, 0, sizeof(req));

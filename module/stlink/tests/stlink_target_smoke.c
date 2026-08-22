@@ -40,6 +40,10 @@ int main(int argc, char** argv)
     cfg.probe_index = -1;
     rc = m->command(ctx, OS_CMD_CONNECT, &cfg, NULL);
     printf("connect rc=%d speed=%d\n", rc, speed);
+    if (rc == OS_ERR_NO_DEVICE) {
+        printf("SKIP: 未发现可用 ST-Link（未连接或被占用，如 OpenScope.exe 已连接）\n");
+        m->deinit(ctx); FreeLibrary(h); return 0;
+    }
     if (rc != OS_ERR_OK) { m->deinit(ctx); FreeLibrary(h); return 2; }
 
     m->command(ctx, OS_CMD_IS_CONNECTED, NULL, &conn);
