@@ -152,9 +152,24 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
                                                                 MAX_PATH, L"%s", tok + 9);
         else if (wcsncmp(tok, L"--replay-all=", 13) == 0) _snwprintf(g_app.replay_all_path,
                                                                      MAX_PATH, L"%s", tok + 13);
+        else if (wcsncmp(tok, L"--net-listen=", 13) == 0) g_app.net_listen_port = _wtoi(tok + 13);
+        else if (wcsncmp(tok, L"--net-connect=", 14) == 0) {
+            wchar_t* colon = wcschr(tok + 14, L':');
+            if (colon) { *colon = 0; _snwprintf(g_app.net_connect_ip, MAX_PATH, L"%s", tok + 14); g_app.net_connect_port = _wtoi(colon + 1); }
+        }
+        else if (wcscmp(tok, L"--net-sync") == 0) g_app.net_sync_flag = 1;
+        else if (wcsncmp(tok, L"--net-exit=", 11) == 0) g_app.net_exit_ms = _wtoi(tok + 11);
         else if (first) { *elf = tok; first = 0; }
         tok = sp ? sp + 1 : NULL;
     }
+}
+
+/* 网络测试钩子：延时 N ms 后关闭主窗口（自动退出） */
+static DWORD WINAPI net_exit_thread(LPVOID p)
+{
+    Sleep((DWORD)(INT_PTR)p);
+    if (g_app.hMain) PostMessage(g_app.hMain, WM_CLOSE, 0, 0);
+    return 0;
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow)
@@ -169,6 +184,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_app.log_h = 170;
     g_app.poll_interval_ms = 0; /* F21/Step1: 0=自由运行高速采集；>0=定时周期（ms） */
     g_app.speed_khz = 4000;    /* 默认 4000kHz（未连接时块读合并模型用） */
+    g_app.net_listen_port = -1; /* 网络测试钩子默认值 */
+    g_app.net_connect_ip[0] = 0;
+    g_app.net_connect_port = 0;
+    g_app.net_sync_flag = 0;
+    g_app.net_exit_ms = 0;
     InitializeCriticalSection(&g_app.ring_cs);
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
@@ -213,6 +233,23 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
             /* 测试钩子：--replay-all=<csv> 启动即全量加载（桶缓存 + 全部显示） */
             os_mainwin_replay_all(g_app.replay_all_path);
         if (!no_layout && lsv) os_layout_save_to(lsv);
+        /* 需求 14：网络测试钩子 */
+        if (g_app.net_listen_port >= 0)
+            os_mainwin_net_cmd(OS_CMD_NET_START, "127.0.0.1", g_app.net_listen_port);
+        if (g_app.net_connect_ip[0]) {
+            char ip8[64];
+            os_wide_to_utf8_buf(g_app.net_connect_ip, ip8, sizeof(ip8));
+            os_mainwin_net_cmd(OS_CMD_NET_CONNECT, ip8, g_app.net_connect_port);
+            if (g_app.net_sync_flag) {
+                Sleep(300); /* 等对端握手完成 */
+                os_mainwin_net_cmd(OS_CMD_NET_SYNC_ELF, NULL, 0);
+                os_mainwin_net_cmd(OS_CMD_NET_ELF_PULL, NULL, 0);
+            }
+        }
+        if (g_app.net_exit_ms > 0) {
+            HANDLE th = CreateThread(NULL, 0, net_exit_thread, (LPVOID)(INT_PTR)g_app.net_exit_ms, 0, NULL);
+            if (th) CloseHandle(th);
+        }
     }
     {
         /* 需求12：F1 弹出帮助文档；Ctrl+F 快速搜索变量（用户指定，原 Ctrl+H）。

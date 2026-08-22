@@ -161,6 +161,14 @@ typedef struct OS_App {
     wchar_t rename_tab[MAX_PATH]; /* --rename-tab=<名>：首个窗口创建后自动重命名（测试钩子） */
     wchar_t replay_path[MAX_PATH]; /* --replay=<csv>：启动后自动离线回放（测试钩子） */
     wchar_t replay_all_path[MAX_PATH]; /* --replay-all=<csv>：启动后自动全量加载（测试钩子） */
+    /* 网络测试钩子（需求 14） */
+    int  net_listen_port;          /* -1=无；>=0 启动即监听 127.0.0.1:port */
+    wchar_t net_connect_ip[MAX_PATH]; /* 非空=启动即连接 ip:port */
+    int  net_connect_port;
+    int  net_sync_flag;            /* 1=连接后触发 ELF 双向同步 */
+    int  net_exit_ms;              /* >0 启动 N ms 后自动退出 */
+    int  net_watch_list[128];      /* 测试用监视列表（暂留） */
+    int  net_watch_count;
 
     struct OS_Replay* replay;
 

@@ -237,6 +237,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Running network two-instance E2E (监听+连接+ELF双向同步)...
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\net_drive.ps1
+if errorlevel 1 (
+  echo [ERROR] net_drive FAILED
+  exit /b 1
+)
+
 echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
 tests\bin\bug9_smoke.exe Cortex-M4 50
 if errorlevel 1 (

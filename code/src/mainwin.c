@@ -1248,33 +1248,41 @@ static void cmd_disconnect(void)
     os_mainwin_update_buttons();
 }
 
-/* 需求 14：读取内联 IP/端口，执行网络动作（监听/连接/停止/上传ELF/下载ELF） */
-static void cmd_net_action(int action)
+/* 需求 14：直接执行网络动作（ip/port 显式传入，供 UI 与命令行测试钩子共用） */
+void os_mainwin_net_cmd(int action, const char* ip, int port)
 {
     OS_NetCfg cfg;
-    wchar_t wip[64], wport[16]; char ip8[64], port8[16];
-    HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
-    HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
-    if (hip) GetWindowTextW(hip, wip, 64); else wip[0] = 0;
-    if (hport) GetWindowTextW(hport, wport, 16); else _snwprintf(wport, 16, L"10000");
-    os_wide_to_utf8_buf(wip, ip8, sizeof(ip8));
-    os_wide_to_utf8_buf(wport, port8, sizeof(port8));
-    memset(&cfg, 0, sizeof(cfg));
-    _snprintf(cfg.ip, sizeof(cfg.ip), "%s", ip8);
-    cfg.port = atoi(port8);
     if (!g_app.netmod || !g_app.netmod->command) {
         os_log(OS_LOG_ERROR, "网络: 未加载 network 模块");
         return;
     }
     if (action == OS_CMD_NET_START || action == OS_CMD_NET_CONNECT) {
-        int rc = g_app.netmod->command(g_app.netmod_ctx, action, &cfg, NULL);
-        os_log(OS_LOG_INFO, "网络: %s %s:%d rc=%d",
-               action == OS_CMD_NET_START ? "监听" : "连接", cfg.ip, cfg.port, rc);
+        memset(&cfg, 0, sizeof(cfg));
+        if (ip) _snprintf(cfg.ip, sizeof(cfg.ip), "%s", ip);
+        cfg.port = port;
+        {
+            int rc = g_app.netmod->command(g_app.netmod_ctx, action, &cfg, NULL);
+            os_log(OS_LOG_INFO, "网络: %s %s:%d rc=%d",
+                   action == OS_CMD_NET_START ? "监听" : "连接", cfg.ip, cfg.port, rc);
+        }
     } else {
         g_app.netmod->command(g_app.netmod_ctx, action, NULL, NULL);
         os_log(OS_LOG_INFO, "网络: %s", action == OS_CMD_NET_STOP ? "已停止"
-               : action == OS_CMD_NET_SYNC_ELF ? "上传 ELF 变量表" : "请求远端 ELF 变量表");
+               : action == OS_CMD_NET_SYNC_ELF ? "上传 ELF 变量表"
+               : action == OS_CMD_NET_ELF_PULL ? "请求远端 ELF 变量表" : "动作");
     }
+}
+
+/* 需求 14：读取内联 IP/端口，执行网络动作 */
+static void cmd_net_action(int action)
+{
+    wchar_t wip[64], wport[16]; char ip8[64];
+    HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
+    HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+    if (hip) GetWindowTextW(hip, wip, 64); else wip[0] = 0;
+    if (hport) GetWindowTextW(hport, wport, 16); else _snwprintf(wport, 16, L"10000");
+    os_wide_to_utf8_buf(wip, ip8, sizeof(ip8));
+    os_mainwin_net_cmd(action, ip8, _wtoi(wport));
 }
 
 /* 当前驱动名（消息显示用） */
@@ -2958,7 +2966,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             HWND c;
             c = CreateWindowW(L"STATIC", L"网络", WS_CHILD | WS_VISIBLE, 6, 33, 36, 20, hwnd, NULL, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-            c = CreateWindowW(L"EDIT", L"0.0.0.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+            c = CreateWindowW(L"EDIT", L"127.0.0.1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
                               44, 31, 110, 21, hwnd, (HMENU)IDD_NET_IP, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             c = CreateWindowW(L"EDIT", L"10000", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,

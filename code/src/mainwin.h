@@ -36,5 +36,7 @@ void os_mainwin_cfg_init(void);
 void os_mainwin_apply_theme(void);
 /* 回放全量加载入口（--replay-all 启动钩子/回放按钮共用）：加载 + 挂接桶 + 全局展示 */
 void os_mainwin_replay_all(const wchar_t* path);
+/* 需求 14：网络动作入口（UI 与命令行测试钩子共用） */
+void os_mainwin_net_cmd(int action, const char* ip, int port);
 
 #endif
