@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "netproto.h"
 #include "netcodec.h"
+#include "netbuf.h"
 
 static int g_fail;
 
@@ -85,6 +86,26 @@ static void test_chunk(void)
     os_net_accum_free(&acc);
 }
 
+static void test_spool(void)
+{
+    OS_NetSpool sp;
+    uint8_t data[10000], out[10000];
+    uint32_t outlen = 0;
+    int i, ok = 1;
+    for (i = 0; i < (int)sizeof(data); i++) data[i] = (uint8_t)(i * 13 + 5);
+    os_net_spool_init(&sp, 1024); /* 小 RAM 容量，强制转盘 */
+    for (i = 0; i < (int)sizeof(data); i += 77) {
+        uint32_t l = (uint32_t)(sizeof(data) - i < 77 ? sizeof(data) - i : 77);
+        if (os_net_spool_append(&sp, data + i, l) != 0) { ok = 0; break; }
+    }
+    CHECK(sp.spilled == 1, "异步缓冲转盘触发");
+    if (os_net_spool_read(&sp, out, sizeof(out), &outlen) != 0) ok = 0;
+    CHECK(outlen == sizeof(data), "异步缓冲读回长度");
+    if (ok) for (i = 0; i < (int)sizeof(data); i++) if (out[i] != data[i]) { ok = 0; break; }
+    CHECK(ok, "异步缓冲 RAM+盘无损读回");
+    os_net_spool_free(&sp);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -92,6 +113,7 @@ int main(void)
     test_frame();
     test_codec();
     test_chunk();
+    test_spool();
     if (g_fail == 0) { printf("ALL PASS\n"); return 0; }
     printf("FAILED: %d\n", g_fail);
     return 1;

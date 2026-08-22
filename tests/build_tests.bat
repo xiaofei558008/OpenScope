@@ -164,7 +164,7 @@ if errorlevel 1 (
 
 rem ============ 网络远程操作模块（需求 14）单元/集成/冒烟测试 ============
 cl /nologo /W2 /utf-8 /I module\network module\network\tests\netcore_smoke.c ^
-    module\network\netproto.c module\network\netcodec.c ^
+    module\network\netproto.c module\network\netcodec.c module\network\netbuf.c ^
     /Fe:tests\bin\netcore_smoke.exe
 if errorlevel 1 (
   echo [ERROR] netcore_smoke build failed

@@ -76,9 +76,11 @@
   <ItemGroup>
     <ClCompile Include="netproto.c" />
     <ClCompile Include="netcodec.c" />
+    <ClCompile Include="netbuf.c" />
     <ClCompile Include="network.c" />
     <ClInclude Include="netproto.h" />
     <ClInclude Include="netcodec.h" />
+    <ClInclude Include="netbuf.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
