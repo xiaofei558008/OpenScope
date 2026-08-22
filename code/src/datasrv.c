@@ -146,6 +146,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
     (void)p;
     if (!batch || !wl || !buf) {
         os_log(OS_LOG_ERROR, "采集线程内存分配失败");
+        os_spool_end(); /* 落盘生命周期归采集线程，失败路径也要收尾 */
         free(batch); free(wl); free(buf);
         g_app.stop_poll = 0;
         g_app.acq_state = OS_ACQ_STOPPED;
@@ -250,6 +251,9 @@ static DWORD WINAPI poll_thread(LPVOID p)
         os_log(OS_LOG_INFO, "采集线程已退出");
     else
         os_log(OS_LOG_WARN, "采集线程已退出");
+    /* 落盘收尾在本线程执行（采集线程独占 spool）：避免 UI 线程 os_spool_end 与
+     * 本线程在途 os_spool_push 并发 free/写盘导致的 use-after-free 闪退 */
+    os_spool_end();
     free(batch); free(wl); free(buf);
     g_app.stop_poll = 0;
     g_app.acq_state = OS_ACQ_STOPPED;
@@ -298,7 +302,8 @@ void os_ds_stop(void)
     }
     g_app.acq_state = OS_ACQ_STOPPED;
     os_ds_drain(); /* F21/Step1: UI 节流后环内可能残留末批样本，停止时一次性排空 */
-    os_spool_end(); /* 落盘收尾：RAM 残余转盘 + 关文件 */
+    /* os_spool_end 已移到采集线程自身（poll_thread 退出前收尾），此处不再调用，
+     * 避免与本线程 3s 等待超时后仍可能在途的写盘竞态 */
     os_log(OS_LOG_INFO, "采集已停止");
 }
 

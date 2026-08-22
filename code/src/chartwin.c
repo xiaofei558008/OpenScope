@@ -642,6 +642,60 @@ static void chart_draw_buckets(HDC hdc, OS_Series* sr,
     DeleteObject(pen);
 }
 
+/* 大数据量下采样渲染：可见点数超过像素列数×2 时，按像素列做 min/max 包络竖线，
+ * 把每帧 GDI 调用从 O(历史点数 65536) 降到 O(像素宽 ~1000)，消除高速采集的界面卡死。
+ * 时间轴上的多点在渲染前已按 t 映射到列，重叠点仅保留该列 min/max。 */
+#define DECIM_MAX_COLS 4096
+static void chart_draw_decim(HDC hdc, OS_Series* sr,
+                             const RECT* plot, const RECT* lane, int64_t x0, int64_t x1,
+                             double ylo, double yhi, int have_t, int start, int npts)
+{
+    static double colmin[DECIM_MAX_COLS], colmax[DECIM_MAX_COLS];
+    static char   colset[DECIM_MAX_COLS];
+    int pw = plot->right - plot->left;
+    int ncol = pw;
+    int j;
+    HPEN pen, old;
+    if (ncol > DECIM_MAX_COLS) ncol = DECIM_MAX_COLS;
+    if (ncol < 2) return;
+    memset(colset, 0, (size_t)ncol);
+    for (j = 0; j < npts; j++) {
+        int idx = (sr->head - sr->count + start + j) % OS_CHART_HIST;
+        int x;
+        if (idx < 0) idx += OS_CHART_HIST;
+        if (have_t) {
+            int64_t t = sr->ts[idx];
+            if (t == 0 || t == -1) continue;
+            if (t < x0) continue;
+            if (t > x1) break; /* 时间有序：越过右沿即结束 */
+            x = map_x(plot, x0, x1, t);
+        } else {
+            x = plot->left + (npts > 1 ? (int)((long long)pw * j / (npts - 1)) : 0);
+        }
+        x -= plot->left;
+        if (x < 0) x = 0;
+        if (x >= ncol) x = ncol - 1;
+        if (!colset[x]) { colmin[x] = colmax[x] = sr->val[idx]; colset[x] = 1; }
+        else {
+            if (sr->val[idx] < colmin[x]) colmin[x] = sr->val[idx];
+            if (sr->val[idx] > colmax[x]) colmax[x] = sr->val[idx];
+        }
+    }
+    pen = CreatePen(PS_SOLID, 1, sr->color);
+    old = (HPEN)SelectObject(hdc, pen);
+    for (j = 0; j < ncol; j++) {
+        int x, ymx, ymn;
+        if (!colset[j]) continue;
+        x = plot->left + j;
+        ymx = map_y(lane, colmax[j], ylo, yhi);
+        ymn = map_y(lane, colmin[j], ylo, yhi);
+        MoveToEx(hdc, x, ymn, NULL);
+        LineTo(hdc, x, ymx);
+    }
+    SelectObject(hdc, old);
+    DeleteObject(pen);
+}
+
 /* 绘制一路曲线：折线 + （可见点少时）采样圆点 */
 static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
                               const RECT* plot, const RECT* lane, int64_t x0, int64_t x1,
@@ -680,6 +734,11 @@ static void chart_draw_series(HDC hdc, OS_ChartWin* cw, OS_Series* sr,
         } else {
             dots_was = 0;
         }
+    }
+    /* 大数据量：可见点超过像素列数 2 倍时，降采样为 min/max 包络（消除 O(65536) LineTo 卡死） */
+    if (!dots && vis_npts > (plot->right - plot->left) * 2 && (plot->right - plot->left) > 8) {
+        chart_draw_decim(hdc, sr, plot, lane, x0, x1, ylo, yhi, have_t, start, npts);
+        return;
     }
     pen = CreatePen(PS_SOLID, 1, sr->color);
     old = (HPEN)SelectObject(hdc, pen);
