@@ -52,6 +52,8 @@ Source: "..\bin\Release\OpenScope.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dll\jlink.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 Source: "..\dll\stlink.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 Source: "..\dll\JLink_x64.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
+; ST-Link 自含运行时：CubeProgrammer_API.dll + 依赖 DLL + FlashLoader（目标机无需安装 STM32CubeProgrammer）
+Source: "..\dll\stlink\*"; DestDir: "{app}\dll\stlink"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; 左侧广告栏图片（make_setup.py 从 icon\iso*.bmp 生成，[Code] 运行时按页面加载，不安装到目标机）
 Source: "wizard_sidebar.bmp"; Flags: dontcopy
 Source: "wizard_sidebar2.bmp"; Flags: dontcopy
