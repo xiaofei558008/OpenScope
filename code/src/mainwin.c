@@ -25,12 +25,14 @@
 #define IDC_BTN_REPLAY   2008
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
-#define IDC_BTN_NET      2019 /* 需求 14：网络设置按钮 */
-#define IDD_NET_IP       2020
-#define IDD_NET_PORT     2021
-#define IDD_NET_LISTEN   2022
-#define IDD_NET_CONNECT  2023
-#define IDD_NET_STOP     2024
+/* 需求 14：网络内联控件（第二行工具栏），2110+ 避开菜单/其它控件 id */
+#define IDD_NET_IP       2110
+#define IDD_NET_PORT     2111
+#define IDD_NET_LISTEN   2112
+#define IDD_NET_CONNECT  2113
+#define IDD_NET_STOP     2114
+#define IDD_NET_UPELF    2115
+#define IDD_NET_DOWNELF  2116
 #define IDM_EXIT         2011
 #define IDM_LAYOUT_SAVE  2021
 #define IDM_LAYOUT_LOAD  2022
@@ -131,7 +133,7 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
     { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
-    { IDC_BTN_REPLAYSTOP, L"停止回放" }, { IDC_BTN_NET, L"网络" },
+    { IDC_BTN_REPLAYSTOP, L"停止回放" },
     /* Bug8: 自动隐藏/钉住归位到左侧 elf 变量树（OSTreePin 钉图标），不再放菜单栏下固定按键 */
 };
 
@@ -672,7 +674,7 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 static void layout(void)
 {
     RECT rc;
-    int bw, bh = 34, sw, logh, right_h, right_w;
+    int bw, bh = 62, sw, logh, right_h, right_w; /* 两行工具栏：首行按钮+配置，次行网络(需求14) */
     int parts[4];
     GetClientRect(g_app.hMain, &rc);
     bw = rc.right;
@@ -690,7 +692,6 @@ static void layout(void)
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
-            { IDC_BTN_NET, 0, 0 },
             { IDC_CFG_DRIVER, 110, 1 }, { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 },
             { IDC_CFG_SPEED, 92, 1 }, { IDC_CFG_EMU, 200, 1 }, { IDC_CFG_REFRESH, 48, 0 },
         };
@@ -1247,93 +1248,33 @@ static void cmd_disconnect(void)
     os_mainwin_update_buttons();
 }
 
-/* 需求 14：网络设置对话框（IP/端口 + 监听/连接/停止） */
-static LRESULT CALLBACK net_dlg_proc(HWND hwnd, UINT msg, WPARAM w, LPARAM l)
+/* 需求 14：读取内联 IP/端口，执行网络动作（监听/连接/停止/上传ELF/下载ELF） */
+static void cmd_net_action(int action)
 {
-    switch (msg) {
-    case WM_COMMAND:
-        switch (LOWORD(w)) {
-        case IDD_NET_LISTEN:
-        case IDD_NET_CONNECT: {
-            OS_NetCfg cfg;
-            wchar_t wip[64], wport[16]; char ip8[64], port8[16];
-            GetDlgItemTextW(hwnd, IDD_NET_IP, wip, 64);
-            GetDlgItemTextW(hwnd, IDD_NET_PORT, wport, 16);
-            os_wide_to_utf8_buf(wip, ip8, sizeof(ip8));
-            os_wide_to_utf8_buf(wport, port8, sizeof(port8));
-            memset(&cfg, 0, sizeof(cfg));
-            _snprintf(cfg.ip, sizeof(cfg.ip), "%s", ip8);
-            cfg.port = atoi(port8);
-            if (g_app.netmod && g_app.netmod->command) {
-                int rc = g_app.netmod->command(g_app.netmod_ctx,
-                    (LOWORD(w) == IDD_NET_LISTEN) ? OS_CMD_NET_START : OS_CMD_NET_CONNECT, &cfg, NULL);
-                os_log(OS_LOG_INFO, "网络: %s %s:%d rc=%d",
-                       (LOWORD(w) == IDD_NET_LISTEN) ? "监听" : "连接", cfg.ip, cfg.port, rc);
-            } else {
-                os_log(OS_LOG_ERROR, "网络: 未加载 network 模块");
-            }
-            return 0;
-        }
-        case IDD_NET_STOP:
-            if (g_app.netmod && g_app.netmod->command)
-                g_app.netmod->command(g_app.netmod_ctx, OS_CMD_NET_STOP, NULL, NULL);
-            os_log(OS_LOG_INFO, "网络: 已停止");
-            return 0;
-        case IDCANCEL:
-            DestroyWindow(hwnd);
-            return 0;
-        }
-        return 0;
-    case WM_CLOSE:
-        DestroyWindow(hwnd);
-        return 0;
+    OS_NetCfg cfg;
+    wchar_t wip[64], wport[16]; char ip8[64], port8[16];
+    HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
+    HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+    if (hip) GetWindowTextW(hip, wip, 64); else wip[0] = 0;
+    if (hport) GetWindowTextW(hport, wport, 16); else _snwprintf(wport, 16, L"10000");
+    os_wide_to_utf8_buf(wip, ip8, sizeof(ip8));
+    os_wide_to_utf8_buf(wport, port8, sizeof(port8));
+    memset(&cfg, 0, sizeof(cfg));
+    _snprintf(cfg.ip, sizeof(cfg.ip), "%s", ip8);
+    cfg.port = atoi(port8);
+    if (!g_app.netmod || !g_app.netmod->command) {
+        os_log(OS_LOG_ERROR, "网络: 未加载 network 模块");
+        return;
     }
-    return DefWindowProcW(hwnd, msg, w, l);
-}
-
-static void cmd_net_dialog(void)
-{
-    static const wchar_t* cls = L"OSNetDlg";
-    WNDCLASSW wc;
-    HWND dlg, c;
-    MSG m;
-    static const struct { int id; const wchar_t* t; } btns[] = {
-        { IDD_NET_LISTEN, L"监听" }, { IDD_NET_CONNECT, L"连接" },
-        { IDD_NET_STOP, L"停止" }, { IDCANCEL, L"关闭" }
-    };
-    int i;
-    memset(&wc, 0, sizeof(wc));
-    wc.lpfnWndProc = net_dlg_proc;
-    wc.hInstance = g_app.hInst;
-    wc.lpszClassName = cls;
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
-    RegisterClassW(&wc);
-    dlg = CreateWindowW(cls, L"网络设置", WS_OVERLAPPEDWINDOW & ~WS_MAXIMIZEBOX & ~WS_MINIMIZEBOX,
-                        240, 200, 300, 150, g_app.hMain, NULL, g_app.hInst, NULL);
-    if (!dlg) return;
-    c = CreateWindowW(L"STATIC", L"IP 地址", WS_CHILD | WS_VISIBLE, 12, 16, 70, 20, dlg, NULL, g_app.hInst, NULL);
-    SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    c = CreateWindowW(L"EDIT", L"0.0.0.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                      90, 13, 190, 22, dlg, (HMENU)IDD_NET_IP, g_app.hInst, NULL);
-    SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    c = CreateWindowW(L"STATIC", L"端口", WS_CHILD | WS_VISIBLE, 12, 46, 70, 20, dlg, NULL, g_app.hInst, NULL);
-    SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    c = CreateWindowW(L"EDIT", L"19001", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-                      90, 43, 190, 22, dlg, (HMENU)IDD_NET_PORT, g_app.hInst, NULL);
-    SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
-    for (i = 0; i < 4; i++) {
-        c = CreateWindowW(L"BUTTON", btns[i].t, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                          12 + i * 72, 76, 66, 26, dlg, (HMENU)(INT_PTR)btns[i].id, g_app.hInst, NULL);
-        SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    if (action == OS_CMD_NET_START || action == OS_CMD_NET_CONNECT) {
+        int rc = g_app.netmod->command(g_app.netmod_ctx, action, &cfg, NULL);
+        os_log(OS_LOG_INFO, "网络: %s %s:%d rc=%d",
+               action == OS_CMD_NET_START ? "监听" : "连接", cfg.ip, cfg.port, rc);
+    } else {
+        g_app.netmod->command(g_app.netmod_ctx, action, NULL, NULL);
+        os_log(OS_LOG_INFO, "网络: %s", action == OS_CMD_NET_STOP ? "已停止"
+               : action == OS_CMD_NET_SYNC_ELF ? "上传 ELF 变量表" : "请求远端 ELF 变量表");
     }
-    ShowWindow(dlg, SW_SHOW);
-    EnableWindow(g_app.hMain, FALSE);
-    while (IsWindow(dlg) && GetMessage(&m, NULL, 0, 0)) {
-        if (IsDialogMessageW(dlg, &m)) continue;
-        TranslateMessage(&m);
-        DispatchMessage(&m);
-    }
-    EnableWindow(g_app.hMain, TRUE);
 }
 
 /* 当前驱动名（消息显示用） */
@@ -3012,6 +2953,28 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                               1078, 5, 48, 24, hwnd, (HMENU)IDC_CFG_REFRESH, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
+        /* 需求 14：网络内联配置（第二行工具栏）：IP/端口 + 监听/连接/停止/上传ELF/下载ELF */
+        {
+            HWND c;
+            c = CreateWindowW(L"STATIC", L"网络", WS_CHILD | WS_VISIBLE, 6, 33, 36, 20, hwnd, NULL, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            c = CreateWindowW(L"EDIT", L"0.0.0.0", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                              44, 31, 110, 21, hwnd, (HMENU)IDD_NET_IP, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            c = CreateWindowW(L"EDIT", L"10000", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+                              160, 31, 52, 21, hwnd, (HMENU)IDD_NET_PORT, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            { static const struct { int id; const wchar_t* t; } nb[] = {
+                { IDD_NET_LISTEN, L"监听" }, { IDD_NET_CONNECT, L"连接" }, { IDD_NET_STOP, L"停止" },
+                { IDD_NET_UPELF, L"上传ELF" }, { IDD_NET_DOWNELF, L"下载ELF" } };
+              int k;
+              for (k = 0; k < 5; k++) {
+                c = CreateWindowW(L"BUTTON", nb[k].t, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                  222 + k * 74, 29, 68, 24, hwnd, (HMENU)(INT_PTR)nb[k].id, g_app.hInst, NULL);
+                SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+              }
+            }
+        }
         g_app.hTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                       WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
                                       TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_CHECKBOXES,
@@ -3454,7 +3417,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDM_HELP_DOC: os_help_show(hwnd); break; /* 需求12：帮助文档（F1 同路径） */
-        case IDC_BTN_NET: cmd_net_dialog(); break; /* 需求 14：网络设置 */
+        case IDD_NET_LISTEN: cmd_net_action(OS_CMD_NET_START); break;
+        case IDD_NET_CONNECT: cmd_net_action(OS_CMD_NET_CONNECT); break;
+        case IDD_NET_STOP: cmd_net_action(OS_CMD_NET_STOP); break;
+        case IDD_NET_UPELF: cmd_net_action(OS_CMD_NET_SYNC_ELF); break;
+        case IDD_NET_DOWNELF: cmd_net_action(OS_CMD_NET_ELF_PULL); break;
         case IDC_BTN_ABOUT: {
             wchar_t about[640];
             _snwprintf(about, 640,

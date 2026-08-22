@@ -63,13 +63,13 @@ static DWORD WINAPI server_thread(LPVOID p)
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    int lsock = os_ws_listen("127.0.0.1", 19001);
+    int lsock = os_ws_listen("127.0.0.1", 10000);
     HANDLE th; OS_WSConn* c; OS_NetFrame f; uint8_t buf[4096];
     if (lsock < 0) { printf("FAIL listen\n"); return 1; }
     th = CreateThread(NULL, 0, server_thread, (LPVOID)(INT_PTR)lsock, 0, NULL);
     Sleep(100);
 
-    c = os_ws_connect("127.0.0.1", 19001);
+    c = os_ws_connect("127.0.0.1", 10000);
     if (!c) { printf("FAIL connect\n"); return 1; }
 
     /* 客户端：HELLO → ELF_SYNC */

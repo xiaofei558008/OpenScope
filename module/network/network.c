@@ -178,6 +178,15 @@ static void handle_msg(OS_WSConn* c, const OS_NetFrame* f)
         if (g_fw) g_fw->log(OS_LOG_INFO, "network: 收到 ELF 变量表 %d 项", cnt);
         break;
     }
+    case OS_NET_MSG_ELF_REQ: {
+        /* 对端请求 ELF 变量表 → 回发我的变量表（双向同步的"下载"方向） */
+        OS_NetVar vars[512]; uint8_t payload[65536];
+        int cnt = build_varlist(vars, 512);
+        int enc = os_net_encode_varlist(vars, cnt, payload, sizeof(payload));
+        if (enc >= 0) send_msg(c, OS_NET_MSG_ELF_SYNC, 0, payload, (uint32_t)enc);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 收到 ELF 请求 -> 回发变量表 %d 项", cnt);
+        break;
+    }
     default:
         break;
     }
@@ -245,10 +254,14 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         if (g_fw) g_fw->log(OS_LOG_INFO, "network: 服务端监听 %s:%d", g_cfg.ip[0] ? g_cfg.ip : "0.0.0.0", g_cfg.port);
         return OS_ERR_OK;
     case OS_CMD_NET_CONNECT: {
-        OS_WSConn* c;
+        OS_WSConn* c; int slot = -1, i;
         if (in) memcpy(&g_cfg, in, sizeof(g_cfg));
         c = os_ws_connect(g_cfg.ip, g_cfg.port);
         if (!c) { if (g_fw) g_fw->log(OS_LOG_ERROR, "network: 连接失败 %s:%d", g_cfg.ip, g_cfg.port); return OS_ERR_FAIL; }
+        EnterCriticalSection(&g_cli_cs);
+        for (i = 0; i < NET_MAX_CLIENTS; i++) if (!g_clients[i]) { g_clients[i] = c; slot = i; break; }
+        LeaveCriticalSection(&g_cli_cs);
+        if (slot < 0) { os_ws_close(c); return OS_ERR_FAIL; }
         { uint8_t z = 0; send_msg(c, OS_NET_MSG_HELLO, 0, &z, 0); }
         { HANDLE th = CreateThread(NULL, 0, client_thread, c, 0, NULL); if (th) CloseHandle(th); }
         if (g_fw) g_fw->log(OS_LOG_INFO, "network: 已连接 %s:%d", g_cfg.ip, g_cfg.port);
@@ -264,6 +277,14 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_NET_SYNC_ELF:
         broadcast_elf();
         return OS_ERR_OK;
+    case OS_CMD_NET_ELF_PULL: {
+        int i; uint8_t z = 0;
+        EnterCriticalSection(&g_cli_cs);
+        for (i = 0; i < NET_MAX_CLIENTS; i++) if (g_clients[i]) send_msg(g_clients[i], OS_NET_MSG_ELF_REQ, 0, &z, 0);
+        LeaveCriticalSection(&g_cli_cs);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 请求远端 ELF 变量表");
+        return OS_ERR_OK;
+    }
     case OS_CMD_NET_PUSH:
         broadcast_samples();
         return OS_ERR_OK;

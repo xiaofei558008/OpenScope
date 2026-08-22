@@ -54,8 +54,9 @@ enum {
     OS_CMD_NET_START    = 20, /* in: OS_NetCfg*，启动服务端监听；返回 0/负错误码 */
     OS_CMD_NET_CONNECT  = 21, /* in: OS_NetCfg*，作为客户端连接 */
     OS_CMD_NET_STOP     = 22, /* 停止监听/断开 */
-    OS_CMD_NET_SYNC_ELF = 23, /* 触发 ELF 变量表同步（发/收） */
-    OS_CMD_NET_PUSH     = 24  /* 触发一次样本推送 */
+    OS_CMD_NET_SYNC_ELF = 23, /* 上传：把我的 ELF 变量表广播给远端 */
+    OS_CMD_NET_PUSH     = 24, /* 触发一次样本推送 */
+    OS_CMD_NET_ELF_PULL = 25  /* 下载：请求远端发回它的 ELF 变量表（双向同步） */
 };
 
 /* 仿真口类型 */

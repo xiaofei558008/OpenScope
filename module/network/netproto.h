@@ -11,6 +11,7 @@
 #define OS_NET_MSG_ACK          6
 #define OS_NET_MSG_CHUNK        7
 #define OS_NET_MSG_BYE          8
+#define OS_NET_MSG_ELF_REQ      9 /* 请求对端发回它的 ELF 变量表 */
 
 #define OS_NET_MAGIC 0x314E534Fu /* "OSN1" little-endian */
 
