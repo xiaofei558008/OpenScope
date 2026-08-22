@@ -16,6 +16,7 @@
 /* 模块能力标志 */
 #define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写） */
 #define OS_CAP_WINDOW 0x0002 /* 提供自定义窗口类型 */
+#define OS_CAP_NET    0x0004 /* 提供网络服务（远程操作，需求 14） */
 
 /* 日志级别 */
 #define OS_LOG_INFO  0

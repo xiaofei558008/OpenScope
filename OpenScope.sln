@@ -8,6 +8,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "jlink", "module\jlink\jlink
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "stlink", "module\stlink\stlink.vcxproj", "{5C8A1E7D-2B3C-4D5E-9F0A-1B2C3D4E5F6A}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "network", "module\network\network.vcxproj", "{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -26,6 +28,10 @@ Global
 		{5C8A1E7D-2B3C-4D5E-9F0A-1B2C3D4E5F6A}.Debug|x64.Build.0 = Debug|x64
 		{5C8A1E7D-2B3C-4D5E-9F0A-1B2C3D4E5F6A}.Release|x64.ActiveCfg = Release|x64
 		{5C8A1E7D-2B3C-4D5E-9F0A-1B2C3D4E5F6A}.Release|x64.Build.0 = Release|x64
+		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Debug|x64.ActiveCfg = Debug|x64
+		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Debug|x64.Build.0 = Debug|x64
+		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Release|x64.ActiveCfg = Release|x64
+		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

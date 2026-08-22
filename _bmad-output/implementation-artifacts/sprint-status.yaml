@@ -63,3 +63,12 @@ development_status:
   12-4-host-multi-driver-selection: done
   12-5-stlink-full-test-and-release: done
   epic-12-retrospective: optional
+
+  epic-13: in-progress
+  13-1-net-transport-agnostic-core: done
+  13-2-network-dll-module-skeleton: done
+  13-3-network-loopback-integration: done
+  13-4-websocket-transport: backlog
+  13-5-remote-protocol-sync-acq-write: backlog
+  13-6-async-bulk-zstd-transfer: backlog
+  13-7-one-to-many-fanout: backlog

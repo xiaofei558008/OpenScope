@@ -8,7 +8,7 @@ scope: 'OpenScope 全项目：类 CANape 的 MCU 变量采集与标定工具'
 status: final
 created: '2026-08-08'
 updated: '2026-08-22'
-binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR13, NFR1, NFR2, NFR3, NFR4, NFR5]
+binds: [FR1, FR2, FR3, FR4, FR5, FR6, FR7, FR13, FR14, NFR1, NFR2, NFR3, NFR4, NFR5]
 sources: [request.md, project-context.md]
 companions: []
 ---
@@ -122,6 +122,18 @@ flowchart TD
 - **Prevents:** 宿主写死 J-Link、新增驱动（ST-Link）无法被用户选择
 - **Rule:** 宿主把所有 `OS_CAP_DRIVER` 模块纳入 `g_app.drivers[]`；`g_app.driver` 始终指向"当前选中"驱动（默认 jlink，无 jlink 时首个驱动）。主界面提供"仿真器类型"下拉（J-Link/ST-Link）；切换驱动须：断开旧连接 → 重指 `g_app.driver` → 按新驱动重扫设备列表（`IDC_CFG_EMU`）→ 按新驱动刷新速度档位（ST-Link 用 `freq.swdFreq[]/jtagFreq[]` 枚举档位，J-Link 保持预置档位+手输 kHz）。`datasrv.c` 与写值路径仍只经 `g_app.driver` 命令通道（AD-2 不变），零改动。
 
+### AD-14 — 网络远程操作模块：传输无关内核 + 二进制协议
+
+- **Binds:** FR14；`module/network`
+- **Prevents:** 网络功能与宿主/传输耦合、无法单测、未来 trace 大数据量无法扩展
+- **Rule:** 网络功能独立编译为 `network.dll`（`OS_CAP_NET`）。协议/编解码/分块/缓冲是**传输无关的纯 C 内核**（`netproto.c`/`netcodec.c`，只消费/产出字节流），WebSocket 传输层（mongoose 或自研 RFC6455）只负责搬运字节流。二进制协议：`[magic 'OSN1'][type][flags][seq][len][payload]`；时序样本用 **delta+varint（时间戳）+ XOR-delta（浮点，Gorilla 式）** 无损编解码；大 payload 按固定块分块（chunk_id/idx/total/len），支持乱序重组与续传。内核必须可脱离网络做内存回环单测。
+
+### AD-15 — 网络数据流：实时同步 + 异步批量（落盘后传输）
+
+- **Binds:** FR14；`module/network`, `datalog.c`
+- **Prevents:** 实时低延迟与超大流量冲突；阻塞采集主线
+- **Rule:** 两条通道共享协议。**实时同步**：样本经 delta+varint 流式帧即时回传远端（低延迟）。**异步批量**：本地先把样本落盘（复用现有 spool/记录），远端停止采集后再分块读取 → 压缩（zstd 多线程，后续接入）→ 逐块传输。传输不能阻塞采集线程（异步、背压）。
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -152,6 +164,7 @@ OpenScope/
   module/              # 模块源码（一个功能一个子目录）
     jlink/             #   J-Link 驱动模块 → dll/jlink.dll
     stlink/            #   ST-Link 驱动模块 → dll/stlink.dll（AD-12）
+    network/           #   网络远程操作模块 → dll/network.dll（AD-14/AD-15）
     scope/             #   波形窗口模块 → dll/scope.dll
   dll/                 # 模块产物 + JLink_x64.dll（依赖库，非模块）
   bin/Release/         # OpenScope.exe 输出
@@ -170,6 +183,7 @@ OpenScope/
 | FR6 模块化/单元测试 | `module_api.h`, `module_mgr.c` | AD-1, AD-6 |
 | FR7 J-Link 业务模块 | `module/jlink` | AD-2, AD-7 |
 | FR13 ST-Link 业务模块 | `module/stlink` | AD-2, AD-12, AD-13 |
+| FR14 网络远程操作 | `module/network` | AD-14, AD-15 |
 
 ## Deferred
 

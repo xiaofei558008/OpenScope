@@ -162,6 +162,51 @@ if errorlevel 1 (
   exit /b 1
 )
 
+rem ============ 网络远程操作模块（需求 14）单元/集成/冒烟测试 ============
+cl /nologo /W2 /utf-8 /I module\network module\network\tests\netcore_smoke.c ^
+    module\network\netproto.c module\network\netcodec.c ^
+    /Fe:tests\bin\netcore_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] netcore_smoke build failed
+  exit /b 1
+)
+
+echo Running netcore smoke (网络内核单元测试: varint/帧/编解码/分块)...
+tests\bin\netcore_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] netcore_smoke FAILED
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I module\network module\network\tests\network_loopback.c ^
+    module\network\netproto.c module\network\netcodec.c ^
+    /Fe:tests\bin\network_loopback.exe
+if errorlevel 1 (
+  echo [ERROR] network_loopback build failed
+  exit /b 1
+)
+
+echo Running network loopback (集成测试: 采集->编码->分块->重组->解码无损)...
+tests\bin\network_loopback.exe
+if errorlevel 1 (
+  echo [ERROR] network_loopback FAILED
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I code\src module\network\tests\network_smoke.c ^
+    /Fe:tests\bin\network_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] network_smoke build failed
+  exit /b 1
+)
+
+echo Running network smoke (network.dll 模块冒烟)...
+tests\bin\network_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] network_smoke FAILED
+  exit /b 1
+)
+
 echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
 tests\bin\bug9_smoke.exe Cortex-M4 50
 if errorlevel 1 (

@@ -13,7 +13,7 @@ if errorlevel 1 (
 echo.
 echo Build OK.
 echo   Framework : bin\Release\OpenScope.exe
-echo   Modules   : dll\jlink.dll, dll\stlink.dll
+echo   Modules   : dll\jlink.dll, dll\stlink.dll, dll\network.dll
 echo   J-Link DLL: dll\JLink_x64.dll
 echo.
 call tests\build_tests.bat
