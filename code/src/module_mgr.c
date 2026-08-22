@@ -115,6 +115,21 @@ int os_modmgr_load(void)
             }
         }
     }
+    /* 网络模块（OS_CAP_NET，需求 14） */
+    g_app.netmod = NULL;
+    g_app.netmod_ctx = NULL;
+    {
+        int i;
+        for (i = 0; i < g_app.mod_count; i++) {
+            if (g_app.mods[i].capabilities & OS_CAP_NET) {
+                g_app.netmod = &g_app.mods[i];
+                g_app.netmod_ctx = g_app.mod_ctx[i];
+                break;
+            }
+        }
+    }
+    if (g_app.netmod)
+        os_log(OS_LOG_INFO, "网络模块: %s", g_app.netmod->name);
     if (g_app.driver)
         os_log(OS_LOG_INFO, "驱动模块: %s", g_app.driver->name);
     else

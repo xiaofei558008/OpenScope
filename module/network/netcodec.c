@@ -1,6 +1,8 @@
 #include "netcodec.h"
 #include "netproto.h"
 #include <string.h>
+#include <windows.h>
+#include <stdlib.h>
 
 static uint64_t f2u(double v) { uint64_t u; memcpy(&u, &v, 8); return u; }
 static double  u2f(uint64_t u) { double v; memcpy(&v, &u, 8); return v; }
@@ -87,4 +89,79 @@ int os_net_codec_decode(const uint8_t* in, int len, OS_NetSample* s, int max)
         }
     }
     return n;
+}
+
+/* ---------------- 多核并行压缩 ---------------- */
+
+typedef struct EncJob {
+    const OS_NetSample* s;
+    int n;
+    uint8_t* out;
+    int cap;
+    int len;
+} EncJob;
+
+static DWORD WINAPI enc_worker(LPVOID p)
+{
+    EncJob* j = (EncJob*)p;
+    j->len = os_net_codec_encode(j->s, j->n, j->out, j->cap);
+    return 0;
+}
+
+int os_net_codec_encode_parallel(const OS_NetSample* s, int n, int nthreads, uint8_t* out, int cap)
+{
+    EncJob jobs[16]; HANDLE hs[16];
+    uint8_t* scratch; int chunk, i, off, nw, total;
+    if (n <= 0 || !s || !out) return -1;
+    if (nthreads <= 1 || n <= nthreads) return os_net_codec_encode(s, n, out, cap);
+    if (nthreads > 16) nthreads = 16;
+    chunk = (n + nthreads - 1) / nthreads;
+    scratch = (uint8_t*)malloc((size_t)n * 16 + 64);
+    if (!scratch) return -1;
+    nw = 0;
+    for (i = 0; i < nthreads; i++) {
+        int a = i * chunk, b = a + chunk; if (b > n) b = n;
+        if (a >= n) break;
+        jobs[nw].s = s + a; jobs[nw].n = b - a;
+        jobs[nw].out = scratch + (size_t)a * 16; jobs[nw].cap = (b - a) * 16 + 8; jobs[nw].len = -1;
+        hs[nw] = CreateThread(NULL, 0, enc_worker, &jobs[nw], 0, NULL);
+        if (hs[nw]) nw++;
+    }
+    for (i = 0; i < nw; i++) WaitForSingleObject(hs[i], INFINITE);
+    /* 组装：nthreads(实际块数) + n + 每块[长度 + 数据] */
+    off = 0;
+    { int w = os_net_put_uvarint(out + off, cap - off, (uint64_t)nw); if (w < 0) { free(scratch); return -1; } off += w; }
+    { int w = os_net_put_uvarint(out + off, cap - off, (uint64_t)n); if (w < 0) { free(scratch); return -1; } off += w; }
+    total = off;
+    for (i = 0; i < nw; i++) {
+        int w = os_net_put_uvarint(out + off, cap - off, (uint64_t)jobs[i].len); if (w < 0) { free(scratch); return -1; } off += w;
+        if (off + jobs[i].len > cap) { free(scratch); return -1; }
+        if (jobs[i].len > 0) memcpy(out + off, jobs[i].out, jobs[i].len);
+        off += jobs[i].len;
+    }
+    total = off;
+    free(scratch);
+    return total;
+}
+
+int os_net_codec_decode_parallel(const uint8_t* in, int len, OS_NetSample* s, int max)
+{
+    uint64_t nw, n; int c, off = 0, i, k;
+    if (!in || !s) return -1;
+    if (os_net_get_uvarint(in + off, len - off, &nw, &c) != 0) return -1; off += c;
+    if (os_net_get_uvarint(in + off, len - off, &n, &c) != 0) return -1; off += c;
+    if ((int)n > max) return -1;
+    k = 0;
+    for (i = 0; i < (int)nw; i++) {
+        uint64_t cl; int got;
+        if (os_net_get_uvarint(in + off, len - off, &cl, &c) != 0) return -1; off += c;
+        if (off + (int)cl > len) return -1;
+        if (cl > 0) {
+            got = os_net_codec_decode(in + off, (int)cl, s + k, max - k);
+            if (got < 0) return -1;
+            k += got;
+        }
+        off += (int)cl;
+    }
+    return k;
 }

@@ -140,6 +140,8 @@ typedef struct OS_App {
     OS_Module* winmods[OS_MAX_MODULES];
     void* winmod_ctx[OS_MAX_MODULES];
     int winmod_count;
+    OS_Module* netmod;      /* 网络模块（OS_CAP_NET，需求 14） */
+    void* netmod_ctx;
     OS_Framework fw;
 
     volatile LONG acq_state;

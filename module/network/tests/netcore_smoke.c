@@ -106,6 +106,22 @@ static void test_spool(void)
     os_net_spool_free(&sp);
 }
 
+static void test_parallel(void)
+{
+    OS_NetSample in[1000], out[1000];
+    uint8_t buf[32768];
+    int n = 1000, enc, dec, i, ok = 1;
+    for (i = 0; i < n; i++) { in[i].ts_us = 1000000LL + i * 250; in[i].value = i * 0.1 + (i % 5) * 0.3; }
+    enc = os_net_codec_encode_parallel(in, n, 8, buf, sizeof(buf)); /* 8 核并行 */
+    CHECK(enc > 0, "并行压缩编码");
+    dec = os_net_codec_decode_parallel(buf, enc, out, 1000);
+    CHECK(dec == n, "并行压缩解码数量");
+    for (i = 0; i < n; i++)
+        if (out[i].ts_us != in[i].ts_us || out[i].value != in[i].value) { ok = 0; break; }
+    CHECK(ok, "并行压缩无损往返（8 核）");
+    printf("  parallel: 1000 样本 %d 字节（8 线程）\n", enc);
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -114,6 +130,7 @@ int main(void)
     test_codec();
     test_chunk();
     test_spool();
+    test_parallel();
     if (g_fail == 0) { printf("ALL PASS\n"); return 0; }
     printf("FAILED: %d\n", g_fail);
     return 1;
