@@ -49,7 +49,13 @@ enum {
     OS_CMD_GO           = 9,
     OS_CMD_RESET        = 10,
     OS_CMD_ELF_RELOADED = 11, /* ELF 重新加载后由框架广播，模块应重解析窗口变量 */
-    OS_CMD_GET_FREQ     = 12  /* out: OS_FreqList* 驱动支持的速度档位(kHz)；不支持返回负错误码 */
+    OS_CMD_GET_FREQ     = 12, /* out: OS_FreqList* 驱动支持的速度档位(kHz)；不支持返回负错误码 */
+    /* 网络远程操作（需求 14） */
+    OS_CMD_NET_START    = 20, /* in: OS_NetCfg*，启动服务端监听；返回 0/负错误码 */
+    OS_CMD_NET_CONNECT  = 21, /* in: OS_NetCfg*，作为客户端连接 */
+    OS_CMD_NET_STOP     = 22, /* 停止监听/断开 */
+    OS_CMD_NET_SYNC_ELF = 23, /* 触发 ELF 变量表同步（发/收） */
+    OS_CMD_NET_PUSH     = 24  /* 触发一次样本推送 */
 };
 
 /* 仿真口类型 */
@@ -92,6 +98,12 @@ typedef struct OS_MemReq {
     uint32_t size;
     void*    data;
 } OS_MemReq;
+
+/* 网络配置（需求 14）：服务端监听绑定地址 / 客户端目标地址 + 端口 */
+typedef struct OS_NetCfg {
+    char ip[64];   /* 空=INADDR_ANY（服务端） */
+    int  port;
+} OS_NetCfg;
 
 /* OS_CMD_GET_FREQ 输出：驱动支持的速度档位（ST-Link 为枚举档位，J-Link 可不实现） */
 typedef struct OS_FreqList {
@@ -136,6 +148,8 @@ typedef struct OS_Framework {
     void (*on_elf_reloaded)(void);
     /* 按子串模糊搜索叶变量，返回匹配数，ids 最多 max_ids 个。 */
     int  (*leaf_find)(const char* needle, int* ids, int max_ids);
+    /* 叶变量绝对地址（网络 ELF 同步用，需求 14）。 */
+    uint64_t (*leaf_addr)(int id);
 } OS_Framework;
 
 typedef struct OS_WindowType {

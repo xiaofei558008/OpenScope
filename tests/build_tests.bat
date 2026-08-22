@@ -193,6 +193,36 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I module\network module\network\tests\netws_smoke.c ^
+    module\network\netws.c ^
+    /Fe:tests\bin\netws_smoke.exe /link ws2_32.lib
+if errorlevel 1 (
+  echo [ERROR] netws_smoke build failed
+  exit /b 1
+)
+
+echo Running netws smoke (WebSocket 单元测试: 握手/帧编解码)...
+tests\bin\netws_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] netws_smoke FAILED
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I module\network module\network\tests\network_ws_loopback.c ^
+    module\network\netws.c module\network\netproto.c module\network\netsession.c ^
+    /Fe:tests\bin\network_ws_loopback.exe /link ws2_32.lib
+if errorlevel 1 (
+  echo [ERROR] network_ws_loopback build failed
+  exit /b 1
+)
+
+echo Running network ws loopback (集成测试: WebSocket 握手+协议会话回环)...
+tests\bin\network_ws_loopback.exe
+if errorlevel 1 (
+  echo [ERROR] network_ws_loopback FAILED
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I code\src module\network\tests\network_smoke.c ^
     /Fe:tests\bin\network_smoke.exe
 if errorlevel 1 (

@@ -191,6 +191,7 @@ int os_fw_pick_variable(HWND parent, char* out, int out_len);
 int os_fw_write_leaf(int id, double value, char* err, int err_len);
 void os_fw_on_elf_reloaded(void);
 int os_fw_leaf_find(const char* needle, int* ids, int max_ids);
+uint64_t os_fw_leaf_addr(int id);
 
 /* 主窗口控制（mainwin.c） */
 void os_mainwin_update_buttons(void);

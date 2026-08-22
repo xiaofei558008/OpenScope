@@ -521,3 +521,9 @@ int os_fw_leaf_find(const char* needle, int* ids, int max_ids)
 {
     return os_vartree_search(needle, max_ids, ids);
 }
+
+uint64_t os_fw_leaf_addr(int id)
+{
+    const OS_Leaf* L = os_vartree_leaf(id);
+    return L ? L->address : 0;
+}
