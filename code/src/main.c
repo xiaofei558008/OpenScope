@@ -172,6 +172,7 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
                 os_wide_to_utf8_buf(eq + 1, g_app.net_write_value, sizeof(g_app.net_write_value)); }
         }
         else if (wcscmp(tok, L"--net-download") == 0) g_app.net_download_flag = 1;
+        else if (wcsncmp(tok, L"--net-watchstop=", 16) == 0) g_app.net_watchstop_ms = _wtoi(tok + 16);
         else if (wcsncmp(tok, L"--net-shot-at=", 14) == 0) {
             wchar_t* comma = wcschr(tok + 14, L',');
             if (comma) { *comma = 0;
@@ -207,6 +208,14 @@ static DWORD WINAPI net_shot_thread(LPVOID p)
     Sleep((DWORD)(INT_PTR)p);
     if (g_app.net_shot_at_path[0])
         os_mainwin_shot_active(g_app.net_shot_at_path);
+    return 0;
+}
+
+/* 网络测试钩子：延时 N ms 后发停止下达（--net-watchstop=毫秒） */
+static DWORD WINAPI net_watchstop_thread(LPVOID p)
+{
+    Sleep((DWORD)(INT_PTR)p);
+    os_mainwin_net_cmd(OS_CMD_NET_WATCH_STOP, NULL, 0);
     return 0;
 }
 
@@ -293,6 +302,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_app.net_sync_flag = 0;
     g_app.net_exit_ms = 0;
     g_app.net_watch_flag = 0;
+    g_app.net_watchstop_ms = 0;
     g_app.net_write_name[0] = 0;
     g_app.net_write_value[0] = 0;
     g_app.net_download_flag = 0;
@@ -395,6 +405,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         }
         if (g_app.net_shot_at_path[0] && g_app.net_shot_at_ms > 0) {
             HANDLE th = CreateThread(NULL, 0, net_shot_thread, (LPVOID)(INT_PTR)g_app.net_shot_at_ms, 0, NULL);
+            if (th) CloseHandle(th);
+        }
+        if (g_app.net_watchstop_ms > 0) {
+            HANDLE th = CreateThread(NULL, 0, net_watchstop_thread, (LPVOID)(INT_PTR)g_app.net_watchstop_ms, 0, NULL);
             if (th) CloseHandle(th);
         }
     }

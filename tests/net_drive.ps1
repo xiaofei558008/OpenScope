@@ -107,8 +107,8 @@ function Save-WindowPng([IntPtr]$h, [string]$path) {
     } catch { Write-Output "  (warn) PrintWindow 截图失败: $($_.Exception.Message)" }
 }
 
-# ---- 阶段 1：A（探针）启动 + UI 点击连接 J-Link ----
-$a = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logA","--net-listen=10000" -PassThru
+# ---- 阶段 1：A（探针）启动 + UI 点击连接 J-Link（本地勾选 g_counter 验证"本地+远端监视叠加"） ----
+$a = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logA","--net-listen=10000","--watch=g_counter" -PassThru
 $hA = Wait-Main $a.Id 8000
 if ($hA -eq [IntPtr]::Zero) { Write-Output "FAIL A 主窗口未出现"; exit 1 }
 Start-Sleep -Milliseconds 1500   # 等模块加载/设备扫描完成
@@ -127,7 +127,7 @@ if ($hw) { Write-Output "INFO A 已连接 J-Link（硬件就绪）" } else { Wri
 $bArgs = @(
     $Elf,"--no-layout","--log=$logB","--net-connect=127.0.0.1:10000","--net-sync",
     "--watch=g_counter,g_cfg.a","--net-win=chart,g_counter,g_cfg.a","--net-watch",
-    "--net-write=g_cfg.b=123","--net-download",
+    "--net-write=g_cfg.b=123","--net-download","--net-watchstop=7000",
     "--net-shot-at=$shotBmp,10500","--net-exit=13500"
 )
 $b = Start-Process -FilePath $exe -ArgumentList $bArgs -PassThru
@@ -147,7 +147,7 @@ if ($ipEdit -ne [IntPtr]::Zero -and $portEdit -ne [IntPtr]::Zero) { Write-Output
 
 # ---- 阶段 3：C（第二个远端，一对多 fan-out）----
 Start-Sleep -Seconds 2
-$c = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logC","--net-connect=127.0.0.1:10000","--watch=g_counter","--net-watch","--net-exit=10000" -PassThru
+$c = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logC","--net-connect=127.0.0.1:10000","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
 
 # ---- 阶段 3.5：采集运行中抓取两个主窗口（报告用，WM_PRINT 抓取）----
 Start-Sleep -Seconds 5
@@ -218,6 +218,14 @@ if ($hw) {
     $inj = [regex]::Matches($logBText, "样本注入 \d+ 个（累计 (\d+)）")
     $totalInj = 0; foreach ($m in $inj) { $v = [int]$m.Groups[1].Value; if ($v -gt $totalInj) { $totalInj = $v } }
     Check "B 远端样本注入（累计最多 $totalInj 个样本）" ($totalInj -ge 20)
+
+    # 8b. 本地勾选与远端监视叠加：B 下达 2 项 + A 本地 1 项（g_counter 去重）= 2 个变量采集
+    $union2 = ([regex]::Matches($logAText, "（2 个变量")).Count
+    Check "A 采集并集 = 2 个变量（本地 g_counter + 远端 g_counter,g_cfg.a）(count=$union2)" ($union2 -ge 2)
+    # 8c. B 停止下达后：A 保留本地勾选继续采集（远端已停止下达，本机仍勾选）
+    $stopKeep = ([regex]::Matches($logAText, "远端已停止下达")).Count
+    $keep1 = ([regex]::Matches($logAText, "（1 个变量")).Count
+    Check "B 停止下达 -> A 保留本地勾选继续采集（停止日志=$stopKeep, 1叶采集日志=$keep1）" ($stopKeep -ge 1 -and $keep1 -ge 1)
 } else {
     Write-Output "SKIP 硬件依赖断言（J-Link 未连接）：采集/写值/历史回传走降级路径"
     Check "写值 ACK 往返（降级路径也应有 ACK 日志）" (([regex]::Matches($logBText, "收到 ACK code=")).Count -ge 1)

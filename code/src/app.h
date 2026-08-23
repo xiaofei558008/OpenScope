@@ -172,6 +172,7 @@ typedef struct OS_App {
     char net_write_name[64];       /* --net-write=name=value：连接后网络写变量 */
     char net_write_value[64];
     int  net_download_flag;        /* 1=连接后请求远端采集历史（--net-download） */
+    int  net_watchstop_ms;         /* >0 启动 N ms 后发停止下达（--net-watchstop=毫秒） */
     wchar_t net_shot_at_path[MAX_PATH]; /* --net-shot-at=路径,毫秒：延迟截图当前窗口 */
     int  net_shot_at_ms;
     wchar_t net_watch_csv[1024];   /* --watch=名1,名2：启动即勾选观测叶 */

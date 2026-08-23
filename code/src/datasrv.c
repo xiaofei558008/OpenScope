@@ -278,9 +278,16 @@ static DWORD WINAPI poll_thread(LPVOID p)
 
 int os_ds_start(void)
 {
+    int conn = 0;
     if (g_app.acq_state == OS_ACQ_RUNNING) return 0;
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "无驱动模块，无法采集");
+        return -1;
+    }
+    /* 网络驱动的远端实例可能无硬件连接：快速失败，避免启动注定退出的采集线程 */
+    g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &conn);
+    if (!conn) {
+        os_log(OS_LOG_WARN, "MCU 未连接（%s），无法开始采集", g_app.driver->name);
         return -1;
     }
     if (g_app.watch_count <= 0) {
@@ -514,15 +521,17 @@ int os_fw_leaf_watched(int id)
 
 int os_fw_set_watch(int id, int on)
 {
+    LONG prev;
     if (id < 0 || id >= g_app.leaf_count) return -1;
-    InterlockedExchange(&g_app.leaves[id].watched, on ? 1 : 0);
-    if (on) {
+    prev = InterlockedExchange(&g_app.leaves[id].watched, on ? 1 : 0);
+    if ((prev ? 1 : 0) != (on ? 1 : 0)) {
+        /* 仅状态翻转时重算观测数并记日志（网络 WATCH_LIST 高频重建不再刷屏） */
         int i, wc = 0;
         for (i = 0; i < g_app.leaf_count; i++)
             if (g_app.leaves[i].watched) wc++;
         g_app.watch_count = wc;
+        os_log(OS_LOG_INFO, "网络勾选: %s -> %s", g_app.leaves[id].name, on ? "观测" : "取消");
     }
-    os_log(OS_LOG_INFO, "网络勾选: %s", g_app.leaves[id].name);
     return 0;
 }
 

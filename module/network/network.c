@@ -56,31 +56,46 @@ static char g_ack_msg[128];
 /* 远端监视引用：每叶被多少个远端客户端监视（重建全局监视集用，≤4096 叶） */
 #define NET_REF_CAP 4096
 static int g_net_ref[NET_REF_CAP];
-static uint8_t g_local_watch[NET_REF_CAP]; /* 首个远端监视到达时的本地勾选快照 */
+static uint8_t g_was_watched[NET_REF_CAP]; /* 该叶首次被远端监视时的本地勾选状态 */
+static int g_last_total = -1;              /* 上次重建时的远端监视总数（检测 有->无 过渡） */
 
-/* 重建探针侧全局监视集 = 本地勾选 ∪ 各远端监视并集；空集则停止采集 */
+/* 重建探针侧全局监视集：远端监视的叶一律勾选（若尚未勾选）。
+ * 撤销（最后一个远端引用归零）时还原到远端监视前的本地状态——
+ * 既不覆盖本地勾选，也不会留下"僵尸"监视。 */
 static void rebuild_watches(void)
 {
-    int i, k, total = 0;
+    int i, k, total = 0, watched_cnt = 0, changed = 0;
     if (!g_fw || g_fw->api_version < 4 || !g_fw->set_watch || !g_fw->acq_start ||
         !g_fw->leaf_watched || !g_fw->acq_stop)
         return;
-    for (i = 0; i < g_fw->leaf_count() && i < NET_REF_CAP; i++)
-        g_fw->set_watch(i, (g_local_watch[i] || g_net_ref[i] > 0) ? 1 : 0);
+    for (i = 0; i < g_fw->leaf_count() && i < NET_REF_CAP; i++) {
+        if (g_fw->leaf_watched(i)) watched_cnt++;
+        if (g_net_ref[i] > 0 && !g_fw->leaf_watched(i)) {
+            g_fw->set_watch(i, 1); /* 远端新监视：叠加勾选 */
+            changed = 1;
+        }
+    }
     for (k = 0; k < NET_MAX_CLIENTS; k++) {
         NetClient* c = &g_clients[k];
         if (!c->conn) continue;
         for (i = 0; i < c->watch_count; i++)
             if (c->watch_ids[i] >= 0 && c->watch_ids[i] < NET_REF_CAP) total++;
     }
-    if (total > 0) {
+    if (total > 0 && changed) {
         int rc = g_fw->acq_start();
         if (g_fw) g_fw->log(rc == 0 ? OS_LOG_INFO : OS_LOG_WARN,
-                            "network: 监视并集重建 -> 采集启动 rc=%d", rc);
-    } else {
-        g_fw->acq_stop();
-        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 监视并集为空 -> 采集停止");
+                            "network: 远端监视 %d 个 -> 采集启动 rc=%d", total, rc);
+    } else if (total == 0 && g_last_total > 0) {
+        /* 远端监视 有->无 的过渡（可能由停止下达触发） */
+        if (watched_cnt == 0) {
+            g_fw->acq_stop();
+            if (g_fw) g_fw->log(OS_LOG_INFO, "network: 无任何监视（远端已全部停止下达）-> 采集停止");
+        } else if (g_fw) {
+            g_fw->log(OS_LOG_INFO, "network: 远端已停止下达（本机仍勾选 %d 叶，采集继续）",
+                      watched_cnt);
+        }
     }
+    g_last_total = total;
 }
 
 static int build_varlist(OS_NetVar* v, int max)
@@ -246,27 +261,30 @@ static void handle_msg(NetClient* cl, const OS_NetFrame* f)
         char names[256][OS_NET_NAME_MAX];
         int i, cnt = os_net_decode_names(f->payload, (int)f->len, names, 256);
         int new_ids[NET_MAX_WATCH], new_n = 0;
-        static int local_snap;
-        if (!local_snap && g_listen >= 0 && g_fw && g_fw->api_version >= 4 && g_fw->leaf_watched) {
-            /* 首个远端监视到达：快照本地勾选（后续重建保留本地勾选） */
-            for (i = 0; i < g_fw->leaf_count() && i < NET_REF_CAP; i++)
-                g_local_watch[i] = g_fw->leaf_watched(i) ? 1 : 0;
-            local_snap = 1;
-        }
         for (i = 0; i < cnt && new_n < NET_MAX_WATCH; i++) {
             int id = resolve_name_to_id(names[i]);
             if (id >= 0 && id < NET_REF_CAP) new_ids[new_n++] = id;
         }
         if (g_listen >= 0) {
-            /* 撤销旧监视引用 → 应用新列表并计数 → 重建全局监视集 */
+            /* 撤销旧监视引用：引用归零的叶还原到远端监视前的本地状态 */
             for (i = 0; i < cl->watch_count; i++) {
                 int id = cl->watch_ids[i];
-                if (id >= 0 && id < NET_REF_CAP && g_net_ref[id] > 0) g_net_ref[id]--;
+                if (id >= 0 && id < NET_REF_CAP && g_net_ref[id] > 0) {
+                    g_net_ref[id]--;
+                    if (g_net_ref[id] == 0 && g_fw->set_watch && g_fw->leaf_watched) {
+                        if (!g_was_watched[id] && g_fw->leaf_watched(id))
+                            g_fw->set_watch(id, 0); /* 网络勾上的，网络撤销时取消 */
+                    }
+                }
             }
+            /* 应用新列表并计数：首次被远端监视的叶记住其本地状态 */
             cl->watch_count = new_n;
             for (i = 0; i < new_n; i++) {
-                cl->watch_ids[i] = new_ids[i];
-                g_net_ref[new_ids[i]]++;
+                int id = new_ids[i];
+                if (g_net_ref[id] == 0 && g_fw->leaf_watched)
+                    g_was_watched[id] = g_fw->leaf_watched(id) ? 1 : 0;
+                g_net_ref[id]++;
+                cl->watch_ids[i] = id;
             }
             rebuild_watches();
         } else {
