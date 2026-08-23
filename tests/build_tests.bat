@@ -244,6 +244,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+echo Running network UI integration (单行工具栏+通道网络选项+按键复用+网络菜单/配置对话框)...
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\ui_net_ui_drive.ps1
+if errorlevel 1 (
+  echo [ERROR] ui_net_ui_drive FAILED
+  exit /b 1
+)
+
 echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
 tests\bin\bug9_smoke.exe Cortex-M4 50
 if errorlevel 1 (

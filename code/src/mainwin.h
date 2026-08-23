@@ -38,5 +38,7 @@ void os_mainwin_apply_theme(void);
 void os_mainwin_replay_all(const wchar_t* path);
 /* 需求 14：网络动作入口（UI 与命令行测试钩子共用） */
 void os_mainwin_net_cmd(int action, const char* ip, int port);
+/* 需求 14：设置内联 IP/端口编辑框（--net-set 测试钩子/程序内配置共用） */
+void os_mainwin_net_set(const wchar_t* ip, const wchar_t* port);
 
 #endif

@@ -59,7 +59,8 @@ enum {
     OS_CMD_NET_ELF_PULL = 25, /* 下载：请求远端发回它的 ELF 变量表（双向同步） */
     OS_CMD_NET_WATCH    = 26, /* 发送 WATCH_LIST（我的勾选叶列表）给远端，远端据此采集 */
     OS_CMD_NET_WRITE    = 27, /* in: OS_NetWriteReq*，网络写变量（等待对端 ACK，≤3s） */
-    OS_CMD_NET_LOG_PULL = 28  /* 请求远端把采集历史（环形缓冲）分块回传（异步传输） */
+    OS_CMD_NET_LOG_PULL = 28, /* 请求远端把采集历史（环形缓冲）分块回传（异步传输） */
+    OS_CMD_NET_WATCH_STOP = 29 /* 发送空监视列表（停止下达）：远端停止采集 */
 };
 
 /* 仿真口类型 */

@@ -178,6 +178,13 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
                 _snwprintf(g_app.net_shot_at_path, MAX_PATH, L"%s", tok + 14);
                 g_app.net_shot_at_ms = _wtoi(comma + 1); }
         }
+        else if (wcsncmp(tok, L"--net-set=", 10) == 0) {
+            /* 需求14 UI整合：--net-set=ip:port 启动即设置内联网络配置（测试钩子） */
+            wchar_t* colon = wcschr(tok + 10, L':');
+            if (colon) *colon = 0;
+            _snwprintf(g_app.net_set_ip, 64, L"%s", tok + 10);
+            if (colon) _snwprintf(g_app.net_set_port, 16, L"%s", colon + 1);
+        }
         else if (wcsncmp(tok, L"--watch=", 8) == 0) _snwprintf(g_app.net_watch_csv, 1024, L"%s", tok + 8);
         else if (wcsncmp(tok, L"--net-win=", 10) == 0) _snwprintf(g_app.net_win_spec, 1024, L"%s", tok + 10);
         else if (wcsncmp(tok, L"--net-exit=", 11) == 0) g_app.net_exit_ms = _wtoi(tok + 11);
@@ -344,6 +351,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
             os_log(OS_LOG_INFO, "命令行选中叶变量: %ls (rc=%d)",
                    sel, os_vartree_select_leaf(g_app.hTree, sel));
         /* 需求 14：网络 E2E 钩子（ELF 加载后、连接前） */
+        if (g_app.net_set_ip[0]) {
+            os_log(OS_LOG_INFO, "net-set 钩子: %ls:%ls", g_app.net_set_ip,
+                   g_app.net_set_port[0] ? g_app.net_set_port : L"(空)");
+            os_mainwin_net_set(g_app.net_set_ip, g_app.net_set_port[0] ? g_app.net_set_port : NULL);
+        }
         if (g_app.net_watch_csv[0]) net_check_leaves(g_app.net_watch_csv);
         if (g_app.net_win_spec[0]) net_create_win(g_app.net_win_spec);
         if (g_app.replay_path[0] && os_replay_start(g_app.replay_path) == 0)

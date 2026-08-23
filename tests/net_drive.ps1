@@ -134,11 +134,16 @@ $b = Start-Process -FilePath $exe -ArgumentList $bArgs -PassThru
 $hB = Wait-Main $b.Id 8000
 if ($hB -eq [IntPtr]::Zero) { Write-Output "FAIL B 主窗口未出现"; Get-Process OpenScope -ErrorAction SilentlyContinue | Stop-Process -Force; exit 1 }
 
-# 校验 B 的网络工具栏新按钮（同步采集/下载记录）
-$btWatch = Get-ButtonText $hB 2117
-$btLog = Get-ButtonText $hB 2118
-if ($btWatch -eq "同步采集") { Write-Output "PASS UI 按钮 同步采集 (2117)" } else { Write-Output "FAIL UI 按钮 2117 文本='$btWatch'" }
-if ($btLog -eq "下载记录") { Write-Output "PASS UI 按钮 下载记录 (2118)" } else { Write-Output "FAIL UI 按钮 2118 文本='$btLog'" }
+# 校验 B 的网络 UI（需求14 UI整合：单行工具栏 + 通道下拉含网络 + 监听/上传ELF/下载ELF + IP/端口）
+$btListen = Get-ButtonText $hB 2112
+$btUp = Get-ButtonText $hB 2115
+$btDown = Get-ButtonText $hB 2116
+if ($btListen -eq "监听") { Write-Output "PASS UI 按钮 监听 (2112)" } else { Write-Output "FAIL UI 按钮 2112 文本='$btListen'" }
+if ($btUp -eq "上传ELF") { Write-Output "PASS UI 按钮 上传ELF (2115)" } else { Write-Output "FAIL UI 按钮 2115 文本='$btUp'" }
+if ($btDown -eq "下载ELF") { Write-Output "PASS UI 按钮 下载ELF (2116)" } else { Write-Output "FAIL UI 按钮 2116 文本='$btDown'" }
+$ipEdit = [NetUi]::GetDlgItem($hB, 2110)
+$portEdit = [NetUi]::GetDlgItem($hB, 2111)
+if ($ipEdit -ne [IntPtr]::Zero -and $portEdit -ne [IntPtr]::Zero) { Write-Output "PASS UI IP/端口编辑框存在" } else { Write-Output "FAIL UI IP/端口编辑框缺失" }
 
 # ---- 阶段 3：C（第二个远端，一对多 fan-out）----
 Start-Sleep -Seconds 2

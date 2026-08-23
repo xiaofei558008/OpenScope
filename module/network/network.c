@@ -53,6 +53,35 @@ static CRITICAL_SECTION g_cli_cs;
 static HANDLE g_ack_evt;               /* 网络写值 ACK 事件（NET_WRITE 同步等待用） */
 static volatile LONG g_ack_code;
 static char g_ack_msg[128];
+/* 远端监视引用：每叶被多少个远端客户端监视（重建全局监视集用，≤4096 叶） */
+#define NET_REF_CAP 4096
+static int g_net_ref[NET_REF_CAP];
+static uint8_t g_local_watch[NET_REF_CAP]; /* 首个远端监视到达时的本地勾选快照 */
+
+/* 重建探针侧全局监视集 = 本地勾选 ∪ 各远端监视并集；空集则停止采集 */
+static void rebuild_watches(void)
+{
+    int i, k, total = 0;
+    if (!g_fw || g_fw->api_version < 4 || !g_fw->set_watch || !g_fw->acq_start ||
+        !g_fw->leaf_watched || !g_fw->acq_stop)
+        return;
+    for (i = 0; i < g_fw->leaf_count() && i < NET_REF_CAP; i++)
+        g_fw->set_watch(i, (g_local_watch[i] || g_net_ref[i] > 0) ? 1 : 0);
+    for (k = 0; k < NET_MAX_CLIENTS; k++) {
+        NetClient* c = &g_clients[k];
+        if (!c->conn) continue;
+        for (i = 0; i < c->watch_count; i++)
+            if (c->watch_ids[i] >= 0 && c->watch_ids[i] < NET_REF_CAP) total++;
+    }
+    if (total > 0) {
+        int rc = g_fw->acq_start();
+        if (g_fw) g_fw->log(rc == 0 ? OS_LOG_INFO : OS_LOG_WARN,
+                            "network: 监视并集重建 -> 采集启动 rc=%d", rc);
+    } else {
+        g_fw->acq_stop();
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 监视并集为空 -> 采集停止");
+    }
+}
 
 static int build_varlist(OS_NetVar* v, int max)
 {
@@ -212,31 +241,42 @@ static void handle_msg(NetClient* cl, const OS_NetFrame* f)
     }
     case OS_NET_MSG_WATCH_LIST: {
         /* 服务端角色：远端下达的监视列表 → 勾选叶 + 启动采集（需求 14 核心链路）。
-         * 客户端角色收到 WATCH_LIST 只记录（供日志核对），不驱动本地采集。 */
+         * 客户端角色收到 WATCH_LIST 只记录（供日志核对），不驱动本地采集。
+         * 空列表 = 停止下达：撤销该客户端全部监视；全部远端撤销后停采。 */
         char names[256][OS_NET_NAME_MAX];
         int i, cnt = os_net_decode_names(f->payload, (int)f->len, names, 256);
-        cl->watch_count = 0;
-        for (i = 0; i < cnt && cl->watch_count < NET_MAX_WATCH; i++) {
-            int id = resolve_name_to_id(names[i]);
-            if (id >= 0) cl->watch_ids[cl->watch_count++] = id;
+        int new_ids[NET_MAX_WATCH], new_n = 0;
+        static int local_snap;
+        if (!local_snap && g_listen >= 0 && g_fw && g_fw->api_version >= 4 && g_fw->leaf_watched) {
+            /* 首个远端监视到达：快照本地勾选（后续重建保留本地勾选） */
+            for (i = 0; i < g_fw->leaf_count() && i < NET_REF_CAP; i++)
+                g_local_watch[i] = g_fw->leaf_watched(i) ? 1 : 0;
+            local_snap = 1;
         }
-        if (g_listen >= 0 && g_fw && g_fw->api_version >= 4 && g_fw->set_watch && g_fw->acq_start) {
-            int started = 0;
+        for (i = 0; i < cnt && new_n < NET_MAX_WATCH; i++) {
+            int id = resolve_name_to_id(names[i]);
+            if (id >= 0 && id < NET_REF_CAP) new_ids[new_n++] = id;
+        }
+        if (g_listen >= 0) {
+            /* 撤销旧监视引用 → 应用新列表并计数 → 重建全局监视集 */
             for (i = 0; i < cl->watch_count; i++) {
-                if (g_fw->set_watch(cl->watch_ids[i], 1) == 0) started++;
+                int id = cl->watch_ids[i];
+                if (id >= 0 && id < NET_REF_CAP && g_net_ref[id] > 0) g_net_ref[id]--;
             }
-            if (started > 0) {
-                int rc = g_fw->acq_start();
-                if (g_fw) g_fw->log(rc == 0 ? OS_LOG_INFO : OS_LOG_WARN,
-                                    "network: 远端监视 %d 项 -> 勾选 %d 叶，采集启动 rc=%d",
-                                    cnt, started, rc);
-            } else if (g_fw) {
-                g_fw->log(OS_LOG_WARN, "network: 远端监视 %d 项全部未解析（对端 ELF 与本机不一致？）", cnt);
+            cl->watch_count = new_n;
+            for (i = 0; i < new_n; i++) {
+                cl->watch_ids[i] = new_ids[i];
+                g_net_ref[new_ids[i]]++;
             }
+            rebuild_watches();
+        } else {
+            cl->watch_count = new_n;
+            for (i = 0; i < new_n; i++) cl->watch_ids[i] = new_ids[i];
         }
         n = os_net_encode_ack(0, "watch ok", ack, sizeof(ack));
         if (n >= 0) send_msg(cl->conn, OS_NET_MSG_ACK, 0, ack, (uint32_t)n);
-        if (g_fw) g_fw->log(OS_LOG_INFO, "network: WATCH_LIST %d 项 -> %d 个监视变量", cnt, cl->watch_count);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: WATCH_LIST %d 项 -> %d 个监视变量%s",
+                            cnt, cl->watch_count, cnt == 0 ? "（停止下达）" : "");
         break;
     }
     case OS_NET_MSG_WRITE_VAR: {
@@ -534,6 +574,19 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         if (g_fw) g_fw->log(OS_LOG_INFO, "network: 网络写入 %s=%s -> ACK %d (%s)",
                             req->name, req->value, g_ack_code, g_ack_msg[0] ? g_ack_msg : "-");
         return g_ack_code == 0 ? OS_ERR_OK : OS_ERR_FAIL;
+    }
+    case OS_CMD_NET_WATCH_STOP: {
+        /* 停止下达：发送空监视列表，探针侧撤销本客户端监视并在无人监视时停采 */
+        uint8_t payload[16];
+        int enc = os_net_encode_names(NULL, 0, payload, sizeof(payload));
+        int i2, sent = 0;
+        if (enc < 0) return OS_ERR_FAIL;
+        EnterCriticalSection(&g_cli_cs);
+        for (i2 = 0; i2 < NET_MAX_CLIENTS; i2++) if (g_clients[i2].conn)
+            if (send_msg(g_clients[i2].conn, OS_NET_MSG_WATCH_LIST, 0, payload, (uint32_t)enc) == 0) sent++;
+        LeaveCriticalSection(&g_cli_cs);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 停止下达（空监视列表 -> %d 个对端）", sent);
+        return sent > 0 ? OS_ERR_OK : OS_ERR_NOT_CONNECTED;
     }
     case OS_CMD_NET_LOG_PULL: {
         int i; uint8_t z = 0;

@@ -25,7 +25,7 @@
 #define IDC_BTN_REPLAY   2008
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
-/* 需求 14：网络内联控件（第二行工具栏），2110+ 避开菜单/其它控件 id */
+/* 需求 14：网络内联控件（UI整合：并入工具栏首行），2110+ 避开菜单/其它控件 id */
 #define IDD_NET_IP       2110
 #define IDD_NET_PORT     2111
 #define IDD_NET_LISTEN   2112
@@ -33,8 +33,21 @@
 #define IDD_NET_STOP     2114
 #define IDD_NET_UPELF    2115
 #define IDD_NET_DOWNELF  2116
-#define IDD_NET_WATCH    2117
-#define IDD_NET_DOWNLOG  2118
+/* 网络菜单（需求14 UI整合：通道下拉含"网络"选项，菜单含网络配置） */
+#define IDM_NET_CFG      2801
+#define IDM_NET_LISTEN   2802
+#define IDM_NET_CONNECT  2803
+#define IDM_NET_STOP     2804
+#define IDM_NET_WATCH    2805 /* 同步采集：下达监视列表 */
+#define IDM_NET_WATCHSTOP 2806 /* 停止下达 */
+#define IDM_NET_LOG_PULL 2807 /* 下载记录 */
+#define IDM_NET_UPELF    2808
+#define IDM_NET_DOWNELF  2809
+/* 网络配置对话框（OSDlgNetCfg） */
+#define IDD_NETCFG_IP    2421
+#define IDD_NETCFG_PORT  2422
+#define IDD_NETCFG_OK    2423
+#define IDD_NETCFG_CANCEL 2424
 #define IDM_EXIT         2011
 #define IDM_LAYOUT_SAVE  2021
 #define IDM_LAYOUT_LOAD  2022
@@ -136,6 +149,9 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
     { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
     { IDC_BTN_REPLAYSTOP, L"停止回放" },
+    /* 需求14 UI整合：网络按键并入工具栏首行（监听/上传ELF/下载ELF） */
+    { IDD_NET_LISTEN, L"监听" }, { IDD_NET_UPELF, L"上传ELF" },
+    { IDD_NET_DOWNELF, L"下载ELF" },
     /* Bug8: 自动隐藏/钉住归位到左侧 elf 变量树（OSTreePin 钉图标），不再放菜单栏下固定按键 */
 };
 
@@ -294,6 +310,20 @@ void os_mainwin_update_buttons(void)
     int replay = g_app.acq_state == OS_ACQ_REPLAY;
     HWND b;
 #define ENB(id, on) do { b = GetDlgItem(g_app.hMain, (id)); if (b) EnableWindow(b, (on)); } while (0)
+    if (g_app.net_mode) {
+        /* 需求14 UI整合：网络通道下按键全部可用（网络模块内部有连接状态判断，
+         * 连接/断开/开始采集/停止采集分别复用为 网络连接/停止/下达监视/停止下达） */
+        ENB(IDC_BTN_CONNECT, 1);
+        ENB(IDC_BTN_DISCON, 1);
+        ENB(IDC_BTN_START, g_app.watch_count > 0 && !running);
+        ENB(IDC_BTN_STOP, 1);
+        ENB(IDC_BTN_LOGSTART, !g_app.log_csv && !replay);
+        ENB(IDC_BTN_LOGSTOP, g_app.log_csv != NULL);
+        ENB(IDC_BTN_REPLAY, !running && !replay);
+        ENB(IDC_BTN_REPLAYSTOP, replay);
+        ENB(IDC_BTN_OPEN, 1);
+        return;
+    }
     ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay);
     ENB(IDC_BTN_DISCON, conn);
     ENB(IDC_BTN_START, conn && g_app.watch_count > 0 && !running && !replay);
@@ -309,7 +339,9 @@ void os_mainwin_update_buttons(void)
 static void refresh_status(void)
 {
     wchar_t w[512];
-    if (g_app.connected && g_app.driver) {
+    if (g_app.net_mode) {
+        _snwprintf(w, 512, L"通道: 网络（连接/断开/采集按键按网络语义复用）");
+    } else if (g_app.connected && g_app.driver) {
         wchar_t dn[128];
         os_utf8_to_wide_buf(g_app.driver->name, dn, 128);
         _snwprintf(w, 512, L"已连接 %s", dn);
@@ -676,7 +708,7 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 static void layout(void)
 {
     RECT rc;
-    int bw, bh = 62, sw, logh, right_h, right_w; /* 两行工具栏：首行按钮+配置，次行网络(需求14) */
+    int bw, bh = 34, sw, logh, right_h, right_w; /* 需求14 UI整合：单行工具栏（按钮+通道配置+网络） */
     int parts[4];
     GetClientRect(g_app.hMain, &rc);
     bw = rc.right;
@@ -688,14 +720,16 @@ static void layout(void)
     else
         right_h = rc.bottom - bh - logh - 22 - 5; /* F14: 5px 横向分隔条（消息栏上下拉伸） */
     right_w = bw - sw - 5;
-    /* 工具栏一行（菜单栏正下方）：全部按钮 + 接口/速度/J-Link设备/刷新 */
+    /* 工具栏一行（菜单栏正下方）：全部按钮 + 通道/核心/接口/速度/设备/刷新 + 网络IP/端口/监听/上传ELF/下载ELF */
     {
         static const struct { int id; int fixed_w; int combo; } items[] = {
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
-            { IDC_CFG_DRIVER, 110, 1 }, { IDC_CFG_DEVICE, 140, 1 }, { IDC_CFG_IFACE, 62, 1 },
-            { IDC_CFG_SPEED, 92, 1 }, { IDC_CFG_EMU, 200, 1 }, { IDC_CFG_REFRESH, 48, 0 },
+            { IDC_CFG_DRIVER, 100, 1 }, { IDC_CFG_DEVICE, 118, 1 }, { IDC_CFG_IFACE, 56, 1 },
+            { IDC_CFG_SPEED, 80, 1 }, { IDC_CFG_EMU, 170, 1 }, { IDC_CFG_REFRESH, 48, 0 },
+            { IDD_NET_IP, 96, 0 }, { IDD_NET_PORT, 44, 0 },
+            { IDD_NET_LISTEN, 0, 0 }, { IDD_NET_UPELF, 0, 0 }, { IDD_NET_DOWNELF, 0, 0 },
         };
         int i, x = 6;
         for (i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
@@ -703,10 +737,10 @@ static void layout(void)
             if (!c) continue;
             if (items[i].combo) {
                 MoveWindow(c, x, 5, items[i].fixed_w, 120, TRUE);
-                x += items[i].fixed_w + 6;
+                x += items[i].fixed_w + 4;
             } else if (items[i].fixed_w) {
-                MoveWindow(c, x, 5, items[i].fixed_w, 24, TRUE);
-                x += items[i].fixed_w + 6;
+                MoveWindow(c, x, 5, items[i].fixed_w, 22, TRUE);
+                x += items[i].fixed_w + 4;
             } else {
                 const wchar_t* text = NULL;
                 int k;
@@ -719,8 +753,8 @@ static void layout(void)
                 GetTextExtentPoint32W(hdc, text ? text : L"??",
                                       text ? (int)wcslen(text) : 2, &sz);
                 ReleaseDC(c ? c : g_app.hMain, hdc);
-                MoveWindow(c, x, 5, sz.cx + 18, 24, TRUE);
-                x += sz.cx + 24;
+                MoveWindow(c, x, 5, sz.cx + 14, 22, TRUE);
+                x += sz.cx + 18;
             }
         }
     }
@@ -1158,6 +1192,9 @@ static void cmd_open_elf(void)
     if (GetOpenFileNameW(&ofn)) os_mainwin_open_elf(file);
 }
 
+static void cmd_net_action(int action); /* 需求14 UI整合：网络动作（连接/断开/采集按键复用） */
+static void net_cfg_dialog(void);
+
 static void check_elf_mtime(void)
 {
     uint64_t mt;
@@ -1181,6 +1218,11 @@ static void cmd_connect(void)
     OS_DriverInfo info;
     OS_ConnectCfg cfg;
     LRESULT ifi, emu, dci;
+    /* 需求14 UI整合：网络通道下"连接"按键复用为网络连接 */
+    if (g_app.net_mode) {
+        cmd_net_action(OS_CMD_NET_CONNECT);
+        return;
+    }
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块");
         set_status(0, L"未加载驱动模块");
@@ -1241,6 +1283,11 @@ static void cmd_connect(void)
 
 static void cmd_disconnect(void)
 {
+    /* 需求14 UI整合：网络通道下"断开"按键复用为网络停止 */
+    if (g_app.net_mode) {
+        cmd_net_action(OS_CMD_NET_STOP);
+        return;
+    }
     if (g_app.driver && g_app.driver->command) {
         g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
     }
@@ -1303,7 +1350,22 @@ void os_mainwin_net_cmd(int action, const char* ip, int port)
                : action == OS_CMD_NET_SYNC_ELF ? "上传 ELF 变量表"
                : action == OS_CMD_NET_ELF_PULL ? "请求远端 ELF 变量表"
                : action == OS_CMD_NET_WATCH ? "发送监视列表"
+               : action == OS_CMD_NET_WATCH_STOP ? "停止下达（空监视列表）"
                : action == OS_CMD_NET_LOG_PULL ? "请求远端采集历史" : "动作");
+    }
+}
+
+/* 需求14 UI整合：设置内联 IP/端口编辑框（--net-set 测试钩子与程序内配置共用） */
+void os_mainwin_net_set(const wchar_t* ip, const wchar_t* port)
+{
+    HWND h;
+    if (ip) {
+        h = GetDlgItem(g_app.hMain, IDD_NET_IP);
+        if (h) SetWindowTextW(h, ip);
+    }
+    if (port) {
+        h = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+        if (h) SetWindowTextW(h, port);
     }
 }
 
@@ -1358,7 +1420,7 @@ static int cfg_fill_emus(void)
     return n;
 }
 
-/* AD-13：填充"仿真器"下拉（全部 OS_CAP_DRIVER 模块） */
+/* AD-13：填充"仿真器/通道"下拉（全部 OS_CAP_DRIVER 模块 + 网络通道，需求14 UI整合） */
 static void cfg_fill_drivers(void)
 {
     HWND h = GetDlgItem(g_app.hMain, IDC_CFG_DRIVER);
@@ -1372,9 +1434,32 @@ static void cfg_fill_drivers(void)
         os_utf8_to_wide_buf(nm, w, 64);
         SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)w);
     }
+    SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)L"网络"); /* 需求14：网络远程通道 */
     {
         int idx = os_modmgr_driver_index();
         SendMessageW(h, CB_SETCURSEL, (WPARAM)(idx >= 0 ? idx : 0), 0);
+    }
+}
+
+/* 需求14 UI整合：当前通道是否选中"网络"（下拉末项） */
+static int net_mode_sel(void)
+{
+    HWND h = GetDlgItem(g_app.hMain, IDC_CFG_DRIVER);
+    LRESULT idx;
+    if (!h) return 0;
+    idx = SendMessageW(h, CB_GETCURSEL, 0, 0);
+    return (idx == CB_ERR) ? 0 : (idx == os_modmgr_driver_count());
+}
+
+/* 需求14 UI整合：按通道模式启用/禁用硬件相关配置控件 */
+static void net_mode_apply_controls(void)
+{
+    HWND b;
+    int i;
+    int hw_ids[] = { IDC_CFG_DEVICE, IDC_CFG_IFACE, IDC_CFG_SPEED, IDC_CFG_EMU, IDC_CFG_REFRESH };
+    for (i = 0; i < (int)(sizeof(hw_ids) / sizeof(hw_ids[0])); i++) {
+        b = GetDlgItem(g_app.hMain, hw_ids[i]);
+        if (b) EnableWindow(b, g_app.net_mode ? FALSE : TRUE);
     }
 }
 
@@ -1417,10 +1502,22 @@ static void cfg_fill_speeds(void)
     }
 }
 
-/* AD-13：切换仿真器——断开旧连接、重指驱动、重扫设备 + 刷新速度档位 */
+/* AD-13：切换仿真器/通道——断开旧连接、重指驱动、重扫设备 + 刷新速度档位；
+ * 选中"网络"项（末项）则进入网络远程通道（需求14 UI整合）。 */
 static void cmd_select_driver(int idx)
 {
+    if (idx == os_modmgr_driver_count()) {
+        /* 网络通道：连接/断开/开始采集/停止采集按键复用为网络语义 */
+        g_app.net_mode = 1;
+        net_mode_apply_controls();
+        refresh_status();
+        os_mainwin_update_buttons();
+        os_log(OS_LOG_INFO, "通道切换: 网络（连接=网络连接，开始采集=下达监视列表，停止采集=停止下达）");
+        return;
+    }
     if (os_modmgr_select_driver(idx) != OS_ERR_OK) return;
+    g_app.net_mode = 0;
+    net_mode_apply_controls();
     g_app.connected = 0;
     g_emu_count = -1;
     cfg_fill_emus();
@@ -1469,6 +1566,11 @@ static void chart_broadcast(UINT msg)
 
 static void cmd_start_acq(void)
 {
+    /* 需求14 UI整合：网络通道下"开始采集"复用为"同步采集"（下达本机勾选监视列表） */
+    if (g_app.net_mode) {
+        cmd_net_action(OS_CMD_NET_WATCH);
+        return;
+    }
     if (!g_app.connected) {
         MessageBoxW(g_app.hMain, L"请先连接 MCU", L"采集", MB_OK | MB_ICONINFORMATION);
         return;
@@ -1482,6 +1584,11 @@ static void cmd_start_acq(void)
 
 static void cmd_stop_acq(void)
 {
+    /* 需求14 UI整合：网络通道下"停止采集"复用为"停止下达"（对端停止采集） */
+    if (g_app.net_mode) {
+        cmd_net_action(OS_CMD_NET_WATCH_STOP);
+        return;
+    }
     os_ds_stop();
     chart_broadcast(WM_OS_CHART_FITALL); /* 停止记录后波形整体展示到整个区域 */
     refresh_status();
@@ -2154,6 +2261,92 @@ static LRESULT CALLBACK edit_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         break;
     }
     return DefWindowProcW(dlg, msg, wParam, lParam);
+}
+
+/* 需求14 UI整合：网络配置对话框（IP/端口），确定后写回工具栏内联编辑框 */
+typedef struct NetCfgState {
+    wchar_t ip_out[64];
+    wchar_t port_out[16];
+} NetCfgState;
+
+static LRESULT CALLBACK netcfg_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_ERASEBKGND: { /* F20 主题背景 */
+        RECT rc;
+        HDC hdc = (HDC)wParam;
+        GetClientRect(dlg, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        return theme_ctlcolor((HDC)wParam, 0);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return theme_ctlcolor((HDC)wParam, 1);
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDD_NETCFG_OK: {
+            NetCfgState* st = (NetCfgState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+            if (st) {
+                GetWindowTextW(GetDlgItem(dlg, IDD_NETCFG_IP), st->ip_out, 64);
+                GetWindowTextW(GetDlgItem(dlg, IDD_NETCFG_PORT), st->port_out, 16);
+            }
+            DestroyWindow(dlg);
+            return 0;
+        }
+        case IDD_NETCFG_CANCEL:
+            DestroyWindow(dlg);
+            return 0;
+        }
+        break;
+    }
+    return DefWindowProcW(dlg, msg, wParam, lParam);
+}
+
+static void net_cfg_dialog(void)
+{
+    HWND dlg, h;
+    NetCfgState* st = (NetCfgState*)calloc(1, sizeof(NetCfgState));
+    wchar_t cur_ip[64] = L"127.0.0.1", cur_port[16] = L"10000";
+    if (!st) return;
+    h = GetDlgItem(g_app.hMain, IDD_NET_IP);
+    if (h) GetWindowTextW(h, cur_ip, 64);
+    h = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+    if (h) GetWindowTextW(h, cur_port, 16);
+    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgNetCfg", L"网络配置",
+                          WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                          (GetSystemMetrics(SM_CXSCREEN) - 320) / 2,
+                          (GetSystemMetrics(SM_CYSCREEN) - 170) / 2,
+                          320, 170, g_app.hMain, NULL, g_app.hInst, NULL);
+    if (!dlg) { free(st); return; }
+    SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)st);
+    CreateWindowW(L"STATIC", L"IP 地址", WS_CHILD | WS_VISIBLE, 14, 18, 60, 22, dlg, NULL, g_app.hInst, NULL);
+    h = CreateWindowW(L"EDIT", cur_ip, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                      84, 14, 210, 22, dlg, (HMENU)IDD_NETCFG_IP, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    CreateWindowW(L"STATIC", L"端口", WS_CHILD | WS_VISIBLE, 14, 52, 60, 22, dlg, NULL, g_app.hInst, NULL);
+    h = CreateWindowW(L"EDIT", cur_port, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_NUMBER,
+                      84, 48, 100, 22, dlg, (HMENU)IDD_NETCFG_PORT, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    CreateWindowW(L"STATIC", L"连接/监听均使用以上地址与端口", WS_CHILD | WS_VISIBLE,
+                  14, 82, 290, 18, dlg, NULL, g_app.hInst, NULL);
+    h = CreateWindowW(L"BUTTON", L"确定", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
+                      156, 110, 64, 26, dlg, (HMENU)IDD_NETCFG_OK, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                      232, 110, 64, 26, dlg, (HMENU)IDD_NETCFG_CANCEL, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    run_modal(dlg, g_app.hMain);
+    if (st->ip_out[0]) {
+        HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
+        HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+        if (hip) SetWindowTextW(hip, st->ip_out);
+        if (hport) SetWindowTextW(hport, st->port_out);
+        os_log(OS_LOG_INFO, "网络配置: %ls:%ls", st->ip_out, st->port_out);
+    }
+    free(st);
 }
 
 /* ---------- 框架回调 ---------- */
@@ -2956,16 +3149,18 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 {
     switch (msg) {
     case WM_CREATE: {
-        HMENU mFile, mAcq, mLog, mHelp;
+        HMENU mFile, mAcq, mLog, mNet, mHelp;
         int i;
         g_app.hMain = hwnd;
         os_theme_set_main(hwnd);
         g_app.hBtnBar = hwnd;
         for (i = 0; i < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); i++) {
-            HWND b = CreateWindowW(L"BUTTON", g_tool_btns[i].text,
-                                   WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                   6 + i * 84, 5, 80, 24, hwnd, (HMENU)(INT_PTR)g_tool_btns[i].id,
-                                   g_app.hInst, NULL);
+            HWND b;
+            if (g_tool_btns[i].id >= 2110) continue; /* 网络按键（监听/上传ELF/下载ELF）由下方网络块创建 */
+            b = CreateWindowW(L"BUTTON", g_tool_btns[i].text,
+                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              6 + i * 84, 5, 80, 24, hwnd, (HMENU)(INT_PTR)g_tool_btns[i].id,
+                              g_app.hInst, NULL);
             SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
         /* 连接配置控件（仿真器/MCU核心/接口/速度/设备/刷新，随工具栏一行布局） */
@@ -2995,25 +3190,22 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                               1078, 5, 48, 24, hwnd, (HMENU)IDC_CFG_REFRESH, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
-        /* 需求 14：网络内联配置（第二行工具栏）：IP/端口 + 监听/连接/停止/上传ELF/下载ELF */
+        /* 需求14 UI整合：网络内联配置并入工具栏首行（IP/端口 + 监听/上传ELF/下载ELF；
+         * 连接/断开/开始采集/停止采集复用前面按键，按通道下拉是否选"网络"切换语义） */
         {
             HWND c;
-            c = CreateWindowW(L"STATIC", L"网络", WS_CHILD | WS_VISIBLE, 6, 33, 36, 20, hwnd, NULL, g_app.hInst, NULL);
-            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             c = CreateWindowW(L"EDIT", L"127.0.0.1", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-                              44, 31, 110, 21, hwnd, (HMENU)IDD_NET_IP, g_app.hInst, NULL);
+                              1130, 5, 96, 21, hwnd, (HMENU)IDD_NET_IP, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             c = CreateWindowW(L"EDIT", L"10000", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
-                              160, 31, 52, 21, hwnd, (HMENU)IDD_NET_PORT, g_app.hInst, NULL);
+                              1230, 5, 44, 21, hwnd, (HMENU)IDD_NET_PORT, g_app.hInst, NULL);
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             { static const struct { int id; const wchar_t* t; } nb[] = {
-                { IDD_NET_LISTEN, L"监听" }, { IDD_NET_CONNECT, L"连接" }, { IDD_NET_STOP, L"停止" },
-                { IDD_NET_UPELF, L"上传ELF" }, { IDD_NET_DOWNELF, L"下载ELF" },
-                { IDD_NET_WATCH, L"同步采集" }, { IDD_NET_DOWNLOG, L"下载记录" } };
+                { IDD_NET_LISTEN, L"监听" }, { IDD_NET_UPELF, L"上传ELF" }, { IDD_NET_DOWNELF, L"下载ELF" } };
               int k;
-              for (k = 0; k < 7; k++) {
+              for (k = 0; k < 3; k++) {
                 c = CreateWindowW(L"BUTTON", nb[k].t, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                  222 + k * 74, 29, 68, 24, hwnd, (HMENU)(INT_PTR)nb[k].id, g_app.hInst, NULL);
+                                  1282 + k * 84, 5, 80, 24, hwnd, (HMENU)(INT_PTR)nb[k].id, g_app.hInst, NULL);
                 SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
               }
             }
@@ -3075,11 +3267,12 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         /* F20: 子类化状态栏，整体用主题色自绘（标准 SB_SET*COLOR 消息无效） */
         g_status_oldproc = (WNDPROC)SetWindowLongPtrW(g_app.hStatus, GWLP_WNDPROC,
                                                       (LONG_PTR)status_theme_proc);
-        /* 菜单 */
+        /* 菜单（需求14 UI整合：新增"网络"菜单，含网络配置对话框） */
         mFile = CreateMenu();
         mAcq = CreateMenu();
         mLog = CreateMenu();
         g_menu_win = CreateMenu();
+        mNet = CreateMenu();
         mHelp = CreateMenu();
         g_menu_file = mFile;
         AppendMenuW(mFile, MF_STRING, IDC_BTN_OPEN, L"打开 ELF 文件...\tCtrl+O");
@@ -3100,6 +3293,19 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mLog, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAY, L"离线回放...");
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAYSTOP, L"停止回放");
+        /* 需求14 UI整合：网络菜单（配置 + 全部网络动作，与工具栏按键同源） */
+        AppendMenuW(mNet, MF_STRING, IDM_NET_CFG, L"网络配置...");
+        AppendMenuW(mNet, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(mNet, MF_STRING, IDM_NET_LISTEN, L"监听");
+        AppendMenuW(mNet, MF_STRING, IDM_NET_CONNECT, L"连接");
+        AppendMenuW(mNet, MF_STRING, IDM_NET_STOP, L"断开");
+        AppendMenuW(mNet, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(mNet, MF_STRING, IDM_NET_WATCH, L"同步采集（下达监视列表）");
+        AppendMenuW(mNet, MF_STRING, IDM_NET_WATCHSTOP, L"停止下达");
+        AppendMenuW(mNet, MF_STRING, IDM_NET_LOG_PULL, L"下载记录");
+        AppendMenuW(mNet, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(mNet, MF_STRING, IDM_NET_UPELF, L"上传ELF变量表");
+        AppendMenuW(mNet, MF_STRING, IDM_NET_DOWNELF, L"下载ELF变量表");
         AppendMenuW(mHelp, MF_STRING, IDM_HELP_DOC, L"帮助文档\tF1");
         AppendMenuW(mHelp, MF_STRING, IDC_BTN_ABOUT, L"关于 OpenScope");
         g_menu = CreateMenu();
@@ -3107,6 +3313,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mAcq, L"采集(&A)");
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mLog, L"记录/回放(&L)");
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)g_menu_win, L"窗口(&W)");
+        AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mNet, L"网络(&N)");
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mHelp, L"帮助(&H)");
         SetMenu(hwnd, g_menu);
         os_mainwin_rebuild_window_menu();
@@ -3461,12 +3668,18 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDM_HELP_DOC: os_help_show(hwnd); break; /* 需求12：帮助文档（F1 同路径） */
         case IDD_NET_LISTEN: cmd_net_action(OS_CMD_NET_START); break;
-        case IDD_NET_CONNECT: cmd_net_action(OS_CMD_NET_CONNECT); break;
-        case IDD_NET_STOP: cmd_net_action(OS_CMD_NET_STOP); break;
         case IDD_NET_UPELF: cmd_net_action(OS_CMD_NET_SYNC_ELF); break;
         case IDD_NET_DOWNELF: cmd_net_action(OS_CMD_NET_ELF_PULL); break;
-        case IDD_NET_WATCH: cmd_net_action(OS_CMD_NET_WATCH); break;
-        case IDD_NET_DOWNLOG: cmd_net_action(OS_CMD_NET_LOG_PULL); break;
+        /* 需求14 UI整合：网络菜单 */
+        case IDM_NET_CFG: net_cfg_dialog(); break;
+        case IDM_NET_LISTEN: cmd_net_action(OS_CMD_NET_START); break;
+        case IDM_NET_CONNECT: cmd_net_action(OS_CMD_NET_CONNECT); break;
+        case IDM_NET_STOP: cmd_net_action(OS_CMD_NET_STOP); break;
+        case IDM_NET_WATCH: cmd_net_action(OS_CMD_NET_WATCH); break;
+        case IDM_NET_WATCHSTOP: cmd_net_action(OS_CMD_NET_WATCH_STOP); break;
+        case IDM_NET_LOG_PULL: cmd_net_action(OS_CMD_NET_LOG_PULL); break;
+        case IDM_NET_UPELF: cmd_net_action(OS_CMD_NET_SYNC_ELF); break;
+        case IDM_NET_DOWNELF: cmd_net_action(OS_CMD_NET_ELF_PULL); break;
         case IDC_BTN_ABOUT: {
             wchar_t about[640];
             _snwprintf(about, 640,
@@ -3690,5 +3903,11 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSDlgEdit";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = netcfg_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = L"OSDlgNetCfg";
     RegisterClassW(&wc);
 }

@@ -167,6 +167,7 @@ typedef struct OS_App {
     int  net_connect_port;
     int  net_sync_flag;            /* 1=连接后触发 ELF 双向同步 */
     int  net_exit_ms;              /* >0 启动 N ms 后自动退出 */
+    int  net_mode;                 /* UI 整合：通道下拉选中"网络"=1（连接/断开/采集按键按网络语义复用） */
     int  net_watch_flag;           /* 1=连接后发送监视列表（--net-watch） */
     char net_write_name[64];       /* --net-write=name=value：连接后网络写变量 */
     char net_write_value[64];
@@ -174,6 +175,8 @@ typedef struct OS_App {
     wchar_t net_shot_at_path[MAX_PATH]; /* --net-shot-at=路径,毫秒：延迟截图当前窗口 */
     int  net_shot_at_ms;
     wchar_t net_watch_csv[1024];   /* --watch=名1,名2：启动即勾选观测叶 */
+    wchar_t net_set_ip[64];        /* --net-set=ip:port：启动即设置内联网络配置 */
+    wchar_t net_set_port[16];
     wchar_t net_win_spec[1024];    /* --net-win=chart,名1,名2：启动建窗口并加变量 */
     int  net_watch_list[128];      /* 测试用监视列表（暂留） */
     int  net_watch_count;
