@@ -137,6 +137,44 @@ static void test_flat(void)
     CHECK(ok, "flat 无损往返（含 var_id）");
 }
 
+/* CHUNK 流（异步历史回传）：分块编码 → 逐块喂入 → 完整读回 */
+static void test_chunk_stream(void)
+{
+    uint8_t data[30000], out[65536], payload[9000];
+    int i, ok = 1, got = -1;
+    OS_NetAccum acc;
+    for (i = 0; i < (int)sizeof(data); i++) data[i] = (uint8_t)(i * 7 + 3);
+    os_net_accum_init(&acc);
+    {
+        uint32_t off = 0, idx = 0;
+        while (off < sizeof(data)) {
+            uint32_t l = (uint32_t)sizeof(data) - off;
+            int clen;
+            if (l > 4096) l = 4096;
+            clen = os_net_chunk_stream_encode(idx, (uint32_t)sizeof(data) + 4, data + off, l,
+                                              payload, sizeof(payload));
+            if (clen < 0) { ok = 0; break; }
+            got = os_net_chunk_stream_feed(&acc, payload, clen, out, (int)sizeof(out));
+            if (got > 0) break; /* 完整（单块时） */
+            if (got < 0) { ok = 0; break; }
+            off += l; idx++;
+        }
+    }
+    CHECK(got == (int)sizeof(data), "CHUNK 流重组长度");
+    if (ok) for (i = 0; i < (int)sizeof(data); i++) if (out[i] != data[i]) { ok = 0; break; }
+    CHECK(ok, "CHUNK 流无损往返（含总长头）");
+    os_net_accum_free(&acc);
+
+    /* 少样本并行压缩格式：n<=nthreads 时也必须是可 decode_parallel 的包格式 */
+    {
+        OS_NetSample in[4], out2[4];
+        uint8_t b2[512];
+        int enc2 = os_net_codec_encode_parallel(in, 4, 8, b2, sizeof(b2));
+        int dec2 = os_net_codec_decode_parallel(b2, enc2, out2, 4);
+        CHECK(enc2 > 0 && dec2 == 4, "并行包格式（n<=nthreads）可解码");
+    }
+}
+
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -147,6 +185,7 @@ int main(void)
     test_spool();
     test_parallel();
     test_flat();
+    test_chunk_stream();
     if (g_fail == 0) { printf("ALL PASS\n"); return 0; }
     printf("FAILED: %d\n", g_fail);
     return 1;

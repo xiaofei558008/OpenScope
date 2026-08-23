@@ -113,3 +113,35 @@ int os_net_accum_append(OS_NetAccum* a, const uint8_t* d, uint32_t l)
     a->len = need;
     return 0;
 }
+
+/* CHUNK 流：首块 payload = [4B 总字节数][数据]，后续块 = 纯数据。总字节数含 4B 头本身。
+ * 发送端把整块数据 os_net_chunk_split 后逐块经本函数编码为 CHUNK 帧 payload；
+ * 接收端每块 os_net_chunk_stream_feed 喂入累计器，到齐后复制到 out 并复位累计器。 */
+int os_net_chunk_stream_encode(uint32_t idx, uint32_t total_len, const uint8_t* d, uint32_t l,
+                               uint8_t* out, int cap)
+{
+    if (idx == 0) {
+        if (cap < (int)l + 4) return -1;
+        put_le32(out, total_len);
+        memcpy(out + 4, d, l);
+        return (int)l + 4;
+    }
+    if (cap < (int)l) return -1;
+    memcpy(out, d, l);
+    return (int)l;
+}
+
+int os_net_chunk_stream_feed(OS_NetAccum* a, const uint8_t* d, int len,
+                             uint8_t* out, int cap)
+{
+    uint32_t total;
+    if (!a || !d || len <= 0) return -1;
+    if (os_net_accum_append(a, d, (uint32_t)len) != 0) return -1;
+    if (a->len < 4) return 0; /* 头还没到齐 */
+    total = get_le32(a->buf);
+    if (total < 4 || total > (uint32_t)cap + 4) { os_net_accum_free(a); return -1; }
+    if (a->len < total) return 0; /* 数据块未到齐，继续等 */
+    memcpy(out, a->buf + 4, total - 4); /* 剥掉 4 字节总长头 */
+    os_net_accum_free(a);
+    return (int)(total - 4);
+}

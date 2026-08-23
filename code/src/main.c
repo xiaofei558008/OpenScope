@@ -121,6 +121,11 @@ static void init_fw(void)
     g_app.fw.leaf_find = os_fw_leaf_find;
     g_app.fw.leaf_addr = os_fw_leaf_addr;
     g_app.fw.push_sample = os_fw_push_sample;
+    g_app.fw.leaf_watched = os_fw_leaf_watched;
+    g_app.fw.set_watch = os_fw_set_watch;
+    g_app.fw.acq_start = os_fw_acq_start;
+    g_app.fw.acq_stop = os_fw_acq_stop;
+    g_app.fw.ring_copy = os_fw_ring_copy;
 }
 
 /* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */
@@ -140,7 +145,8 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
         if (!*tok) break;
         sp = wcschr(tok, L' ');
         if (sp) *sp = 0; /* 先截断尾部空格再匹配，避免 "--no-layout " 匹配失败 */
-        if (wcsncmp(tok, L"--select-leaf=", 14) == 0) *select_leaf = tok + 14;
+        if (wcsncmp(tok, L"--log=", 6) == 0) { /* 已预扫描处理，跳过（勿当 ELF 路径） */ }
+        else if (wcsncmp(tok, L"--select-leaf=", 14) == 0) *select_leaf = tok + 14;
         else if (wcsncmp(tok, L"--layout-load=", 14) == 0) *layout_load = tok + 14;
         else if (wcsncmp(tok, L"--layout-save=", 14) == 0) *layout_save = tok + 14;
         else if (wcscmp(tok, L"--no-layout") == 0) *no_layout = 1;
@@ -158,6 +164,22 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
             if (colon) { *colon = 0; _snwprintf(g_app.net_connect_ip, MAX_PATH, L"%s", tok + 14); g_app.net_connect_port = _wtoi(colon + 1); }
         }
         else if (wcscmp(tok, L"--net-sync") == 0) g_app.net_sync_flag = 1;
+        else if (wcscmp(tok, L"--net-watch") == 0) g_app.net_watch_flag = 1;
+        else if (wcsncmp(tok, L"--net-write=", 12) == 0) {
+            wchar_t* eq = wcschr(tok + 12, L'=');
+            if (eq) { *eq = 0;
+                os_wide_to_utf8_buf(tok + 12, g_app.net_write_name, sizeof(g_app.net_write_name));
+                os_wide_to_utf8_buf(eq + 1, g_app.net_write_value, sizeof(g_app.net_write_value)); }
+        }
+        else if (wcscmp(tok, L"--net-download") == 0) g_app.net_download_flag = 1;
+        else if (wcsncmp(tok, L"--net-shot-at=", 14) == 0) {
+            wchar_t* comma = wcschr(tok + 14, L',');
+            if (comma) { *comma = 0;
+                _snwprintf(g_app.net_shot_at_path, MAX_PATH, L"%s", tok + 14);
+                g_app.net_shot_at_ms = _wtoi(comma + 1); }
+        }
+        else if (wcsncmp(tok, L"--watch=", 8) == 0) _snwprintf(g_app.net_watch_csv, 1024, L"%s", tok + 8);
+        else if (wcsncmp(tok, L"--net-win=", 10) == 0) _snwprintf(g_app.net_win_spec, 1024, L"%s", tok + 10);
         else if (wcsncmp(tok, L"--net-exit=", 11) == 0) g_app.net_exit_ms = _wtoi(tok + 11);
         else if (first) { *elf = tok; first = 0; }
         tok = sp ? sp + 1 : NULL;
@@ -170,6 +192,80 @@ static DWORD WINAPI net_exit_thread(LPVOID p)
     Sleep((DWORD)(INT_PTR)p);
     if (g_app.hMain) PostMessage(g_app.hMain, WM_CLOSE, 0, 0);
     return 0;
+}
+
+/* 网络测试钩子：延时 N ms 后把当前 tab 的激活窗口截图保存（--net-shot-at=路径,毫秒） */
+static DWORD WINAPI net_shot_thread(LPVOID p)
+{
+    Sleep((DWORD)(INT_PTR)p);
+    if (g_app.net_shot_at_path[0])
+        os_mainwin_shot_active(g_app.net_shot_at_path);
+    return 0;
+}
+
+/* 网络测试钩子：--watch=名1,名2 → 勾选观测叶（远端实例据此发监视列表） */
+static void net_check_leaves(const wchar_t* csv)
+{
+    wchar_t* buf = _wcsdup(csv);
+    wchar_t* tok = buf;
+    int i, wc = 0;
+    if (!buf) return;
+    while (tok && *tok) {
+        wchar_t* sp = wcschr(tok, L',');
+        char name[512];
+        int id;
+        if (sp) *sp = 0;
+        while (*tok == L' ' || *tok == L'\t') tok++;
+        os_wide_to_utf8_buf(tok, name, sizeof(name));
+        id = os_vartree_find_by_name(name);
+        if (id >= 0) {
+            InterlockedExchange(&g_app.leaves[id].watched, 1);
+            if (g_app.hTree) os_vartree_set_check_ui(g_app.hTree, id, 1);
+            os_log(OS_LOG_INFO, "命令行勾选叶变量: %s (id=%d)", name, id);
+        } else {
+            os_log(OS_LOG_WARN, "命令行勾选失败（未找到）: %s", name);
+        }
+        tok = sp ? sp + 1 : NULL;
+    }
+    free(buf);
+    for (i = 0; i < g_app.leaf_count; i++)
+        if (g_app.leaves[i].watched) wc++;
+    g_app.watch_count = wc;
+}
+
+/* 网络测试钩子：--net-win=chart,名1,名2 → 新建窗口 tab 并添加变量 */
+static void net_create_win(const wchar_t* spec)
+{
+    wchar_t* buf = _wcsdup(spec);
+    wchar_t* tok = buf;
+    HWND w = NULL;
+    int is_chart = 0;
+    if (!buf) return;
+    { wchar_t* sp = wcschr(tok, L',');
+      if (sp) *sp = 0;
+      if (wcsncmp(tok, L"chart", 5) == 0) is_chart = 1;
+      else if (wcsncmp(tok, L"num", 3) == 0) is_chart = 0;
+      else { free(buf); return; }
+      w = os_win_add_to_tab(-1, is_chart ? "chart" : "num",
+                            is_chart ? L"网络波形" : L"网络数值");
+      os_log(OS_LOG_INFO, "命令行建%s窗口 (hwnd=%p)",
+             is_chart ? "波形" : "数值", (void*)w);
+      tok = sp ? sp + 1 : NULL; }
+    while (tok && *tok && w) {
+        wchar_t* sp = wcschr(tok, L',');
+        char name[512];
+        int id;
+        if (sp) *sp = 0;
+        os_wide_to_utf8_buf(tok, name, sizeof(name));
+        id = os_vartree_find_by_name(name);
+        if (id >= 0) {
+            if (is_chart) os_chart_add_var(w, id);
+            else os_num_add_var(w, id);
+            os_log(OS_LOG_INFO, "窗口添加变量: %s (id=%d)", name, id);
+        }
+        tok = sp ? sp + 1 : NULL;
+    }
+    free(buf);
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLine, int nCmdShow)
@@ -189,7 +285,27 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     g_app.net_connect_port = 0;
     g_app.net_sync_flag = 0;
     g_app.net_exit_ms = 0;
+    g_app.net_watch_flag = 0;
+    g_app.net_write_name[0] = 0;
+    g_app.net_write_value[0] = 0;
+    g_app.net_download_flag = 0;
+    g_app.net_shot_at_path[0] = 0;
+    g_app.net_shot_at_ms = 0;
     InitializeCriticalSection(&g_app.ring_cs);
+    /* --log=<path> 测试钩子：须在 os_log_file_auto_open 前预扫描命令行 */
+    {
+        wchar_t* t = wcsstr(lpCmdLine, L"--log=");
+        if (t) {
+            wchar_t tmp[MAX_PATH];
+            wchar_t* sp = wcschr(t + 6, L' ');
+            int len = sp ? (int)(sp - (t + 6)) : (int)wcslen(t + 6);
+            if (len > 0 && len < MAX_PATH) {
+                memcpy(tmp, t + 6, (size_t)len * sizeof(wchar_t));
+                tmp[len] = 0;
+                os_log_file_set_override(tmp);
+            }
+        }
+    }
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
     os_log(OS_LOG_INFO, "OpenScope 启动 (version " OS_VERSION_STR ")");
@@ -227,6 +343,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         if (sel)
             os_log(OS_LOG_INFO, "命令行选中叶变量: %ls (rc=%d)",
                    sel, os_vartree_select_leaf(g_app.hTree, sel));
+        /* 需求 14：网络 E2E 钩子（ELF 加载后、连接前） */
+        if (g_app.net_watch_csv[0]) net_check_leaves(g_app.net_watch_csv);
+        if (g_app.net_win_spec[0]) net_create_win(g_app.net_win_spec);
         if (g_app.replay_path[0] && os_replay_start(g_app.replay_path) == 0)
             SetTimer(hMain, 2, 10, NULL); /* 测试钩子：--replay 自动开始离线回放 */
         if (g_app.replay_all_path[0])
@@ -245,9 +364,25 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                 os_mainwin_net_cmd(OS_CMD_NET_SYNC_ELF, NULL, 0);
                 os_mainwin_net_cmd(OS_CMD_NET_ELF_PULL, NULL, 0);
             }
+            if (g_app.net_watch_flag) {
+                Sleep(300); /* 等 HELLO/ELF 同步完成再发监视列表 */
+                os_mainwin_net_cmd(OS_CMD_NET_WATCH, NULL, 0);
+            }
+            if (g_app.net_write_name[0]) {
+                Sleep(300);
+                os_mainwin_net_cmd(OS_CMD_NET_WRITE, g_app.net_write_name, 0);
+            }
+            if (g_app.net_download_flag) {
+                Sleep(300);
+                os_mainwin_net_cmd(OS_CMD_NET_LOG_PULL, NULL, 0);
+            }
         }
         if (g_app.net_exit_ms > 0) {
             HANDLE th = CreateThread(NULL, 0, net_exit_thread, (LPVOID)(INT_PTR)g_app.net_exit_ms, 0, NULL);
+            if (th) CloseHandle(th);
+        }
+        if (g_app.net_shot_at_path[0] && g_app.net_shot_at_ms > 0) {
+            HANDLE th = CreateThread(NULL, 0, net_shot_thread, (LPVOID)(INT_PTR)g_app.net_shot_at_ms, 0, NULL);
             if (th) CloseHandle(th);
         }
     }

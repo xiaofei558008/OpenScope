@@ -142,8 +142,23 @@ int os_net_codec_encode_parallel(const OS_NetSample* s, int n, int nthreads, uin
     EncJob jobs[16]; HANDLE hs[16];
     uint8_t* scratch; int chunk, i, off, nw, total;
     if (n <= 0 || !s || !out) return -1;
-    if (nthreads <= 1 || n <= nthreads) return os_net_codec_encode(s, n, out, cap);
     if (nthreads > 16) nthreads = 16;
+    /* 少样本时退化为单块，但仍必须输出并行包格式（decode_parallel 只认此格式）：
+     * [1][n][块长][块数据]。此前直接返回串行格式，decode_parallel 会错读。 */
+    if (nthreads <= 1 || n <= nthreads) {
+        uint8_t tmp[512];
+        int sl = os_net_codec_encode(s, n, tmp, sizeof(tmp));
+        int w1, w2, w3;
+        if (sl < 0) return -1;
+        w1 = os_net_put_uvarint(out, cap, 1);
+        if (w1 < 0) return -1;
+        w2 = os_net_put_uvarint(out + w1, cap - w1, (uint64_t)n);
+        if (w2 < 0) return -1;
+        w3 = os_net_put_uvarint(out + w1 + w2, cap - w1 - w2, (uint64_t)sl);
+        if (w3 < 0 || w1 + w2 + w3 + sl > cap) return -1;
+        memcpy(out + w1 + w2 + w3, tmp, sl);
+        return w1 + w2 + w3 + sl;
+    }
     chunk = (n + nthreads - 1) / nthreads;
     scratch = (uint8_t*)malloc((size_t)n * 16 + 64);
     if (!scratch) return -1;

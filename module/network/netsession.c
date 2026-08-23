@@ -100,7 +100,8 @@ int os_net_decode_ack(const uint8_t* in, int len, int* code, char* msg, int msg_
 {
     uint64_t z; int c, rem = len; const uint8_t* p = in;
     if (os_net_get_uvarint(p, rem, &z, &c) != 0) return -1; p += c; rem -= c;
-    if (code) *code = (int)((z & 1) ? -(int64_t)(z >> 1) : (int64_t)(z >> 1));
+    /* zigzag 还原：偶→z/2，奇→-(z/2)-1（编码侧 (-code<<1)-1 的逆运算） */
+    if (code) *code = (int)((z & 1) ? -(int64_t)(z >> 1) - 1 : (int64_t)(z >> 1));
     if (get_str(p, rem, msg, msg_cap, &c) != 0) return -1;
     return 0;
 }

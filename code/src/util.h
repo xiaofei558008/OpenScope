@@ -21,6 +21,7 @@ void os_log_set(void (*fn)(int level, const wchar_t* line));
 void os_log(int level, const char* fmt, ...);
 /* 日志文件（应用启动时调用）：优先 exe 目录 openscope.log，写不进去回退 %LOCALAPPDATA%\OpenScope */
 void os_log_file_auto_open(void);
+void os_log_file_set_override(const wchar_t* path); /* --log= 测试钩子：指定日志路径 */
 /* 给定路径打开日志文件（追加模式，空文件写 UTF-8 BOM） */
 void os_log_file_open(const wchar_t* path);
 /* 崩溃处理器用：不经过 UI 回调，直接写日志文件（同步刷新） */

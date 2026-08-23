@@ -4,6 +4,25 @@
 
 ## 检查点
 
+- **checkpoint-52（2026-08-23）**：需求 14 网络远程操作功能全部实现并通过双实例端到端测试（1.21.0）。
+  - **补齐核心链路**（此前 checkpoint-40~51 只有协议内核 + 监听/连接/ELF 同步外壳，采集/写值/异步传输未接线）：
+    - 采集流接线：采集线程每 ~30ms 调用 OS_CMD_NET_PUSH 广播最新样本（flat 编码，逐样本独立无累积误差）。
+    - 远端监视列表驱动采集：新增 OS_CMD_NET_WATCH（发送本机勾选叶列表）；服务端收到 WATCH_LIST 后经框架 v4 新回调 set_watch/acq_start 自动勾选 + 自动开始采集（"远端下达 → 本地 J-Link/ST-Link 采集"闭环）。
+    - 网络写变量：新增 OS_CMD_NET_WRITE（发送 + 等对端 ACK ≤3s）；数值窗口写值在无驱动/写失败时自动经网络转发到探针侧执行（远端窗口直接输入值即可标定 MCU）。
+    - 异步传输：新增 OS_CMD_NET_LOG_PULL + LOG_REQ/CHUNK 流——探针侧把采集历史（专用网络历史环 65536 样本，UI 排空不影响）经 8 线程并行压缩（delta+XOR 无损）分块回传，远端累计重组解码注入窗口；UI 新增"同步采集/下载记录"按钮。
+  - **修复 6 个真 bug**：
+    - 会话线程 0xC00000FD 栈溢出：MSVC /O2 把 handle_msg 各分支局部变量并入同一栈帧，CHUNK 分支 1.5MB 数组导致 HELLO 处理即溢出崩溃——大缓冲全部改堆分配；ELf 变量表载荷/接收缓冲同步扩容（此前 64KB 上限装不下 500+ 叶真实 ELF）。
+    - 纯客户端实例会话循环永不运行：g_running 只在 NET_START 置 1，NET_CONNECT 后 recv 循环直接退出、连接即断——NET_CONNECT 也置 1。
+    - 写值通道全失败：本机 JLink_V966 的 JLINKARM_WriteMem 成功返回写入字节数（实测 rc=4）而非 0，mod_write 判错——接受 0 或字节数均为成功。
+    - ACK zigzag 解码错误：负错误码解出错误正值（-1→0），远端误报"写成功"——解码补 -1。
+    - 叶路径变量（"g_cfg.a"）在探针侧无法解析：resolve 误用 find_variable（只认顶层变量名）作闸门——直接按叶全路径名匹配。
+    - 写失败网络转发形成乒乓循环（探针写失败→转发远端→远端再转发回来）——仅无驱动侧允许转发。
+  - **双实例端到端测试（tests/net_drive.ps1 重写，接入 build_tests）**：三实例实测（A=探针监听+UI 点击连接 J-Link 真机；B=远端连接+ELf 双向同步+勾选变量+建波形窗口+发监视列表+网络写值+下载历史+截图；C=第二远端），断言 18 项：监听+2 连接 rc=0、一对多 fan-out、ELF 双向同步 4 叶、监视列表下达（2 项/1 项）、采集自动启动、真机 4kHz 采集、WRITE_VAR→MCU→ACK 0、历史回传 2400+ 样本、样本注入累计 898、波形截图 1.6MB 非空白（像素分析含黄/青两条曲线）。连续 3 次 ALL PASS + 安装版 ALL PASS。
+  - 新增 CLI 测试钩子：--watch=名1,名2（勾选叶）、--net-win=chart,名1,名2（建窗口加变量）、--net-write=名=值、--net-download、--net-watch、--net-shot-at=路径,毫秒（延迟截图）、--log=路径（实例独立日志，消除多进程共享日志丢行）。
+  - 回归：build.py 全绿（含 netcore_smoke 新增 CHUNK 流/并行包格式用例）；安装版 ui_windows/ui_features/ui_connect(真机)/ui_layout/ui_theme_dark/ui_n9_watch/ui_spool 全部 ALL PASS。
+  - readme.md 新增 3.7 网络远程操作章节（用法/特性/服务器转发说明）。
+  - 未做项（按需求措辞"可以/考虑"）：外网服务器（8.133.18.102）实测转发未做——WebSocket 为纯 TCP，可经任意 TCP 转发/反向代理中继，架构已预留；局域网/回环为实测路径。
+  - 版本 1.21.0：重新打包 `dist/OpenScope-Setup-1.21.0.exe`（14.2MB），静默安装验证 1.21.0.0 + 网络全套功能。
 - **checkpoint-0（2026-08-08）**：基线。已有 OpenScope 框架源码（ELF/DWARF 解析、主窗口、波形/数值窗口、数据采集/记录/回放、模块管理器）+ build 脚本 + JLink_x64.dll；安装 BMAD Method v6.10.0（`_bmad` + `.agents/skills`）。
 - **checkpoint-1（2026-08-08）**：BMAD 规划完成。产出 `_bmad-output/project-context.md`（22 条规则）、架构 spine（AD-1~AD-11，lint 0 发现，双评审）、`epics.md`（4 Epic/13 Story）、`readiness-report.md`（READY）、`sprint-status.yaml`。
 - **checkpoint-2（2026-08-08）**：Epic 1 完成。`build.py` 干净构建入口；修复 numwin/vartree（commctrl.h）、util（is_ptr）、module_api.h（interface 宏冲突→iface）、elf.c（DW_FORM_rnglistx + DW_Unit.unit_type）；ui.c 移入 `_agent_extra`；全量构建 0 error/0 warning；启动冒烟测试通过（主窗口标题正确）。

@@ -28,6 +28,7 @@ int        os_ws_listen(const char* bind_ip, int port);       /* 监听 socket�
 void       os_ws_close_listen(int lsock);
 OS_WSConn* os_ws_accept(int lsock);                           /* 接受连接+服务端握手，失败 NULL */
 OS_WSConn* os_ws_connect(const char* host, int port);         /* 连接+客户端握手，失败 NULL */
+void       os_ws_shutdown(OS_WSConn* c);                      /* 半关闭唤醒对端 recv，不释放内存 */
 void       os_ws_close(OS_WSConn* c);
 int        os_ws_send_bin(OS_WSConn* c, const uint8_t* data, uint32_t len);
 int        os_ws_send_text(OS_WSConn* c, const char* s);

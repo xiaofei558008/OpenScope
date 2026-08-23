@@ -404,8 +404,9 @@ static int mod_write(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     r = a->write_mem((uint32_t)req->address, req->size, (const uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
-    /* JLINKARM_WriteMem 成功返回 0（>0 表示未能写入的字节数，负值为错误） */
-    return r == 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
+    /* JLINKARM_WriteMem 返回值因 DLL 版本而异：有的返回 0=成功，有的返回写入
+     * 字节数=成功（本机 JLink_V966 实测返回 4）。两种都算成功；负值/其余为失败。 */
+    return (r == 0 || r == (int)req->size) ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
 
 static int mod_command(void* ctx, int cmd, void* in, void* out)

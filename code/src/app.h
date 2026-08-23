@@ -167,6 +167,14 @@ typedef struct OS_App {
     int  net_connect_port;
     int  net_sync_flag;            /* 1=连接后触发 ELF 双向同步 */
     int  net_exit_ms;              /* >0 启动 N ms 后自动退出 */
+    int  net_watch_flag;           /* 1=连接后发送监视列表（--net-watch） */
+    char net_write_name[64];       /* --net-write=name=value：连接后网络写变量 */
+    char net_write_value[64];
+    int  net_download_flag;        /* 1=连接后请求远端采集历史（--net-download） */
+    wchar_t net_shot_at_path[MAX_PATH]; /* --net-shot-at=路径,毫秒：延迟截图当前窗口 */
+    int  net_shot_at_ms;
+    wchar_t net_watch_csv[1024];   /* --watch=名1,名2：启动即勾选观测叶 */
+    wchar_t net_win_spec[1024];    /* --net-win=chart,名1,名2：启动建窗口并加变量 */
     int  net_watch_list[128];      /* 测试用监视列表（暂留） */
     int  net_watch_count;
 
@@ -203,11 +211,18 @@ void os_fw_on_elf_reloaded(void);
 int os_fw_leaf_find(const char* needle, int* ids, int max_ids);
 uint64_t os_fw_leaf_addr(int id);
 void os_fw_push_sample(const OS_Sample* s);
+/* 框架 v4（需求 14）：网络模块驱动采集/读取历史 */
+int  os_fw_leaf_watched(int id);
+int  os_fw_set_watch(int id, int on);
+int  os_fw_acq_start(void);
+void os_fw_acq_stop(void);
+int  os_fw_ring_copy(OS_Sample* out, int max);
 
 /* 主窗口控制（mainwin.c） */
 void os_mainwin_update_buttons(void);
 void os_mainwin_append_log(int level, const wchar_t* line);
 void os_mainwin_tile(void);
 int os_mainwin_reload_elf(void);
+void os_mainwin_shot_active(const wchar_t* path); /* 需求 14：截图当前 tab 激活窗口 */
 
 #endif

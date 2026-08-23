@@ -132,7 +132,8 @@ int os_ws_frame_decode(const uint8_t* in, int len, int* fin, int* opcode,
 
 /* ---------------- TCP ---------------- */
 
-struct OS_WSConn { SOCKET s; int is_client; };
+/* 发送锁：样本广播线程与客户端会话线程可能同时向同一连接发帧，逐帧互斥防交错 */
+struct OS_WSConn { SOCKET s; int is_client; CRITICAL_SECTION send_cs; };
 
 static int g_ws_inited;
 static void ws_ensure_init(void)
@@ -236,6 +237,7 @@ OS_WSConn* os_ws_accept(int lsock)
     w = (OS_WSConn*)calloc(1, sizeof(OS_WSConn));
     if (!w) { closesocket(c); return NULL; }
     w->s = c; w->is_client = 0;
+    InitializeCriticalSection(&w->send_cs);
     return w;
 }
 
@@ -258,12 +260,20 @@ OS_WSConn* os_ws_connect(const char* host, int port)
     w = (OS_WSConn*)calloc(1, sizeof(OS_WSConn));
     if (!w) { closesocket(s); return NULL; }
     w->s = s; w->is_client = 1;
+    InitializeCriticalSection(&w->send_cs);
     return w;
+}
+
+void os_ws_shutdown(OS_WSConn* c)
+{
+    if (!c || c->s == INVALID_SOCKET) return;
+    shutdown(c->s, SD_BOTH); /* 唤醒对端 recv，由会话线程随后 os_ws_close 释放 */
 }
 
 void os_ws_close(OS_WSConn* c)
 {
     if (!c) return;
+    DeleteCriticalSection(&c->send_cs);
     if (c->s != INVALID_SOCKET) closesocket(c->s);
     free(c);
 }
@@ -272,13 +282,15 @@ int os_ws_send_bin(OS_WSConn* c, const uint8_t* data, uint32_t len)
 {
     static const uint8_t mkey[4] = {0x12,0x34,0x56,0x78};
     uint8_t* f = (uint8_t*)malloc(14 + (size_t)len + 8);
-    int n;
+    int n, r;
     if (!f) return -1;
     n = os_ws_frame_encode(f, 14 + (int)len + 8, 1, OS_WS_OP_BIN, data, len, c->is_client, mkey);
     if (n < 0) { free(f); return -1; }
-    if (send_all(c->s, f, n) != 0) { free(f); return -1; }
+    EnterCriticalSection(&c->send_cs);
+    r = send_all(c->s, f, n);
+    LeaveCriticalSection(&c->send_cs);
     free(f);
-    return 0;
+    return r == 0 ? 0 : -1;
 }
 
 int os_ws_send_text(OS_WSConn* c, const char* s)

@@ -10,6 +10,7 @@ static void (*g_log_fn)(int level, const wchar_t* line);
 static FILE* g_log_file;
 static CRITICAL_SECTION g_log_cs;
 static int g_log_cs_ok;
+static wchar_t g_log_override[MAX_PATH]; /* --log= 测试钩子 */
 
 void os_log_set(void (*fn)(int level, const wchar_t* line)) { g_log_fn = fn; }
 
@@ -29,13 +30,27 @@ void os_log_file_open(const wchar_t* path)
     fflush(g_log_file);
 }
 
+void os_log_file_set_override(const wchar_t* path)
+{
+    if (path && path[0]) _snwprintf(g_log_override, MAX_PATH, L"%s", path);
+}
+
 void os_log_file_auto_open(void)
 {
     wchar_t path[MAX_PATH];
     wchar_t exe[MAX_PATH];
     wchar_t* slash;
     FILE* f;
-    DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    DWORD n;
+    if (g_log_override[0]) {
+        f = _wfopen(g_log_override, L"ab");
+        if (f) {
+            fclose(f);
+            os_log_file_open(g_log_override);
+            return;
+        }
+    }
+    n = GetModuleFileNameW(NULL, exe, MAX_PATH);
     if (n && (slash = wcsrchr(exe, L'\\'))) {
         *slash = 0;
         _snwprintf(path, MAX_PATH, L"%s\\openscope.log", exe);

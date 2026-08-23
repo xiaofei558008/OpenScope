@@ -33,6 +33,8 @@
 #define IDD_NET_STOP     2114
 #define IDD_NET_UPELF    2115
 #define IDD_NET_DOWNELF  2116
+#define IDD_NET_WATCH    2117
+#define IDD_NET_DOWNLOG  2118
 #define IDM_EXIT         2011
 #define IDM_LAYOUT_SAVE  2021
 #define IDM_LAYOUT_LOAD  2022
@@ -1248,6 +1250,27 @@ static void cmd_disconnect(void)
     os_mainwin_update_buttons();
 }
 
+/* 需求 14：把当前 tab 的激活窗口（最大化优先）截图保存（--net-shot-at 钩子用） */
+void os_mainwin_shot_active(const wchar_t* path)
+{
+    HWND w = NULL;
+    if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count) {
+        OS_WinItem* wi = &g_app.wins[g_cur_tab];
+        if (wi->group_max >= 0 && wi->group_max < wi->group_count)
+            w = wi->group[wi->group_max];
+        else if (wi->group_count > 0)
+            w = wi->group[0];
+        if (!w) w = wi->hwnd;
+    }
+    if (!w) w = g_app.hRight;
+    if (!w || !IsWindow(w)) {
+        os_log(OS_LOG_ERROR, "截图: 无可捕获窗口");
+        return;
+    }
+    os_log(OS_LOG_INFO, "截图: %ls", path);
+    os_save_window_bmp(w, path);
+}
+
 /* 需求 14：直接执行网络动作（ip/port 显式传入，供 UI 与命令行测试钩子共用） */
 void os_mainwin_net_cmd(int action, const char* ip, int port)
 {
@@ -1265,11 +1288,22 @@ void os_mainwin_net_cmd(int action, const char* ip, int port)
             os_log(OS_LOG_INFO, "网络: %s %s:%d rc=%d",
                    action == OS_CMD_NET_START ? "监听" : "连接", cfg.ip, cfg.port, rc);
         }
+    } else if (action == OS_CMD_NET_WRITE) {
+        OS_NetWriteReq req;
+        int rc;
+        memset(&req, 0, sizeof(req));
+        if (ip && ip[0]) _snprintf(req.name, sizeof(req.name), "%s", ip);
+        else _snprintf(req.name, sizeof(req.name), "%s", g_app.net_write_name);
+        _snprintf(req.value, sizeof(req.value), "%s", g_app.net_write_value);
+        rc = g_app.netmod->command(g_app.netmod_ctx, action, &req, NULL);
+        os_log(OS_LOG_INFO, "网络: 写变量 %s=%s rc=%d", req.name, req.value, rc);
     } else {
         g_app.netmod->command(g_app.netmod_ctx, action, NULL, NULL);
         os_log(OS_LOG_INFO, "网络: %s", action == OS_CMD_NET_STOP ? "已停止"
                : action == OS_CMD_NET_SYNC_ELF ? "上传 ELF 变量表"
-               : action == OS_CMD_NET_ELF_PULL ? "请求远端 ELF 变量表" : "动作");
+               : action == OS_CMD_NET_ELF_PULL ? "请求远端 ELF 变量表"
+               : action == OS_CMD_NET_WATCH ? "发送监视列表"
+               : action == OS_CMD_NET_LOG_PULL ? "请求远端采集历史" : "动作");
     }
 }
 
@@ -2974,9 +3008,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
             { static const struct { int id; const wchar_t* t; } nb[] = {
                 { IDD_NET_LISTEN, L"监听" }, { IDD_NET_CONNECT, L"连接" }, { IDD_NET_STOP, L"停止" },
-                { IDD_NET_UPELF, L"上传ELF" }, { IDD_NET_DOWNELF, L"下载ELF" } };
+                { IDD_NET_UPELF, L"上传ELF" }, { IDD_NET_DOWNELF, L"下载ELF" },
+                { IDD_NET_WATCH, L"同步采集" }, { IDD_NET_DOWNLOG, L"下载记录" } };
               int k;
-              for (k = 0; k < 5; k++) {
+              for (k = 0; k < 7; k++) {
                 c = CreateWindowW(L"BUTTON", nb[k].t, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
                                   222 + k * 74, 29, 68, 24, hwnd, (HMENU)(INT_PTR)nb[k].id, g_app.hInst, NULL);
                 SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
@@ -3430,6 +3465,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDD_NET_STOP: cmd_net_action(OS_CMD_NET_STOP); break;
         case IDD_NET_UPELF: cmd_net_action(OS_CMD_NET_SYNC_ELF); break;
         case IDD_NET_DOWNELF: cmd_net_action(OS_CMD_NET_ELF_PULL); break;
+        case IDD_NET_WATCH: cmd_net_action(OS_CMD_NET_WATCH); break;
+        case IDD_NET_DOWNLOG: cmd_net_action(OS_CMD_NET_LOG_PULL); break;
         case IDC_BTN_ABOUT: {
             wchar_t about[640];
             _snwprintf(about, 640,

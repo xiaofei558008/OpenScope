@@ -11,7 +11,7 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define OS_API_VERSION 3
+#define OS_API_VERSION 4
 
 /* 模块能力标志 */
 #define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写） */
@@ -56,7 +56,10 @@ enum {
     OS_CMD_NET_STOP     = 22, /* 停止监听/断开 */
     OS_CMD_NET_SYNC_ELF = 23, /* 上传：把我的 ELF 变量表广播给远端 */
     OS_CMD_NET_PUSH     = 24, /* 触发一次样本推送 */
-    OS_CMD_NET_ELF_PULL = 25  /* 下载：请求远端发回它的 ELF 变量表（双向同步） */
+    OS_CMD_NET_ELF_PULL = 25, /* 下载：请求远端发回它的 ELF 变量表（双向同步） */
+    OS_CMD_NET_WATCH    = 26, /* 发送 WATCH_LIST（我的勾选叶列表）给远端，远端据此采集 */
+    OS_CMD_NET_WRITE    = 27, /* in: OS_NetWriteReq*，网络写变量（等待对端 ACK，≤3s） */
+    OS_CMD_NET_LOG_PULL = 28  /* 请求远端把采集历史（环形缓冲）分块回传（异步传输） */
 };
 
 /* 仿真口类型 */
@@ -114,6 +117,12 @@ typedef struct OS_FreqList {
     int jtag_n;
 } OS_FreqList;
 
+/* OS_CMD_NET_WRITE 输入：网络写变量请求（name=叶变量名，value=文本数值） */
+typedef struct OS_NetWriteReq {
+    char name[64];
+    char value[64];
+} OS_NetWriteReq;
+
 /* 采集样本：框架在轮询线程中生成，分发给窗口模块与绘图/记录器 */
 typedef struct OS_Sample {
     int64_t  ts_us;   /* Unix 纪元（1970-01-01）微秒 */
@@ -153,6 +162,18 @@ typedef struct OS_Framework {
     uint64_t (*leaf_addr)(int id);
     /* 注入一个样本到采集通道（远端样本 → 本地波形/数值窗口显示，需求 14）。 */
     void (*push_sample)(const OS_Sample* s);
+
+    /* ---- v4 扩展回调（需求 14 网络远程采集/异步传输）---- */
+    /* 叶变量是否处于观测（勾选）状态。 */
+    int  (*leaf_watched)(int id);
+    /* 设置叶变量观测状态（远端 WATCH_LIST 驱动本地采集用）；返回 0 成功。 */
+    int  (*set_watch)(int id, int on);
+    /* 启动/停止采集（远端 WATCH_LIST 到达后自动开始采集）。返回 0 成功。 */
+    int  (*acq_start)(void);
+    void (*acq_stop)(void);
+    /* 复制采集环缓冲中的样本（最新 max 个，从旧到新），返回实际复制数。
+     * 异步传输（停止采集后把历史数据分块回传远端）用。 */
+    int  (*ring_copy)(OS_Sample* out, int max);
 } OS_Framework;
 
 typedef struct OS_WindowType {

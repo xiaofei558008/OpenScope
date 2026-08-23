@@ -28,3 +28,6 @@ _tmp_*.exe
 packaging/wizard_sidebar.bmp
 packaging/wizard_sidebar2.bmp
 packaging/wizard_sidebar3.bmp
+
+# network E2E test artifacts (regenerated per run)
+tests/out/

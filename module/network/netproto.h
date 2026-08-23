@@ -11,7 +11,8 @@
 #define OS_NET_MSG_ACK          6
 #define OS_NET_MSG_CHUNK        7
 #define OS_NET_MSG_BYE          8
-#define OS_NET_MSG_ELF_REQ      9 /* 请求对端发回它的 ELF 变量表 */
+#define OS_NET_MSG_ELF_REQ      9  /* 请求对端发回它的 ELF 变量表 */
+#define OS_NET_MSG_LOG_REQ      10 /* 请求对端把采集历史分块回传（异步传输） */
 
 #define OS_NET_MAGIC 0x314E534Fu /* "OSN1" little-endian */
 
@@ -49,5 +50,13 @@ typedef struct OS_NetAccum {
 void os_net_accum_init(OS_NetAccum* a);
 void os_net_accum_free(OS_NetAccum* a);
 int  os_net_accum_append(OS_NetAccum* a, const uint8_t* d, uint32_t l);
+
+/* CHUNK 流（异步传输用）：首块 payload = [4B 总字节数][数据]，后续块 = 纯数据。
+ * 发送端用 os_net_chunk_stream_encode 逐块编码；接收端 os_net_chunk_stream_feed 喂入，
+ * 全部到齐返回总长并复制到 out（cap 需足够），未到齐返回 0，错误返回 -1。 */
+int os_net_chunk_stream_encode(uint32_t idx, uint32_t total, const uint8_t* d, uint32_t l,
+                               uint8_t* out, int cap);
+int os_net_chunk_stream_feed(OS_NetAccum* a, const uint8_t* d, int len,
+                             uint8_t* out, int cap);
 
 #endif

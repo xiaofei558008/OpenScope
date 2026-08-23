@@ -57,6 +57,11 @@ typedef struct {
 static LARGE_INTEGER g_qpc_freq;
 static int           g_qpc_ready;
 
+/* 需求 14 异步传输：专用网络历史环（UI 排空不影响历史完整性，只读不消费） */
+#define NET_HIST_CAP 65536
+static OS_Sample s_net_hist[NET_HIST_CAP];
+static volatile LONG s_net_hist_n; /* 累计样本数（可能 >CAP，用于统计） */
+
 /* 周期计时用 QPC（µs 级、单调），避免 GetSystemTimeAsFileTime 的粗粒度墙钟误差 */
 static uint64_t qpc_now_us(void)
 {
@@ -137,6 +142,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
     uint8_t* buf = (uint8_t*)malloc(OS_BATCH_RUN_MAX + 1);
     int fail_count = 0;          /* Bug10: 仅用于失败日志节流（前 3 次），不再用于中断 */
     ULONGLONG last_ok_ms = GetTickCount64(); /* 最近一次成功读取时间戳（停摆判定起点） */
+    ULONGLONG last_net_push_ms = 0;          /* 需求 14：网络广播节流计时 */
     ULONGLONG cycle_us = qpc_now_us();       /* 自计时：本周期起点 */
     ULONGLONG rate_win_us = cycle_us;        /* 速率统计窗口起点（约每秒一条日志） */
     LONGLONG  cycle_sum_us = 0;
@@ -214,6 +220,15 @@ static DWORD WINAPI poll_thread(LPVOID p)
         }
         if (n > 0) {
             os_ds_push_batch(batch, n);
+            /* 需求 14：网络广播节流 ~30ms（本线程直接调网络模块，避免跨线程消息开销） */
+            {
+                ULONGLONG now_push = GetTickCount64();
+                if (g_app.netmod && g_app.netmod->command &&
+                    now_push - last_net_push_ms >= 30) {
+                    g_app.netmod->command(g_app.netmod_ctx, OS_CMD_NET_PUSH, NULL, NULL);
+                    last_net_push_ms = now_push;
+                }
+            }
         }
         /* 自计时：poll_interval_ms>0 保持定时补睡，否则自由运行（周期=实际耗时） */
         if (g_app.poll_interval_ms > 0) {
@@ -324,6 +339,11 @@ void os_ds_push_batch(OS_Sample* samples, int n)
     for (i = 0; i < n; i++) {
         if (samples[i].var_id >= 0 && samples[i].var_id < g_app.leaf_count)
             g_app.leaves[samples[i].var_id].sample = samples[i];
+        /* 需求 14：网络历史环（异步回传用，UI 排空不影响） */
+        {
+            LONG k = InterlockedIncrement(&s_net_hist_n) - 1;
+            s_net_hist[k % NET_HIST_CAP] = samples[i];
+        }
     }
     InterlockedAdd(&g_app.total_samples, n);
     if (g_app.log_csv) os_datalog_append();
@@ -383,6 +403,21 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
     L = os_vartree_leaf(id);
     if (!L) { if (err && errlen) _snprintf(err, errlen, "变量 ID 无效"); return -1; }
     if (!g_app.driver || !g_app.driver->command) {
+        /* 需求 14：本机无探针驱动（远端显示侧）→ 写值经网络转发到探针侧执行 */
+        if (g_app.netmod && g_app.netmod->command) {
+            OS_NetWriteReq nreq;
+            int rc;
+            memset(&nreq, 0, sizeof(nreq));
+            _snprintf(nreq.name, sizeof(nreq.name), "%s", L->name);
+            _snprintf(nreq.value, sizeof(nreq.value), "%s", text);
+            rc = g_app.netmod->command(g_app.netmod_ctx, OS_CMD_NET_WRITE, &nreq, NULL);
+            if (rc == OS_ERR_OK) {
+                os_log(OS_LOG_INFO, "网络写入 %s = %s 成功", L->name, text);
+                return 0;
+            }
+            if (err && errlen) _snprintf(err, errlen, "网络写入失败 (rc=%d)", rc);
+            return -1;
+        }
         if (err && errlen) _snprintf(err, errlen, "无驱动模块");
         return -1;
     }
@@ -428,6 +463,8 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
     wr.data = raw;
     r = g_app.driver->command(g_app.driver_ctx, OS_CMD_WRITE_MEM, &wr, NULL);
     if (r != OS_ERR_OK) {
+        /* 注：本机有驱动时写失败不转发网络——否则探针侧写失败会与远端
+         * 互相回传形成乒乓循环；只有纯远端显示侧（无驱动）才走网络转发。 */
         if (err && errlen) _snprintf(err, errlen, "写入失败 (err=%d)", r);
         return -1;
     }
@@ -465,4 +502,52 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
 void os_fw_push_sample(const OS_Sample* s)
 {
     if (s) os_ds_push_batch((OS_Sample*)s, 1);
+}
+
+/* ---- 需求 14：框架 v4 回调（网络模块驱动采集/读取历史） ---- */
+
+int os_fw_leaf_watched(int id)
+{
+    if (id < 0 || id >= g_app.leaf_count) return 0;
+    return g_app.leaves[id].watched ? 1 : 0;
+}
+
+int os_fw_set_watch(int id, int on)
+{
+    if (id < 0 || id >= g_app.leaf_count) return -1;
+    InterlockedExchange(&g_app.leaves[id].watched, on ? 1 : 0);
+    if (on) {
+        int i, wc = 0;
+        for (i = 0; i < g_app.leaf_count; i++)
+            if (g_app.leaves[i].watched) wc++;
+        g_app.watch_count = wc;
+    }
+    os_log(OS_LOG_INFO, "网络勾选: %s", g_app.leaves[id].name);
+    return 0;
+}
+
+int os_fw_acq_start(void)
+{
+    return os_ds_start();
+}
+
+void os_fw_acq_stop(void)
+{
+    os_ds_stop();
+}
+
+/* 复制采集历史（最近 max 个，旧→新），返回实际复制数。异步历史回传用。 */
+int os_fw_ring_copy(OS_Sample* out, int max)
+{
+    LONG total = InterlockedCompareExchange(&s_net_hist_n, 0, 0); /* 只读快照 */
+    int start, i, n = 0, cnt;
+    if (!out || max <= 0 || total <= 0) return 0;
+    cnt = total > NET_HIST_CAP ? NET_HIST_CAP : (int)total;
+    if (cnt > max) cnt = max;
+    start = (int)((total - cnt) % NET_HIST_CAP);
+    if (start < 0) start += NET_HIST_CAP;
+    for (i = 0; i < cnt; i++) {
+        out[n++] = s_net_hist[(start + i) % NET_HIST_CAP];
+    }
+    return n;
 }
