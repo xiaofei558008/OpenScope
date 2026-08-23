@@ -175,6 +175,15 @@ typedef struct OS_Framework {
     /* 复制采集环缓冲中的样本（最新 max 个，从旧到新），返回实际复制数。
      * 异步传输（停止采集后把历史数据分块回传远端）用。 */
     int  (*ring_copy)(OS_Sample* out, int max);
+
+    /* ---- v4 扩展（需求 14：上传/下载 ELF 变量列表应用）---- */
+    /* 把远端同步来的变量加入本机变量列表（名称+地址+大小）。
+     * 返回 1=新增，2=更新地址，0=无变化/失败。 */
+    int  (*leaf_add)(const char* name, uint64_t addr, uint32_t size);
+    /* 一批变量应用完成：刷新变量树/布局展示（added/updated 为统计数）。 */
+    void (*leaf_sync_done)(int added, int updated);
+    /* 叶变量实际读取大小（无样本时也能给出 ELF/合成大小；变量表上传用）。 */
+    uint32_t (*leaf_size)(int id);
 } OS_Framework;
 
 typedef struct OS_WindowType {

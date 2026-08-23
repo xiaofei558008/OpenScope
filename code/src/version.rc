@@ -7,8 +7,8 @@ IDI_APP ICON "..\\..\\icon\\OpenScope.ico"
 IDR_HELP_MD RCDATA "..\\..\\readme.md"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,22,1,0
- PRODUCTVERSION 1,22,1,0
+ FILEVERSION 1,22,2,0
+ PRODUCTVERSION 1,22,2,0
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS VS_FF_DEBUG
@@ -25,12 +25,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "OpenScope"
             VALUE "FileDescription", "OpenScope - MCU Variable Acquisition and Calibration"
-            VALUE "FileVersion", "1.22.1.0"
+            VALUE "FileVersion", "1.22.2.0"
             VALUE "InternalName", "OpenScope"
             VALUE "LegalCopyright", "Copyright (C) 2026 OpenScope"
             VALUE "OriginalFilename", "OpenScope.exe"
             VALUE "ProductName", "OpenScope"
-            VALUE "ProductVersion", "1.22.1.0"
+            VALUE "ProductVersion", "1.22.2.0"
         END
     END
     BLOCK "VarFileInfo"

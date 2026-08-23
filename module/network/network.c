@@ -106,11 +106,11 @@ static int build_varlist(OS_NetVar* v, int max)
     if (n > max) n = max;
     for (i = 0; i < n; i++) {
         const char* nm = g_fw->leaf_name(i);
-        const OS_Sample* s = g_fw->leaf_sample(i);
         memset(&v[i], 0, sizeof(v[i]));
         if (nm) _snprintf(v[i].name, OS_NET_NAME_MAX, "%s", nm);
         v[i].addr = g_fw->leaf_addr ? g_fw->leaf_addr(i) : 0;
-        v[i].size = s ? (uint32_t)s->size : 0;
+        /* 用叶定义大小（未采样过的变量也有值；样本 size 只在有样本后有效） */
+        v[i].size = g_fw->leaf_size ? g_fw->leaf_size(i) : 0;
     }
     return n;
 }
@@ -385,14 +385,24 @@ static void handle_msg(NetClient* cl, const OS_NetFrame* f)
         break;
     }
     case OS_NET_MSG_ELF_SYNC: {
-        /* 对端变量表：核对项数进日志（两侧同 ELF 时名称/地址一致，便于快速采集） */
+        /* 需求14：对端变量表（名称+地址+大小）→ 应用到本机变量列表
+         * （新增变量/更新地址；应用完成后框架刷新变量树展示） */
         OS_NetVar* vars = (OS_NetVar*)malloc((size_t)NET_VAR_MAX * sizeof(OS_NetVar));
-        int cnt = 0;
+        int cnt = 0, i, added = 0, updated = 0;
         if (vars) {
             cnt = os_net_decode_varlist(f->payload, (int)f->len, vars, NET_VAR_MAX);
+            if (g_fw && g_fw->api_version >= 4 && g_fw->leaf_add) {
+                for (i = 0; i < cnt; i++) {
+                    int r = g_fw->leaf_add(vars[i].name, vars[i].addr, vars[i].size);
+                    if (r == 1) added++;
+                    else if (r == 2) updated++;
+                }
+                if (g_fw->leaf_sync_done) g_fw->leaf_sync_done(added, updated);
+            }
             free(vars);
         }
-        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 收到 ELF 变量表 %d 项", cnt);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "network: 收到 ELF 变量表 %d 项（新增 %d，更新 %d）",
+                            cnt, added, updated);
         break;
     }
     case OS_NET_MSG_ELF_REQ: {

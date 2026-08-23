@@ -50,6 +50,7 @@ typedef struct {
 #define WM_OS_TREE_AUTOHIDE (WM_APP + 9) /* N9(d): 变量栏自动隐藏开关 (wParam=0/1，测试钩子) */
 #define WM_OS_WIN_FULLSCREEN (WM_APP + 10) /* Bug3: 单窗口全屏/退出全屏 (wParam=HWND) */
 #define WM_OS_PICK_TEST_SELECT (WM_APP + 30) /* N13a 测试钩子：变量选择对话框选中范围 [wParam, wParam+lParam) */
+#define WM_OS_LEAF_SYNC   (WM_APP + 44) /* 需求14：远端变量列表应用完成 → 刷新变量树/布局 */
 #define WM_OS_SPLIT_V (WM_APP + 11) /* F14: 横向分隔条拖动，wParam=主窗口客户区 y 坐标 */
 #define WM_OS_TREE_TEST_SELECT (WM_APP + 12) /* Bug4 测试钩子：程序化选中树文档序叶子项 [wParam, wParam+lParam)，返回叶子总数 */
 #define WM_OS_LOG (WM_APP + 13) /* Bug7: 日志跨线程安全——非主线程日志经 PostMessage 到主线程插入 ListView（wParam=OS_LogMsg*） */
@@ -91,6 +92,7 @@ typedef struct OS_Leaf {
     int         enum_count;
     volatile LONG watched;
     OS_Sample   sample;
+    int         is_synth; /* 需求14：远端同步进来的变量（非本机 ELF 解析） */
 } OS_Leaf;
 
 /* 右侧窗口区的一个 tab。N11: 一个 tab 可容纳多个窗口（group[0]==hwnd）。 */
@@ -182,6 +184,12 @@ typedef struct OS_App {
     int  net_watch_list[128];      /* 测试用监视列表（暂留） */
     int  net_watch_count;
 
+    /* 需求14：远端同步进来的变量列表（本机 ELF 重载后重新应用，树展示同步刷新） */
+    int      synth_count;
+    char     synth_name[256][256];
+    uint64_t synth_addr[256];
+    uint32_t synth_size[256];
+
     struct OS_Replay* replay;
 
     /* 长时间采集自动落盘（RAM ≤10MB → 时间戳 CSV） */
@@ -221,6 +229,11 @@ int  os_fw_set_watch(int id, int on);
 int  os_fw_acq_start(void);
 void os_fw_acq_stop(void);
 int  os_fw_ring_copy(OS_Sample* out, int max);
+/* 需求14：远端变量列表应用——leaf_add 返回 1=新增/2=更新地址/0=无变化或失败；
+ * leaf_sync_done 汇总后投递 WM_OS_LEAF_SYNC 刷新变量树与布局。 */
+int  os_fw_leaf_add(const char* name, uint64_t addr, uint32_t size);
+void os_fw_leaf_sync_done(int added, int updated);
+uint32_t os_fw_leaf_size(int id);
 
 /* 主窗口控制（mainwin.c） */
 void os_mainwin_update_buttons(void);

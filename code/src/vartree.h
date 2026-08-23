@@ -29,4 +29,9 @@ int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name);
 /* Ctrl+H 快速搜索：按叶 id 列表定位变量（展开祖先、滚动可见、多选），返回定位个数 */
 int os_vartree_locate_ids(HWND hTree, const int* ids, int n);
 
+/* 需求14：远端同步变量——add 进合成列表并立即进叶表（1=新增 2=更新地址 0=无变化）；
+ * synths_apply 在 ELF 重载后把合成列表重新应用进叶表（os_vartree_build 内部调用）。 */
+int os_vartree_add_synth(const char* name, uint64_t addr, uint32_t size);
+int os_vartree_synths_apply(void);
+
 #endif

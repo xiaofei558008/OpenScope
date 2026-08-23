@@ -123,9 +123,9 @@ for ($i = 0; $i -lt 16; $i++) {
 }
 if ($hw) { Write-Output "INFO A 已连接 J-Link（硬件就绪）" } else { Write-Output "WARN A 未检测到 J-Link 连接，硬件相关断言将降级" }
 
-# ---- 阶段 2：B（远端显示侧）启动 ----
+# ---- 阶段 2：B（远端显示侧）启动——不加载本地 ELF，变量列表全靠"下载ELF"同步应用 ----
 $bArgs = @(
-    $Elf,"--no-layout","--log=$logB","--net-connect=127.0.0.1:10000","--net-sync",
+    "--no-layout","--log=$logB","--net-connect=127.0.0.1:10000","--net-sync",
     "--watch=g_counter,g_cfg.a","--net-win=chart,g_counter,g_cfg.a","--net-watch",
     "--net-write=g_cfg.b=123","--net-download","--net-watchstop=7000",
     "--net-shot-at=$shotBmp,10500","--net-exit=13500"
@@ -147,7 +147,7 @@ if ($ipEdit -ne [IntPtr]::Zero -and $portEdit -ne [IntPtr]::Zero) { Write-Output
 
 # ---- 阶段 3：C（第二个远端，一对多 fan-out）----
 Start-Sleep -Seconds 2
-$c = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logC","--net-connect=127.0.0.1:10000","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
+$c = Start-Process -FilePath $exe -ArgumentList "--no-layout","--log=$logC","--net-connect=127.0.0.1:10000","--net-sync","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
 
 # ---- 阶段 3.5：采集运行中抓取两个主窗口（报告用，WM_PRINT 抓取）----
 Start-Sleep -Seconds 5
@@ -182,11 +182,17 @@ Check "C 连接 rc=0" (([regex]::Matches($logCText, "10000 rc=0")).Count -ge 1)
 $joined = ([regex]::Matches($logAText, "客户端接入")).Count
 Check "一对多 fan-out：A 客户端接入 ≥2 (count=$joined)" ($joined -ge 2)
 
-# 3. ELF 双向同步：B 收 A 的 ELF（HELLO 回发 + ELF_REQ 回发），A 收 B 的 ELF（上传）
+# 3. 上传/下载 ELF：远端（无本地 ELF 文件）应用对端变量列表，树展示刷新
 $elfA = ([regex]::Matches($logAText, "收到 ELF 变量表 4 项")).Count
 Check "A 收到 B 上传的 ELF 变量表 4 项 (count=$elfA)" ($elfA -ge 1)
 $elfB = ([regex]::Matches($logBText, "收到 ELF 变量表 4 项")).Count
 Check "B 收到 A 回发的 ELF 变量表 4 项 ≥2 (count=$elfB)" ($elfB -ge 2)
+$applyB = ([regex]::Matches($logBText, "网络变量同步: 新增 4 个")).Count
+Check "B 应用远端变量列表（新增 4 个变量，无本地 ELF）(count=$applyB)" ($applyB -ge 1)
+$applyC = ([regex]::Matches($logCText, "网络变量同步: 新增 4 个")).Count
+Check "C 应用远端变量列表（新增 4 个变量，无本地 ELF）(count=$applyC)" ($applyC -ge 1)
+$treeB = ([regex]::Matches($logBText, "变量树已刷新: 叶表 4 个变量")).Count
+Check "B 变量树展示同步刷新（叶表 4 个变量）(count=$treeB)" ($treeB -ge 1)
 
 # 4. 远端监视列表驱动采集：A 勾选 + 启动采集
 $watchB = ([regex]::Matches($logAText, "WATCH_LIST 2 项")).Count + ([regex]::Matches($logAText, "远端监视 2 项")).Count

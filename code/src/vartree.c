@@ -167,9 +167,92 @@ int os_vartree_build(void)
         }
     }
     (void)err;
+    /* 需求14：远端同步变量在 ELF 重建后重新应用（ELF 重载不丢网络变量） */
+    if (g_app.synth_count > 0)
+        os_vartree_synths_apply();
     os_log(OS_LOG_INFO, "ELF 变量表重建: %d 个叶子（原观测 %d 个，缺失 %d 个）",
            g_app.leaf_count, old_count, g_missing_count);
     return g_app.leaf_count;
+}
+
+/* ---------- 需求14：远端同步变量（上传/下载 ELF 应用） ---------- */
+
+static OS_TypeKind synth_kind_for_size(uint32_t size)
+{
+    /* 无 DWARF 类型的远端变量：按大小给默认类型（4→有符号整型，8→整型64，
+     * 其余按无符号字节宽处理），便于数值窗口显示与写入解析 */
+    switch (size) {
+    case 1: return OS_TYPE_INT;
+    case 2: return OS_TYPE_INT;
+    case 4: return OS_TYPE_INT;
+    case 8: return OS_TYPE_INT;
+    default: return OS_TYPE_UINT;
+    }
+}
+
+/* 把合成变量挂进叶表（不检查重名——调用方先查） */
+static void synth_leaf_append(const char* name, uint64_t addr, uint32_t size)
+{
+    OS_Leaf* L;
+    if (g_app.leaf_count >= OS_MAX_LEAVES) return;
+    L = &g_app.leaves[g_app.leaf_count];
+    memset(L, 0, sizeof(*L));
+    L->id = g_app.leaf_count;
+    _snprintf(L->name, sizeof(L->name), "%s", name);
+    L->address = addr;
+    L->size = (size < 1) ? 4 : (size > 8 ? 8 : size);
+    L->kind = synth_kind_for_size(L->size);
+    L->is_signed = 1;
+    L->is_synth = 1;
+    g_app.leaf_count++;
+}
+
+int os_vartree_add_synth(const char* name, uint64_t addr, uint32_t size)
+{
+    int i, idx;
+    if (!name || !name[0]) return 0;
+    /* 已有同名叶（本地解析或既有合成）：更新地址（对端编译产物地址可能不同） */
+    idx = os_vartree_find_by_name(name);
+    if (idx >= 0) {
+        if (g_app.leaves[idx].address == addr) return 0;
+        g_app.leaves[idx].address = addr;
+        return 2;
+    }
+    /* 合成列表去重 */
+    for (i = 0; i < g_app.synth_count; i++) {
+        if (!strcmp(g_app.synth_name[i], name)) {
+            if (g_app.synth_addr[i] == addr) return 0;
+            g_app.synth_addr[i] = addr;
+            g_app.synth_size[i] = size;
+            return 2;
+        }
+    }
+    if (g_app.synth_count >= 256) return 0; /* 上限 */
+    i = g_app.synth_count++;
+    _snprintf(g_app.synth_name[i], 256, "%s", name);
+    g_app.synth_addr[i] = addr;
+    g_app.synth_size[i] = size;
+    synth_leaf_append(name, addr, size);
+    return 1;
+}
+
+/* ELF 重载后把合成列表重新应用进叶表（在 os_vartree_build 末尾调用）。
+ * 返回实际应用数（跳过与本地叶重名且地址相同的项）。 */
+int os_vartree_synths_apply(void)
+{
+    int i, n = 0;
+    for (i = 0; i < g_app.synth_count; i++) {
+        int idx = os_vartree_find_by_name(g_app.synth_name[i]);
+        if (idx >= 0) {
+            if (g_app.leaves[idx].address == g_app.synth_addr[i]) continue;
+            g_app.leaves[idx].address = g_app.synth_addr[i];
+            n++;
+            continue;
+        }
+        synth_leaf_append(g_app.synth_name[i], g_app.synth_addr[i], g_app.synth_size[i]);
+        n++;
+    }
+    return n;
 }
 
 int os_vartree_missing_count(void) { return g_missing_count; }
@@ -468,25 +551,31 @@ void os_vartree_fill_tree(HWND hTree)
     HTREEITEM h;
     g_tree_filling = 1;
     TreeView_DeleteAllItems(hTree);
-    if (!g_app.elf) { g_tree_filling = 0; return; }
-    n = os_elf_var_count(g_app.elf);
-    for (i = 0; i < n; i++) {
-        const OS_Variable* v = os_elf_var_at(g_app.elf, i);
-        if (!v) continue;
-        os_utf8_to_wide_buf(v->name, wname, 320);
-        if (v->type && (v->type->kind == OS_TYPE_STRUCT || v->type->kind == OS_TYPE_UNION ||
-                        v->type->kind == OS_TYPE_ARRAY)) {
-            h = add_node(hTree, NULL, wname, (LPARAM)-1, 0, 0);
-            tree_add_type(hTree, h, v->type, v->name, v->address);
-        } else if (v->type) {
-            tree_add_type(hTree, NULL, v->type, v->name, v->address);
-        } else {
-            wchar_t wfull[420];
-            _snwprintf(wfull, 420, L"%s  @0x%llX  [%llu B]",
-                       wname, (unsigned long long)v->address,
-                       (unsigned long long)v->symbol_size);
-            add_node(hTree, NULL, wfull, (LPARAM)-1, 0, 0);
+    if (g_app.elf) {
+        n = os_elf_var_count(g_app.elf);
+        for (i = 0; i < n; i++) {
+            const OS_Variable* v = os_elf_var_at(g_app.elf, i);
+            if (!v) continue;
+            os_utf8_to_wide_buf(v->name, wname, 320);
+            if (v->type && (v->type->kind == OS_TYPE_STRUCT || v->type->kind == OS_TYPE_UNION ||
+                            v->type->kind == OS_TYPE_ARRAY)) {
+                h = add_node(hTree, NULL, wname, (LPARAM)-1, 0, 0);
+                tree_add_type(hTree, h, v->type, v->name, v->address);
+            } else if (v->type) {
+                tree_add_type(hTree, NULL, v->type, v->name, v->address);
+            } else {
+                wchar_t wfull[420];
+                _snwprintf(wfull, 420, L"%s  @0x%llX  [%llu B]",
+                           wname, (unsigned long long)v->address,
+                           (unsigned long long)v->symbol_size);
+                add_node(hTree, NULL, wfull, (LPARAM)-1, 0, 0);
+            }
         }
+    }
+    /* 需求14：远端同步变量（上传/下载 ELF 应用进来的）追加展示——本机无 ELF 时也显示 */
+    for (i = 0; i < g_app.leaf_count; i++) {
+        if (g_app.leaves[i].is_synth)
+            tree_add_leaf(hTree, NULL, &g_app.leaves[i]);
     }
     g_tree_filling = 0;
     (void)set_check;
@@ -504,6 +593,27 @@ const struct OS_Variable* os_fw_find(const char* name)
 }
 
 int os_fw_leaf_count(void) { return g_app.leaf_count; }
+
+/* 需求14：远端变量列表应用（上传/下载 ELF） */
+int os_fw_leaf_add(const char* name, uint64_t addr, uint32_t size)
+{
+    return os_vartree_add_synth(name, addr, size);
+}
+
+void os_fw_leaf_sync_done(int added, int updated)
+{
+    if (added > 0 || updated > 0) {
+        os_log(OS_LOG_INFO, "网络变量同步: 新增 %d 个，更新地址 %d 个，当前叶表 %d",
+               added, updated, g_app.leaf_count);
+        if (g_app.hMain) PostMessage(g_app.hMain, WM_OS_LEAF_SYNC, 0, 0);
+    }
+}
+
+uint32_t os_fw_leaf_size(int id)
+{
+    const OS_Leaf* L = os_vartree_leaf(id);
+    return L ? L->size : 0;
+}
 
 const char* os_fw_leaf_name(int id)
 {

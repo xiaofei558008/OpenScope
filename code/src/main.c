@@ -126,6 +126,9 @@ static void init_fw(void)
     g_app.fw.acq_start = os_fw_acq_start;
     g_app.fw.acq_stop = os_fw_acq_stop;
     g_app.fw.ring_copy = os_fw_ring_copy;
+    g_app.fw.leaf_add = os_fw_leaf_add;
+    g_app.fw.leaf_sync_done = os_fw_leaf_sync_done;
+    g_app.fw.leaf_size = os_fw_leaf_size;
 }
 
 /* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */
@@ -366,8 +369,6 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                    g_app.net_set_port[0] ? g_app.net_set_port : L"(空)");
             os_mainwin_net_set(g_app.net_set_ip, g_app.net_set_port[0] ? g_app.net_set_port : NULL);
         }
-        if (g_app.net_watch_csv[0]) net_check_leaves(g_app.net_watch_csv);
-        if (g_app.net_win_spec[0]) net_create_win(g_app.net_win_spec);
         if (g_app.replay_path[0] && os_replay_start(g_app.replay_path) == 0)
             SetTimer(hMain, 2, 10, NULL); /* 测试钩子：--replay 自动开始离线回放 */
         if (g_app.replay_all_path[0])
@@ -385,7 +386,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                 Sleep(300); /* 等对端握手完成 */
                 os_mainwin_net_cmd(OS_CMD_NET_SYNC_ELF, NULL, 0);
                 os_mainwin_net_cmd(OS_CMD_NET_ELF_PULL, NULL, 0);
+                Sleep(500); /* 等对端回发的变量表应用完成（树刷新） */
+                os_mainwin_net_cmd(OS_CMD_NET_SYNC_ELF, NULL, 0); /* 应用后再上传（双向核对） */
             }
+            /* 上传/下载 ELF 后本机变量列表已含对端变量 → 此时才应用勾选/窗口 */
+            if (g_app.net_watch_csv[0]) net_check_leaves(g_app.net_watch_csv);
+            if (g_app.net_win_spec[0]) net_create_win(g_app.net_win_spec);
             if (g_app.net_watch_flag) {
                 Sleep(300); /* 等 HELLO/ELF 同步完成再发监视列表 */
                 os_mainwin_net_cmd(OS_CMD_NET_WATCH, NULL, 0);
@@ -398,6 +404,9 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                 Sleep(300);
                 os_mainwin_net_cmd(OS_CMD_NET_LOG_PULL, NULL, 0);
             }
+        } else {
+            if (g_app.net_watch_csv[0]) net_check_leaves(g_app.net_watch_csv);
+            if (g_app.net_win_spec[0]) net_create_win(g_app.net_win_spec);
         }
         if (g_app.net_exit_ms > 0) {
             HANDLE th = CreateThread(NULL, 0, net_exit_thread, (LPVOID)(INT_PTR)g_app.net_exit_ms, 0, NULL);

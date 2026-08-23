@@ -3588,6 +3588,15 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         /* Bug18 测试钩子：wParam=1 变量栏完全隐藏，0=展开 */
         tree_set_hidden(wParam ? 1 : 0);
         return 0;
+    case WM_OS_LEAF_SYNC:
+        /* 需求14：远端变量列表（上传/下载 ELF）应用完成 → 刷新变量树展示 + 补挂布局变量 */
+        if (g_app.hTree && IsWindow(g_app.hTree)) {
+            os_vartree_fill_tree(g_app.hTree);
+            os_log(OS_LOG_INFO, "变量树已刷新: 叶表 %d 个变量（含远端同步）", g_app.leaf_count);
+        }
+        os_layout_apply_pending();
+        os_mainwin_refresh_status();
+        return 0;
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
         if (h && h->hwndFrom == g_app.hTab) {
