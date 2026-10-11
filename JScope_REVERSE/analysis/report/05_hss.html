@@ -180,4 +180,46 @@ Free(buf);
         DLL 会把过高的周期自动钳到该探针能支持的最高速率 —— 也就是 OpenScope 直接用 HSS 时，
         "周期设成 1 µs 也不会报错，只会被静默钳位"。这一点在 J-Scope 侧看不到任何反馈（它不检查返回值以外的信息）。
       </p>
+
+      <h3>5.6 DLL 侧实证：HSS 全部契约已在主机侧闭环 <span class="badge b-obs">观测</span></h3>
+      <p class="lead">
+        本轮把 <code>JLink_x64.dll</code> 的四个 HSS 导出逐个反汇编（<code>JLINK_HSS_Start</code> 的核心在
+        <code>0x1800edb90</code>），J-Scope 调用契约里的每一处"未知"都在 DLL 里找到了对应实现：
+      </p>
+      <div class="code">
+<pre><code><span class="c">// ── JLINK_HSS_Start(blocks, n, period_us, flags) @0x180108b00 ── 全部为未优化前向参数传递 + 日志</span>
+vtable[0x390]()                     <span class="c">// 探测能力：bt eax,0xF（bit15）</span>
+<span class="k">if</span> (!bit15) caps = { <span class="n">5</span>, <span class="n">50</span> };        <span class="c">// ★ 回退 caps：最多 5 个变量、最高 50 Hz</span>
+<span class="k">else</span>        vtable[0x518](&amp;caps);      <span class="c">// = JLINK_HSS_GetCaps 同一个实现（32 B 结构）</span>
+
+<span class="k">if</span> (!HasHss())              <span class="k">return</span> <span class="n">-4</span>;   <span class="c">// "Target hardware does not support HSS"</span>
+<span class="k">if</span> (n &gt; caps.maxBlocks)     <span class="k">return</span> <span class="n">-3</span>;   <span class="c">// "Too many variables specified"</span>
+blocksCopy = malloc(n * <span class="n">16</span>);            <span class="c">// 逐条拷贝 16 B 描述符，同时累加 size</span>
+<span class="k">if</span> (!blocksCopy)            <span class="k">return</span> <span class="n">-2</span>;   <span class="c">// "Failed to allocate memory on debug probe"</span>
+sampleSize = <span class="n">4</span> + Σsize;                  <span class="c">// 与 J-Scope 的 DAT_14085d184 完全一致</span>
+rxBuffer  = malloc(<span class="n">0x80000</span>);            <span class="c">// 512 KB 探针侧接收环</span>
+
+period = <span class="k">max</span>(period_us, <span class="n">1e6</span> / caps.maxRateHz);   <span class="c">// ★ 静默钳位 + 上面那条 "set too high" 日志</span>
+<span class="k">if</span> ((caps.capBits &amp; <span class="n">2</span>) == <span class="n">0</span>) flags &amp;= ~<span class="n">1</span>;              <span class="c">// ★ caps.bit1 门控 flags.bit0</span>
+vtable[0x528](blocksCopy, n, period, flags);          <span class="c">// 下发给设备层（→ CPU2 固件命令 CMD_HSS_START）</span></code></pre>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:200px">caps 字段（32 B）</th><th>含义与证据</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x00 dword</td><td><strong>最大变量数</strong>（<code>cmp n, caps+0; ja → -3</code>）；无 HSS 能力时回退 <code>5</code></td></tr>
+            <tr><td class="m">+0x04 dword</td><td><strong>最大采样率 Hz</strong>；DLL 自己算最小周期就用 <code>1e6/caps+4</code>（与 J-Scope 的 <code>TimeResUs</code> 同式）；回退 <code>50</code> Hz（= 20 000 µs，正是 J-Scope 的 20 ms 回退周期）</td></tr>
+            <tr><td class="m">+0x08 dword</td><td><strong>能力位</strong>：bit1 门控 flags.bit0；结果另存全局 <code>0x1816d4ac0</code></td></tr>
+            <tr><td class="m">+0x0C…+0x1F</td><td>Start 路径未读取（GetCaps 会填满 32 B，J-Scope 只用了前 8 B）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key">
+        <p><strong>对 OpenScope 的三条直接结论：</strong></p>
+        <p>① 三个错误码 <code>-2/-3/-4</code> 完全可以照抄文案与语义（它们就来自 DLL 的这三条分支）；</p>
+        <p>② 采样周期<strong>不需要自己做上限检查</strong> —— DLL 会静默钳位，但 OpenScope 最好把
+        <code>JLINK_HSS_GetCaps</code> 的 <code>+0x04</code> 读出来主动提示用户"该探针最高 X Hz"（J-Scope 不提示，是个体验缺陷）；</p>
+        <p>③ <code>JLINK_HSS_Read</code> 的返回值是<strong>拷进调用者缓冲的字节数</strong>（DLL 内部
+        <code>mov r8d, eax; memcpy(dst, reply, eax)</code>），按 <code>nBytes / sampleSize</code> 解包是正确用法。</p>
+      </div>
     </section>

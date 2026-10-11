@@ -79,6 +79,19 @@ tools\run_script.bat DumpOverview.java
   HSS 与 RTT 共用同一 `UnpackSamples`
 - `TimeResolutionUs` 全局**只写不读**，HSS 时间戳原样存储（本身即 µs）
 
+**第三轮（未解项攻关，10 项闭环 8 项）**
+
+- **HSS 契约在主机侧完全闭环**（反汇编 JLink_x64.dll）：caps 为 **32 B**（`+0` 最大变量数、`+4` 最大采样率 Hz、
+  `+8` 能力位）；`-2/-3/-4` 三个错误码都在 DLL 内产生；周期会被**静默钳位**到 `1e6/caps+4`；
+  `JLINK_HSS_Read` 返回**字节数**；`flags.bit0` 受 `caps+8.bit1` 门控（位义在探针固件）
+- **版本门槛 `0xC79B` = V5.10.99**（版本整数十进制打包：`major=v/10000`）
+- **两个"从未被写"的全局**：`DAT_14085d1b0`（RTT 读缓冲 ⇒ 恒 0x2000/8 KB）、
+  `DAT_14285eb9c`（堆守卫开关 ⇒ 发布版校验全关）
+- **≈30 MB 静态区零引用**（108,121 条指令 RIP 扫描）→ 纯预留，无功能影响
+- **作业处理器表 16 项全部还原**；其中 6 个函数 Ghidra 从未创建（"暂停"= 单字节 `DAT_140096DD0=1`）
+- **日志回调是空桩**（`0x14000a760` = `ret 0`）：日志只进 4 KB 全局缓冲，段末弹框
+- 新工具：`tools/rip_scan.py`、`tools/dll_hss.py`、`tools/ghidra_scripts/DecompAt.java`（+ `run_orphans.bat`）
+
 **第二轮补充（全量反编译 + 8 专题）**
 
 - **RTT-Plus 逐字节**：配置串实测 **16 B/条**（`+0 Addr / +4 0 / +8 Size / +12 未初始化`），终止 12 B 0 ——

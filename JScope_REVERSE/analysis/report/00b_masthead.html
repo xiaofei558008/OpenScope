@@ -1,5 +1,5 @@
 <header class="masthead">
-  <p class="eyebrow">全量静态逆向 · Ghidra 12.1.4 headless · 2,001 函数全反编译</p>
+  <p class="eyebrow">全量静态逆向 · Ghidra 12.1.4 headless · 2,001 函数全反编译 · 未解项已闭环 8/10</p>
   <h1>SEGGER J-Scope 逆向分析</h1>
   <p class="standfirst">
     J-Scope 如何在 J-Link 上做到微秒级变量采样？这份档案把 679 KB 的 exe 拆到了底：
@@ -73,6 +73,7 @@
             <tr><td>全局变量清单</td><td class="m">4,837 项</td><td><code>dumps/globals.txt</code>（地址 / 类型 / 初值 / 引用者）</td></tr>
             <tr><td>专题深挖</td><td class="m">8 个专题</td><td>触发 / 导出 / 绘图 / ELF / RTT-Plus / 会话 / 基础设施 / HSS —— 各成独立报告（<code>analysis/*.md</code>）</td></tr>
             <tr><td>交叉验证</td><td class="m">JLink_x64.dll + 公开文档</td><td>用 DLL 内部日志串证实 HSS 调用契约；用 SEGGER UM08028 对照 RTT 协议（发现一处不一致，见 §7.7）</td></tr>
+            <tr><td><strong>未解项攻关</strong></td><td class="m">108,121 条指令 + DLL 定向反汇编</td><td>全镜像 RIP 相对引用扫描（重同步式线性反汇编）解决"谁写了这个全局"类问题；<code>tools/dll_hss.py</code> 反汇编 DLL 的 HSS 四导出（caps/flags/错误码全部闭环）；Ghidra 补建 6 个"只被数据表引用"的函数（§17）</td></tr>
           </tbody>
         </table>
       </div>

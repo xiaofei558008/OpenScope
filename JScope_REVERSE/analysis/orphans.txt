@@ -1,0 +1,122 @@
+
+################ 14003cea0 ################
+// FUN_14003cea0 @ 14003cea0 size=21
+// CALLEE: FUN_14004ea50 @ 14004ea50
+
+void FUN_14003cea0(longlong param_1)
+
+{
+  char *pcVar1;
+  char *pcVar2;
+  
+  pcVar1 = (char *)(*(longlong *)(param_1 + 8) + 0x20);
+  pcVar2 = (char *)0x0;
+  if (*pcVar1 != '\0') {
+    pcVar2 = pcVar1;
+  }
+  FUN_14004ea50(pcVar2);
+  return;
+}
+
+
+
+################ 14003d7c0 ################
+// FUN_14003d7c0 @ 14003d7c0 size=8
+
+void FUN_14003d7c0(void)
+
+{
+  DAT_140096dd0 = 1;
+  return;
+}
+
+
+
+################ 14003d930 ################
+// thunk_FUN_14004eb40 @ 14003d930 size=5
+// CALLEE: FUN_14004eb40 @ 14004eb40
+
+void thunk_FUN_14004eb40(void)
+
+{
+  FUN_14004eb40();
+  return;
+}
+
+
+
+################ 14003d940 ################
+// thunk_FUN_14004ebc0 @ 14003d940 size=5
+// CALLEE: FUN_14004ebc0 @ 14004ebc0
+
+void thunk_FUN_14004ebc0(void)
+
+{
+  FUN_14004ebc0();
+  return;
+}
+
+
+
+################ 14003dc70 ################
+// FUN_14003dc70 @ 14003dc70 size=12
+// CALLEE: FUN_140042750 @ 140042750
+
+void FUN_14003dc70(longlong param_1)
+
+{
+  FUN_140042750(*(undefined4 *)(*(longlong *)(param_1 + 8) + 0x20));
+  return;
+}
+
+
+
+################ 14003d9a0 ################
+// FUN_14003d9a0 @ 14003d9a0 size=13
+// CALLEE: FUN_140046e80 @ 140046e80
+
+void FUN_14003d9a0(longlong param_1)
+
+{
+  FUN_140046e80(*(longlong *)(param_1 + 8) + 0x20);
+  return;
+}
+
+
+
+################ 140042eb0 ################
+// FUN_140042eb0 @ 140042eb0 size=34
+// CALLEE: FUN_140040e10 @ 140040e10
+
+void FUN_140042eb0(longlong param_1)
+
+{
+  int iVar1;
+  
+  iVar1 = *(int *)(param_1 + 0x1c);
+  if (iVar1 == 0) {
+    DAT_14286d37c = iVar1;
+    FUN_140040e10();
+    return;
+  }
+  if (iVar1 == 2) {
+    DAT_14286d37c = 2;
+  }
+  FUN_140040e10();
+  return;
+}
+
+
+
+################ 140042ee0 ################
+// thunk_FUN_140040e10 @ 140042ee0 size=5
+// CALLEE: FUN_140040e10 @ 140040e10
+
+void thunk_FUN_140040e10(void)
+
+{
+  FUN_140040e10();
+  return;
+}
+
+

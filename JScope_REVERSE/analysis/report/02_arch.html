@@ -66,6 +66,36 @@
         </table>
       </div>
 
+      <h4>处理器表（16 项，RVA <code>0x73ef0</code>，本轮用原始字节 + 补建函数全部还原）</h4>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:44px">id</th><th style="width:150px">处理器</th><th style="width:180px">名称（表内字符串）</th><th>实现要点</th></tr></thead>
+          <tbody>
+            <tr><td class="m">0</td><td class="m">FUN_14003cc50</td><td>Initialize application</td><td>命令行两阶段解析 + 注册表 + DLL 版本 + 初始化</td></tr>
+            <tr><td class="m">1</td><td class="m">FUN_14003ce50</td><td>Exit application</td><td>停采 + 释放 + 退出</td></tr>
+            <tr><td class="m">2</td><td class="m">FUN_14003cea0</td><td>Create project</td><td>把作业负载 +0x20 的路径（可空）提交为 ProjectSettings（<code>FUN_14004ea50</code>）</td></tr>
+            <tr><td class="m">3</td><td class="m">FUN_14003cec0</td><td>Initialize Project Settings</td><td>应用 0x5E8 工程结构（含符号列表重建）</td></tr>
+            <tr><td class="m">4</td><td class="m">FUN_14003d210</td><td>Parse ELF File</td><td>ELF/DWARF 解析 → 符号树</td></tr>
+            <tr><td class="m">5</td><td class="m">FUN_14003d5c0</td><td>Start reading data</td><td>连接 + HSS/RTT 启动 + 挂 10 ms 周期作业</td></tr>
+            <tr><td class="m">6</td><td class="m">FUN_14003d7c0</td><td>Pause reading data</td><td><strong>仅一条指令</strong>：<code>DAT_140096DD0 = 1</code>（丢弃样本标志）</td></tr>
+            <tr><td class="m">7</td><td class="m">FUN_14003d7d0</td><td>Stop reading data</td><td>摘除周期作业 + HSS_Stop / RTT 停止 + 清环状态</td></tr>
+            <tr><td class="m">8</td><td class="m">FUN_14003d930</td><td>Save project</td><td>→ <code>FUN_14004eb40</code>（仅当已修改才写 XML）</td></tr>
+            <tr><td class="m">9</td><td class="m">FUN_14003d940</td><td>Save project as</td><td>→ <code>FUN_14004ebc0</code>（先弹"Save project as"对话框）</td></tr>
+            <tr><td class="m">10</td><td class="m">FUN_14003d950</td><td>Open project file</td><td>取结果码回调后交给 <code>FUN_14004ea70</code></td></tr>
+            <tr><td class="m">11</td><td class="m">FUN_14003d9a0</td><td>Import Raw</td><td><code>FUN_140046e80(job-&gt;data + 0x20)</code>（JRAW 解析器）</td></tr>
+            <tr><td class="m">12</td><td class="m">FUN_14003d9b0</td><td>Check modified ELF</td><td>比对 ELF 的 <code>GetFileTime</code>，变了才重解析</td></tr>
+            <tr><td class="m">13</td><td class="m">FUN_14003db70</td><td>Update project settings</td><td>应用 UI 侧改动（0x5E8）</td></tr>
+            <tr><td class="m">14</td><td class="m">FUN_14003dc70</td><td>Set AppStart action</td><td>写注册表 <code>DontShowAgainStartJScope</code>（启动向导选择）</td></tr>
+            <tr><td class="m">15</td><td class="m">—（终止）</td><td>—</td><td>terminate worker：栈上描述符入队的特殊项（§15.1）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <p><strong>注意最后 6 个处理器（id 2/6/8/9/14 与 Import Raw 垫片）在上一轮的反编译里完全不存在</strong> ——
+        Ghidra 的自动分析不会跟踪"只被数据表引用"的地址。本轮用 <code>DecompAt.java</code> 补建后才发现
+        "暂停"是一个单字节赋值这样的事实。凡遇函数表/回调表都应照此重跑。</p>
+      </div>
+
       <h3>2.2 全局模型：双缓冲 + 临界区</h3>
       <p class="lead">
         配置与工程设置各有<strong>一份锁保护的全局主副本</strong>，任何线程要读就先"取快照"到自己栈上/堆上，改完再"提交"。

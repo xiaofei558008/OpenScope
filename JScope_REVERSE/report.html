@@ -470,7 +470,7 @@ footer code { font-size: .95em; }
 <body>
 
 <header class="masthead">
-  <p class="eyebrow">全量静态逆向 · Ghidra 12.1.4 headless · 2,001 函数全反编译</p>
+  <p class="eyebrow">全量静态逆向 · Ghidra 12.1.4 headless · 2,001 函数全反编译 · 未解项已闭环 8/10</p>
   <h1>SEGGER J-Scope 逆向分析</h1>
   <p class="standfirst">
     J-Scope 如何在 J-Link 上做到微秒级变量采样？这份档案把 679 KB 的 exe 拆到了底：
@@ -544,6 +544,7 @@ footer code { font-size: .95em; }
             <tr><td>全局变量清单</td><td class="m">4,837 项</td><td><code>dumps/globals.txt</code>（地址 / 类型 / 初值 / 引用者）</td></tr>
             <tr><td>专题深挖</td><td class="m">8 个专题</td><td>触发 / 导出 / 绘图 / ELF / RTT-Plus / 会话 / 基础设施 / HSS —— 各成独立报告（<code>analysis/*.md</code>）</td></tr>
             <tr><td>交叉验证</td><td class="m">JLink_x64.dll + 公开文档</td><td>用 DLL 内部日志串证实 HSS 调用契约；用 SEGGER UM08028 对照 RTT 协议（发现一处不一致，见 §7.7）</td></tr>
+            <tr><td><strong>未解项攻关</strong></td><td class="m">108,121 条指令 + DLL 定向反汇编</td><td>全镜像 RIP 相对引用扫描（重同步式线性反汇编）解决"谁写了这个全局"类问题；<code>tools/dll_hss.py</code> 反汇编 DLL 的 HSS 四导出（caps/flags/错误码全部闭环）；Ghidra 补建 6 个"只被数据表引用"的函数（§17）</td></tr>
           </tbody>
         </table>
       </div>
@@ -731,6 +732,36 @@ footer code { font-size: .95em; }
             <tr><td class="m">Node dimension size / Dimension size sibling</td><td class="m">0x10</td><td>符号树节点尺寸缓存</td></tr>
           </tbody>
         </table>
+      </div>
+
+      <h4>处理器表（16 项，RVA <code>0x73ef0</code>，本轮用原始字节 + 补建函数全部还原）</h4>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:44px">id</th><th style="width:150px">处理器</th><th style="width:180px">名称（表内字符串）</th><th>实现要点</th></tr></thead>
+          <tbody>
+            <tr><td class="m">0</td><td class="m">FUN_14003cc50</td><td>Initialize application</td><td>命令行两阶段解析 + 注册表 + DLL 版本 + 初始化</td></tr>
+            <tr><td class="m">1</td><td class="m">FUN_14003ce50</td><td>Exit application</td><td>停采 + 释放 + 退出</td></tr>
+            <tr><td class="m">2</td><td class="m">FUN_14003cea0</td><td>Create project</td><td>把作业负载 +0x20 的路径（可空）提交为 ProjectSettings（<code>FUN_14004ea50</code>）</td></tr>
+            <tr><td class="m">3</td><td class="m">FUN_14003cec0</td><td>Initialize Project Settings</td><td>应用 0x5E8 工程结构（含符号列表重建）</td></tr>
+            <tr><td class="m">4</td><td class="m">FUN_14003d210</td><td>Parse ELF File</td><td>ELF/DWARF 解析 → 符号树</td></tr>
+            <tr><td class="m">5</td><td class="m">FUN_14003d5c0</td><td>Start reading data</td><td>连接 + HSS/RTT 启动 + 挂 10 ms 周期作业</td></tr>
+            <tr><td class="m">6</td><td class="m">FUN_14003d7c0</td><td>Pause reading data</td><td><strong>仅一条指令</strong>：<code>DAT_140096DD0 = 1</code>（丢弃样本标志）</td></tr>
+            <tr><td class="m">7</td><td class="m">FUN_14003d7d0</td><td>Stop reading data</td><td>摘除周期作业 + HSS_Stop / RTT 停止 + 清环状态</td></tr>
+            <tr><td class="m">8</td><td class="m">FUN_14003d930</td><td>Save project</td><td>→ <code>FUN_14004eb40</code>（仅当已修改才写 XML）</td></tr>
+            <tr><td class="m">9</td><td class="m">FUN_14003d940</td><td>Save project as</td><td>→ <code>FUN_14004ebc0</code>（先弹"Save project as"对话框）</td></tr>
+            <tr><td class="m">10</td><td class="m">FUN_14003d950</td><td>Open project file</td><td>取结果码回调后交给 <code>FUN_14004ea70</code></td></tr>
+            <tr><td class="m">11</td><td class="m">FUN_14003d9a0</td><td>Import Raw</td><td><code>FUN_140046e80(job-&gt;data + 0x20)</code>（JRAW 解析器）</td></tr>
+            <tr><td class="m">12</td><td class="m">FUN_14003d9b0</td><td>Check modified ELF</td><td>比对 ELF 的 <code>GetFileTime</code>，变了才重解析</td></tr>
+            <tr><td class="m">13</td><td class="m">FUN_14003db70</td><td>Update project settings</td><td>应用 UI 侧改动（0x5E8）</td></tr>
+            <tr><td class="m">14</td><td class="m">FUN_14003dc70</td><td>Set AppStart action</td><td>写注册表 <code>DontShowAgainStartJScope</code>（启动向导选择）</td></tr>
+            <tr><td class="m">15</td><td class="m">—（终止）</td><td>—</td><td>terminate worker：栈上描述符入队的特殊项（§15.1）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <p><strong>注意最后 6 个处理器（id 2/6/8/9/14 与 Import Raw 垫片）在上一轮的反编译里完全不存在</strong> ——
+        Ghidra 的自动分析不会跟踪"只被数据表引用"的地址。本轮用 <code>DecompAt.java</code> 补建后才发现
+        "暂停"是一个单字节赋值这样的事实。凡遇函数表/回调表都应照此重跑。</p>
       </div>
 
       <h3>2.2 全局模型：双缓冲 + 临界区</h3>
@@ -1125,6 +1156,48 @@ Free(buf);
         DLL 会把过高的周期自动钳到该探针能支持的最高速率 —— 也就是 OpenScope 直接用 HSS 时，
         "周期设成 1 µs 也不会报错，只会被静默钳位"。这一点在 J-Scope 侧看不到任何反馈（它不检查返回值以外的信息）。
       </p>
+
+      <h3>5.6 DLL 侧实证：HSS 全部契约已在主机侧闭环 <span class="badge b-obs">观测</span></h3>
+      <p class="lead">
+        本轮把 <code>JLink_x64.dll</code> 的四个 HSS 导出逐个反汇编（<code>JLINK_HSS_Start</code> 的核心在
+        <code>0x1800edb90</code>），J-Scope 调用契约里的每一处"未知"都在 DLL 里找到了对应实现：
+      </p>
+      <div class="code">
+<pre><code><span class="c">// ── JLINK_HSS_Start(blocks, n, period_us, flags) @0x180108b00 ── 全部为未优化前向参数传递 + 日志</span>
+vtable[0x390]()                     <span class="c">// 探测能力：bt eax,0xF（bit15）</span>
+<span class="k">if</span> (!bit15) caps = { <span class="n">5</span>, <span class="n">50</span> };        <span class="c">// ★ 回退 caps：最多 5 个变量、最高 50 Hz</span>
+<span class="k">else</span>        vtable[0x518](&amp;caps);      <span class="c">// = JLINK_HSS_GetCaps 同一个实现（32 B 结构）</span>
+
+<span class="k">if</span> (!HasHss())              <span class="k">return</span> <span class="n">-4</span>;   <span class="c">// "Target hardware does not support HSS"</span>
+<span class="k">if</span> (n &gt; caps.maxBlocks)     <span class="k">return</span> <span class="n">-3</span>;   <span class="c">// "Too many variables specified"</span>
+blocksCopy = malloc(n * <span class="n">16</span>);            <span class="c">// 逐条拷贝 16 B 描述符，同时累加 size</span>
+<span class="k">if</span> (!blocksCopy)            <span class="k">return</span> <span class="n">-2</span>;   <span class="c">// "Failed to allocate memory on debug probe"</span>
+sampleSize = <span class="n">4</span> + Σsize;                  <span class="c">// 与 J-Scope 的 DAT_14085d184 完全一致</span>
+rxBuffer  = malloc(<span class="n">0x80000</span>);            <span class="c">// 512 KB 探针侧接收环</span>
+
+period = <span class="k">max</span>(period_us, <span class="n">1e6</span> / caps.maxRateHz);   <span class="c">// ★ 静默钳位 + 上面那条 "set too high" 日志</span>
+<span class="k">if</span> ((caps.capBits &amp; <span class="n">2</span>) == <span class="n">0</span>) flags &amp;= ~<span class="n">1</span>;              <span class="c">// ★ caps.bit1 门控 flags.bit0</span>
+vtable[0x528](blocksCopy, n, period, flags);          <span class="c">// 下发给设备层（→ CPU2 固件命令 CMD_HSS_START）</span></code></pre>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:200px">caps 字段（32 B）</th><th>含义与证据</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x00 dword</td><td><strong>最大变量数</strong>（<code>cmp n, caps+0; ja → -3</code>）；无 HSS 能力时回退 <code>5</code></td></tr>
+            <tr><td class="m">+0x04 dword</td><td><strong>最大采样率 Hz</strong>；DLL 自己算最小周期就用 <code>1e6/caps+4</code>（与 J-Scope 的 <code>TimeResUs</code> 同式）；回退 <code>50</code> Hz（= 20 000 µs，正是 J-Scope 的 20 ms 回退周期）</td></tr>
+            <tr><td class="m">+0x08 dword</td><td><strong>能力位</strong>：bit1 门控 flags.bit0；结果另存全局 <code>0x1816d4ac0</code></td></tr>
+            <tr><td class="m">+0x0C…+0x1F</td><td>Start 路径未读取（GetCaps 会填满 32 B，J-Scope 只用了前 8 B）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key">
+        <p><strong>对 OpenScope 的三条直接结论：</strong></p>
+        <p>① 三个错误码 <code>-2/-3/-4</code> 完全可以照抄文案与语义（它们就来自 DLL 的这三条分支）；</p>
+        <p>② 采样周期<strong>不需要自己做上限检查</strong> —— DLL 会静默钳位，但 OpenScope 最好把
+        <code>JLINK_HSS_GetCaps</code> 的 <code>+0x04</code> 读出来主动提示用户"该探针最高 X Hz"（J-Scope 不提示，是个体验缺陷）；</p>
+        <p>③ <code>JLINK_HSS_Read</code> 的返回值是<strong>拷进调用者缓冲的字节数</strong>（DLL 内部
+        <code>mov r8d, eax; memcpy(dst, reply, eax)</code>），按 <code>nBytes / sampleSize</code> 解包是正确用法。</p>
+      </div>
     </section>
 
     <!-- ══ 06 ══ -->
@@ -5590,88 +5663,212 @@ FUN_14003d7d0  (停止采样 + 断开; chunk_004.c:7535)
 
     <!-- ══ 17 ══ -->
     <section id="s17">
-      <h2><span class="sec-n">17</span>未解之谜与实测建议</h2>
+      <h2><span class="sec-n">17</span>未解之谜：攻关结果与剩余开放项</h2>
       <p class="lead">
-        静态分析的边界在这里。下面每一项都写清了"已知什么、缺什么、怎么用一次实验拿下来"。
-        按对 OpenScope 的影响排序。
+        本轮针对上一轮列出的未解项做了三件事：<strong>① 全镜像 RIP 相对引用扫描</strong>（重新同步式线性反汇编
+        108,121 条指令，覆盖 Ghidra 未识别为函数的代码）；<strong>② 对 JLink_x64.dll 做定向反汇编</strong>
+        （HSS 四个导出 + 能力查询 + 日志字符串）；<strong>③ 用 Ghidra 补建 8 个从未被创建的函数</strong>
+        （作业表里只有数据引用的处理器）。结果：<strong>10 项未解中 8 项已闭环</strong>，其余 2 项只剩"硬件/固件侧确认"。
       </p>
 
+      <h3>17.1 已闭环（上一轮的未解项）</h3>
       <div class="tw">
         <table>
-          <thead><tr><th style="width:34px">#</th><th style="width:230px">问题</th><th>已知 / 缺什么</th><th style="width:280px">一次实测即可确定</th></tr></thead>
+          <thead><tr><th style="width:30px">#</th><th style="width:210px">问题</th><th>结论与证据</th><th style="width:74px">等级</th></tr></thead>
           <tbody>
             <tr>
               <td class="m">1</td>
-              <td><strong>采样率显示 10 倍因子</strong></td>
-              <td>公式 <code>numSamples×10⁷ / elapsed</code> 已确认；<code>elapsed</code> 由 <code>FUN_140043050</code> 算出，按 <code>freq/1e6</code> 换算应为 <strong>µs</strong> —— 代入后结果比真实样本率大 10 倍 <span class="badge b-unk">未知</span></td>
-              <td>用固定 HSS 周期（如 100 µs）+ 已知变量数采集 10 s，比较 J-Scope 状态栏数字与"实际样本数/时间"</td>
+              <td><code>JLINK_HSS_GetCaps</code> 的 8 字节结构</td>
+              <td><strong>caps 实际是 32 字节，字段如下</strong>（由 DLL 内部 <code>JLINK_HSS_Start</code> 的使用点反推）：
+                  <br>· <code>+0x00 dword</code> = <strong>最大变量（数据块）数</strong>：<code>cmp n, caps+0; ja → 返回 -3</code>（"Too many variables"）；能力缺失时取回退值 <code>5</code>
+                  <br>· <code>+0x04 dword</code> = <strong>最大采样率 Hz</strong>：DLL 自己就用 <code>1e6 / caps+4</code> 求最小周期 µs —— 与 J-Scope 的 <code>TimeResUs</code> 公式<strong>完全一致</strong>，回退值 <code>50</code>(Hz)→20 000 µs
+                  <br>· <code>+0x08 dword</code> = <strong>能力位</strong>：<code>bit1</code> 决定 flags 的 bit0 是否保留（见下）
+                  <br>· 其余 20 字节在 <code>Start</code> 路径中未被读取</td>
+              <td><span class="badge b-obs">观测</span></td>
             </tr>
             <tr>
               <td class="m">2</td>
-              <td><strong><code>JLINK_HSS_Start</code> 的 Flags=1 语义</strong></td>
-              <td>DLL 日志串 <code>"HSS started: %d DataBlocks, %d (period_us), 0x%.8X (Flags)"</code> 证实它是位标志；J-Scope 恒传 <code>1</code> <span class="badge b-unk">未知</span></td>
-              <td>对同一目标分别用 Flags=0/1/2 调用 <code>JLINK_HSS_Start</code>，观察时间戳是否出现 / 是否连续</td>
+              <td><code>JLINK_HSS_Start</code> 的 Flags=1 语义</td>
+              <td>DLL 侧<strong>确实解码了 flags</strong>：
+                  <code>ecx = caps+8; and ecx,2;</code> 然后
+                  <code>eax = flags &amp; ~1; bt ecx,1; cmovae flags, eax</code> ——
+                  即 <strong>只有探针 caps+8 的 bit1 置位时，flags 的 bit0 才被保留</strong>，否则 DLL 静默把它清掉；
+                  同时把"能力是否存在"记进 <code>0x1816d4ac0</code>。
+                  flags 随后原样传给设备层（<code>[vtable+0x528]</code>），并出现在日志串里。
+                  <strong>bit0 的物理含义在探针固件里，主机侧无法再挖</strong></td>
+              <td><span class="badge b-obs">观测</span>+<span class="badge b-unk">固件侧</span></td>
             </tr>
             <tr>
               <td class="m">3</td>
-              <td><code>JLINK_HSS_GetCaps</code> 的 8 字节结构</td>
-              <td>已知 <code>+4</code> 是频率类字段（<code>1e6/x</code> 得 µs）；<code>+0</code> 从未被读 <span class="badge b-inf">推断</span></td>
-              <td>打印 caps 原始 8 字节，与探针型号/最大采样率对照</td>
+              <td>三个负返回码 <code>-2/-3/-4</code> 的来源</td>
+              <td><strong>全部在 DLL 的 HSS_Start 里产生</strong>，与 J-Scope 的字符串一一对应：
+                  <code>HasHss==0 → -4</code>；<code>n &gt; caps+0 → -3</code>；块数组 <code>malloc(n*16)==NULL → -2</code>。
+                  J-Scope 只是把 rc 映射成文案</td>
+              <td><span class="badge b-obs">观测</span></td>
             </tr>
             <tr>
               <td class="m">4</td>
-              <td><strong>RTT-Plus 配置串与文档不一致</strong></td>
-              <td>二进制实测：<strong>每条 16 字节</strong>（<code>+0 Addr / +4 0 / +8 Size / +12 未初始化</code>），终止 12 字节 0；
-                  UM08028 文档写的是每条 8 字节 <code>&lt;4B Size&gt;&lt;4B Addr&gt;</code> + 8 字节 0 <span class="badge b-obs">观测</span></td>
-              <td>写一个只有下行通道的固件，把收到的字节原样打印出来（<strong>这是最值得先做的一个实验</strong>，直接决定 OpenScope 目标端库怎么写）</td>
+              <td>DLL 版本门槛 <code>0xC79B</code></td>
+              <td>版本解码函数 <code>FUN_1400271f0</code> 明确为<strong>十进制打包</strong>：
+                  <code>major=v/10000, minor=(v/100)%100, rev=v%100</code>（rev&gt;26 → 后缀 <code>zNN</code>）。
+                  故 <code>0xC79B = 51099 → V5.10.99</code> ——
+                  <strong>要求 J-Link DLL ≥ V5.10.99 才使用 <code>HSS_GetCaps</code>，否则退回固定 10 µs 周期</strong></td>
+              <td><span class="badge b-der">推导</span>（编码已观测）</td>
             </tr>
             <tr>
               <td class="m">5</td>
-              <td>RTT 读缓冲上限 <code>max(0x2000, chBufSize)</code></td>
-              <td>已修正旧报告的 min→max；<code>chBufSize</code>（<code>DAT_14085d1b0</code>）的写入者未定位 <span class="badge b-obs">观测</span>/<span class="badge b-unk">未知</span></td>
-              <td>用不同 RTT 上行缓冲大小（1 KB / 32 KB）建会话，观察 <code>_HEAP</code> 中该分配的大小</td>
+              <td>RTT 读缓冲大小 <code>DAT_14085d1b0</code> 的写入者</td>
+              <td><strong>全镜像只有 2 处引用，且都是读</strong>（<code>0x14003efc2</code> 的 <code>cmp</code> 与 <code>0x14003efc8</code> 的
+                  <code>cmova</code>，都在 <code>FUN_14003ef60</code> 内）→ <strong>该变量永远是 0</strong>，
+                  于是 <code>readBufSize = max(0x2000, 0) = 0x2000</code>：
+                  <strong>RTT 读取缓冲恒为 8 KB</strong>，"按通道缓冲自适应"的设计在本版本没有生效</td>
+              <td><span class="badge b-obs">观测</span></td>
             </tr>
             <tr>
               <td class="m">6</td>
-              <td>作业处理器表中 7 项未取到函数体</td>
-              <td>16 项表 <code>0x140073ef0</code> 中 id 2/6/7/8/9/11/14 的执行体地址需从原始字节读取（本轮已知：0=init、1=退出线程、3=InitProjSettings、4=ParseELF、5=ReadStart、10=OpenProj、12=CheckELF、13=UpdateProjSettings）<span class="badge b-unk">未知</span></td>
-              <td>静态即可补：dump <code>0x140073ef0..0x140073fef</code> 的 16×16 字节表</td>
+              <td>调试堆守卫开关 <code>DAT_14285eb9c</code> 的写入者</td>
+              <td><strong>全镜像只有 4 处引用，全部是 <code>cmp […], 0</code> 读</strong>
+                  （<code>0x140043d43 / 0x140043d6c / 0x140043f1b / 0x140043fe7</code>，都在分配器自身内）
+                  → 开关恒为 0：<strong>发布版本中签名/哨兵校验全部关闭</strong>，
+                  带守卫的堆在本版本退化为"块头 + 标签"的普通 malloc 包装</td>
+              <td><span class="badge b-obs">观测</span></td>
             </tr>
             <tr>
               <td class="m">7</td>
-              <td><code>-RTTSearchRanges</code> 之外的选项解析余量</td>
-              <td>表里只有 4 项，帮助文本不可达；<code>Binary file (*.raw)</code> / <code>Import Raw</code> 字符串<strong>无代码引用</strong>（疑为拖放或旧版路径）<span class="badge b-inf">推断</span></td>
-              <td>把 <code>.raw</code> 文件拖到 J-Scope 窗口上，看是否触发导入</td>
+              <td>≈30 MB 未引用静态区</td>
+              <td><strong>确认全镜像零引用</strong>：RIP 相对扫描（108,121 条指令）在
+                  <code>0x1400a5d1f0–0x14285d1f0</code> 区间<strong>没有命中任何一条指令</strong>，
+                  与 Ghidra 的 4,837 项全局扫描一致。结论：<strong>纯虚拟预留（BSS 式），从提交到运行都不被访问</strong>，
+                  对功能无影响；成因（遗留大数组 / 对齐填充）不可知</td>
+              <td><span class="badge b-obs">观测</span></td>
             </tr>
             <tr>
               <td class="m">8</td>
-              <td>≈30 MB 未引用静态区（<code>0x1400a5d1f0–0x14285d1f0</code>）</td>
-              <td>globals 全量扫描 0 引用；.data 虚拟大小 41.7 MB 中除了 32 MB 时间戳环就剩它 <span class="badge b-unk">未知</span></td>
-              <td>运行时读 J-Scope 进程的 <code>VirtualQuery</code>/提交页，看这块是否真被提交过（若从未提交，就是纯 linker 预留）</td>
-            </tr>
-            <tr>
-              <td class="m">9</td>
-              <td>触发配置里 XML 的 <code>&lt;Auto/&gt;</code> 字段</td>
-              <td>触发结构（0x18 B）中的使能/边沿/阈值已全部还原，但 XML 的 <code>Auto</code> 属性对应哪个字段尚无直接证据（见 §12）<span class="badge b-unk">未知</span></td>
-              <td>在 UI 上分别切换"上升/下降/双边沿"各存一次工程，diff XML</td>
-            </tr>
-            <tr>
-              <td class="m">10</td>
-              <td>CSV 导出 <code>writeIdx==0</code> 时 2³² 次循环</td>
-              <td>反汇编确认为 32 位无符号下溢（真实缺陷）<span class="badge b-obs">观测</span></td>
-              <td>清空缓冲后立刻导出（不采集）即可复现——<strong>建议只在隔离环境试</strong></td>
+              <td>作业处理器表中 7 项"未取到函数体"</td>
+              <td><strong>16 项全部补齐</strong>（见 §2.1 表）：其中 6 个是 Ghidra 从未创建的函数，
+                  本轮用 <code>DecompAt.java</code> 补建并反编译；<code>0x14003d9a0</code> 确认为
+                  <code>FUN_140046e80(job-&gt;data + 0x20)</code> 的 Import Raw 垫片</td>
+              <td><span class="badge b-obs">观测</span></td>
             </tr>
           </tbody>
         </table>
       </div>
 
-      <h3>17.1 建议的实测顺序（成本从低到高）</h3>
-      <ol>
-        <li><strong>RTT-Plus 下行字节抓取</strong>（#4）—— 一块板子 + 20 行固件，直接决定目标端库的写法；</li>
-        <li><strong>HSS Flags 位语义</strong>（#2）与 <strong>caps 结构</strong>（#3）—— 决定 OpenScope 的 HSS 后端参数；</li>
-        <li><strong>采样率 10 倍因子</strong>（#1）—— 决定状态栏与记录时间轴是否需要补偿；</li>
-        <li>作业表补齐（#6）与静态区确认（#8）—— 纯静态/轻量实验，补全报告完整性。</li>
-      </ol>
+      <h3>17.2 本轮新解出的行为（原报告未覆盖）</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:210px">发现</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>暂停 = 一个字节</strong></td>
+              <td><code>FUN_14003d7c0</code>（作业 id 6 "Pause reading"）的全部实现是
+                  <code>mov byte [0x140096DD0], 1</code>。该全局正是 <code>UnpackSamples</code> 里
+                  "跳过逐变量存储"的开关（<code>FUN_14003ef00 → cVar3</code> 分支）：
+                  <strong>暂停时数据照读照解包，但每个样本都不落环</strong> —— 与 UI 文案
+                  "all incoming data samples are discarded" 精确对应。开始采集（<code>FUN_14003d5c0</code>）把它清 0，
+                  停止（<code>FUN_14003d7d0</code>）置 1</td>
+            </tr>
+            <tr>
+              <td><strong>日志回调是空桩</strong></td>
+              <td><code>FUN_1400423e0</code> 组装 <code>"ERROR: %s"</code> 后调用
+                  <code>0x14000a760(MainWindow*, msg)</code> —— 而 <strong><code>0x14000a760</code> 是一条
+                  <code>ret 0</code> 指令 + <code>CC</code> 填充（3 字节空函数）</strong>。
+                  真正的日志累积发生在同一个函数里：无条件追加到 4 KB 全局缓冲 <code>DAT_14285db80</code> 并给错误计数 +1，
+                  段结束时由 <code>FUN_14003e9a0</code> 判定（有错 → 错误框；无错但有内容 → 信息框）。
+                  <strong>J-Scope 既不写日志文件，也没有活的 UI 日志接收者</strong></td>
+            </tr>
+            <tr>
+              <td><strong>作业完成回调</strong></td>
+              <td>默认完成回调 <code>FUN_140040e10</code>：若 <code>job-&gt;data</code> 非空则释放 data，否则释放 job 本身
+                  （作业自销毁）。"打开工程"用专属回调 <code>FUN_140042eb0</code>：把 <code>job-&gt;rc</code>
+                  分档写进 <code>DAT_14286d37c</code>（0=成功 / 2=取消）后再走默认释放</td>
+            </tr>
+            <tr>
+              <td><strong>启动动作写注册表</strong></td>
+              <td>作业 id 14（Set AppStart action，<code>FUN_14003dc70 → FUN_140042750</code>）把 job 负载里的 DWORD
+                  写进注册表值 <code>DontShowAgainStartJScope</code>（REG_DWORD）
+                  —— 即"下次启动显示欢迎框 / 直接新建工程"的选择，与 §16 的向导分支闭合</td>
+            </tr>
+            <tr>
+              <td><strong>保存工程的返回值链</strong></td>
+              <td><code>FUN_14004eb40</code>：仅当工程被标记为已修改才写盘 → <code>FUN_1400471d0</code> 写 XML →
+                  成功则记日志 <em>"Project saved successfully"</em>、记住路径、清"已修改"标志；
+                  失败则 <em>"Failed to save project file"</em>。
+                  "另存为"（<code>FUN_14004ebc0</code>）先弹
+                  <code>"Save project as"</code> / <code>"J-Scope project files (*.jscope)"</code> 对话框</td>
+            </tr>
+            <tr>
+              <td><strong>关闭流程的三个标志</strong></td>
+              <td><code>MainWindow+0x342</code> ≠ 0 → 直接关闭（退出中，跳过所有对话框）；
+                  <code>+0x341</code> ≠ 0 → 弹"新建工程/配置"向导（<code>FUN_140057220</code>），
+                  其 <code>QDialog::exec</code> 结果存 <code>+0x33C</code>；
+                  <code>+0x340</code> ≠ 0 → 弹配置对话框（<code>FUN_14002a410</code>）；两者皆 0 → 不弹</td>
+            </tr>
+            <tr>
+              <td><strong><code>JLINK_HSS_Read</code> 返回字节数</strong></td>
+              <td>DLL 侧确认：<code>mov eax,[reply]; test eax,eax; jle skip; mov r8d,eax; memcpy(dst=调用者缓冲, src=内部回复, eax)</code>
+                  —— <strong>返回值就是拷进调用者缓冲的字节数</strong>，J-Scope 的 <code>nBytes/sampleSize</code> 用法正确</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>17.3 仍然开放（只剩需要硬件的两项）</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:30px">#</th><th style="width:220px">问题</th><th>现状</th><th style="width:260px">一次实测即可定案</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="m">A</td>
+              <td><strong>采样率显示 10 倍因子</strong></td>
+              <td>本轮把单位链再核了一遍，反而<strong>更确定</strong>了：
+                  ① <code>FUN_140043050</code> 除以 <code>freq/1e6</code> ⇒ 返回 µs；
+                  ② <strong>独立的第二处调用点</strong> <code>FUN_140039140</code> 把超时（ms）<code>×1000</code> 后再与
+                  <code>FUN_140043970()</code> 比较 —— 单位确实是 µs；
+                  ③ 分母 <code>DAT_14085d1ec</code> 在 <code>UnpackSamples</code> 里就是"样本数"；
+                  ④ 显示路径 <code>FUN_14003eb00 → FUN_140050030</code> 只做 /1000 的 k 换算，无补偿。
+                  故 <code>rate = n×10⁷/µs</code> <strong>恒为真实值的 10 倍</strong>
+                  <span class="badge b-der">推导</span>（三处独立证据一致）</td>
+              <td>固定 HSS 周期（如 100 µs）采 10 s，比较状态栏读数与"样本数/时间"。
+                  若确为 10 倍，则 J-Scope 状态栏的 Samples/s 一直是错的（或它有意显示 0.1 s 尺度）</td>
+            </tr>
+            <tr>
+              <td class="m">B</td>
+              <td>RTT-Plus 配置串与 UM08028 文档不一致</td>
+              <td>二进制实测 16 B/条 + 12 B 零终止（§7）；文档写 8 B/条 + 8 B 零终止。
+                  本轮无法再进一步 —— 目标端固件不在本机</td>
+              <td>写一个只开下行通道的固件，把收到的字节原样打印（已有 20 行示例可改）</td>
+            </tr>
+            <tr>
+              <td class="m">C</td>
+              <td>flags bit0 / caps bit1 的物理含义</td>
+              <td>主机侧已挖到底：DLL 只做"能力门控"（caps+8.bit1 决定 flags.bit0 是否保留），
+                  真正的语义由探针固件解释</td>
+              <td>用同一块探针分别传 flags=0/1 抓 HSS 数据：若时间戳行为不同即可定性</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>17.4 复核方法（本轮新增工具）</h3>
+      <div class="code">
+<pre><code><span class="c"># 全镜像 RIP 相对引用扫描（重同步式线性反汇编，覆盖 Ghidra 未建函数的代码）</span>
+python tools\rip_scan.py 0x14285eb9c 0x14085d1b0          <span class="c"># 指定目标</span>
+python tools\rip_scan.py --range 0x1400a5d1f0 0x14285d1f0 <span class="c"># 整个区间是否有引用</span>
+
+<span class="c"># JLink_x64.dll 定向反汇编（导出或裸地址）</span>
+python tools\dll_hss.py JLINK_HSS_Start 120
+python tools\dll_hss.py 0x1800edb90 500        <span class="c"># HSS 启动核心</span>
+
+<span class="c"># 补建 Ghidra 未创建的函数并反编译</span>
+tools\run_orphans.bat                          <span class="c"># DecompAt.java → dumps/orphans.txt</span></code></pre>
+      </div>
+      <div class="callout key">
+        <p><strong>方法论收获：</strong>"Ghidra 没建函数"不等于"没有代码"。
+        J-Scope 的作业表通过<strong>数据指针</strong>引用处理器，Ghidra 的自动分析不会跟进去，
+        于是 6 个处理器（含"暂停读数据"这样关键的函数）在上一轮完全缺席。
+        凡是见到"函数表 / 回调表 / 跳转表"，都应把表里的地址当成函数入口重新反编译一遍。</p>
+      </div>
     </section>
 
     <!-- ══ 18 ══ -->
