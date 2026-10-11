@@ -1,0 +1,34 @@
+<section id="s8">
+      <h2><span class="sec-n">08</span>类型系统（TypeID）</h2>
+      <p class="lead">
+        <code>TypeID</code> 存于变量记录 <code>+0x314</code>，写入 <code>.jscope</code> 的 <code>TypeID</code> 属性。
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:90px">TypeID</th><th>类型</th><th style="width:110px">树中可选</th><th>备注</th></tr></thead>
+          <tbody>
+            <tr><td class="m">1</td><td>float32</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">2</td><td>float64</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">3</td><td>？（16 字节，疑似 long double / float128）</td><td class="no">✘</td><td rowspan="2"><code>FUN_1400504d0</code> 判为不支持 <span class="badge b-inf">推断</span></td></tr>
+            <tr><td class="m">4</td><td>？（疑似 half / float16）</td><td class="no">✘</td></tr>
+            <tr><td class="m">5</td><td>bool</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">6 / 7 / 8</td><td>uint8 / 16 / 32</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">9</td><td>uint64</td><td class="no">✘</td><td>树中禁用</td></tr>
+            <tr><td class="m">10 / 11 / 12</td><td>int8 / 16 / 32</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">13</td><td>int64</td><td class="no">✘</td><td>树中禁用</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        不支持时的 UI 行为：<code>QTreeWidgetItem::setDisabled(true)</code> +
+        第 4 列文本 <code>"Symbol type is not supported"</code>。
+      </p>
+      <div class="callout">
+        <p><span class="badge b-inf">推断</span> TypeID 3/4 的确切语义未在本轮确证；
+        结合 demangler 类型表中出现的 <code>half</code> 与 <code>__float128</code>，
+        推测为 128 位浮点与 16 位浮点。</p>
+      </div>
+    </section>
+
+    <!-- ══ 09 ══ -->
+    

@@ -1,9 +1,42 @@
 # SEGGER J-Scope 逆向分析报告
 
-**分析对象**：`C:\Program Files\SEGGER\JLink_V966\JScope.exe`
-**分析日期**：2026-10-11
+**分析对象**：`C:\Program Files\SEGGER\JLink_V966\JScope.exe`（9.66）
+**分析日期**：2026-10-11（第二轮全量分析已并入）
 **分析工具**：Ghidra 12.1.4 headless（自建 JDK 21 工具链）+ pefile/capstone 辅助
 **参考方法论**：REA（morluto/rea）——区分「观测/推导/推断/未知」，保留证据出处
+
+---
+
+## 阅读指引（第二轮更新）
+
+本文件是第一轮的精编版；**完整报告以 `report.html` 为准**（19 节、含 8 个专题的完整细节）。
+第二轮把全部 **2,001 个函数**反编译（`dumps/alldecomp/`，2.2 MB C 代码 + 调用图索引），
+并按 8 个专题深挖，各成独立报告：
+
+| 专题报告 | 内容 |
+|---|---|
+| `analysis/trigger.md` | 触发子系统：24 字节触发结构、8 个类型比较器、命中后重开记录、TriggerWidget UI、XML 真身 |
+| `analysis/export.md` | CSV / JRAW 导出与 Import Raw：逐字节格式、上界语义、两个真实缺陷 |
+| `analysis/graph.md` | 波形渲染：100 px/大格、坐标变换、DrawStyle、自动定标 1-2-5、27 档缩放、FPS |
+| `analysis/elf.md` | ELF/DWARF：libdwarf 用法、TypeID 三个产出点、0x3F0 符号记录、符号可见性规则 |
+| `analysis/rttplus.md` | RTT / RTT-Plus 逐字节实证（含与 UM08028 文档的差异） |
+| `analysis/infra.md` | 作业框架（单 worker + 32 槽环形队列 + 16 项处理器表）、堆守卫、分段日志、时间基准 |
+| `analysis/session.md` | 启动序列、DLL 三级查找、配置对话框、INI/注册表、菜单快捷键全表、生命周期 |
+
+**第二轮对第一轮的修正（重要）**
+
+1. **RTT 读缓冲是 `max(0x2000, 通道缓冲)`，不是 min**（`FUN_14003ef60`）。
+2. **TypeID 3/4 没有任何产出点**（第一轮猜的 float128/half 无代码支撑）；**新增 TypeID 14 = 位域**（可观测）。
+3. **配置结构偏移修正**：JTAG_IRPre 在 `+0x5B4`、DRPre 在 `+0x5B0`、`+0x5B8` 是"会话模式"标志（不是 JTAG 值）。
+   根因：XML 读写用的"项目结构"基址比运行期 Configuration **高 8 字节**，混用会得到矛盾字段表。
+4. **符号记录是 0x3F0 字节**（`FUN_140040ab0`），`+0x3D8` 是首子指针而非记录尾。
+5. **`File too large - maximum file size (%d bytes)` 属 `JScopeSettings.ini`**（上限 30000 B），与导出无关。
+6. **`FUN_14003f110` 是 ERROR 日志行**（段末汇总成弹窗），不是直接弹窗。
+7. **RTT-Plus 配置串与 SEGGER 文档不一致**：实测每条 16 字节（`+0 Addr / +4 0 / +8 Size / +12 未初始化`），
+   终止 12 字节 0；文档写的是 8 字节/条 + 8 字节 0。**以二进制为准，需实测确认**（见 report.html §17#4）。
+8. **采样率显示疑有 10 倍因子**（`numSamples×10⁷/elapsed_µs`），已列入未知点。
+9. **采集过程不落盘**；`<DataFile>/<RawFile>` 只是"上次导出路径"。
+10. **`CDeviceDataModel` 等 `CDevice*` 类是 MCU 选型对话框**，不是符号树（符号树在 SymbolSelection / QTreeWidget）。
 
 ---
 
@@ -364,7 +397,8 @@ else { carryLen = min(remainder, 0x40);               // ★ 上限 64 字节
        memcpy(carry, buf + (total - remainder), carryLen); }
 ```
 
-RTT 读缓冲：`readBufSize = min(0x2000, channelBufSize)`，分配标签 `"RTT read buffer allocation"`。
+RTT 读缓冲：`readBufSize = max(0x2000, channelBufSize)`（**第二轮修正：原为 min，实测为 max**），
+分配标签 `"RTT read buffer allocation"`；跨读取残留缓冲上限 64 字节（`DAT_14285da30`）。
 
 **关键点**：HSS 与 RTT **共用同一个 `UnpackSamples`**（`FUN_14003fa70`）—— 上层数据模型完全统一，只有「字节从哪来」不同。这是非常干净的架构。
 
@@ -388,17 +422,19 @@ RTT 读缓冲：`readBufSize = min(0x2000, channelBufSize)`，分配标签 `"RTT
 
 | TypeID | 类型 | 树中可选 | 备注 |
 |---|---|---|---|
-| 1 | float32 | ✔ | |
-| 2 | float64 | ✔ | |
-| 3 | ？（16 字节，疑似 long double/float128） | ✘ | `FUN_1400504d0` 判为不支持 |
-| 4 | ？（疑似 half/float16） | ✘ | 同上 |
-| 5 | bool | ✔ | |
-| 6–9 | uint8/16/32/**64** | 6,7,8 ✔ / **9 ✘** | uint64 树中禁用 |
-| 10–13 | int8/16/32/**64** | 10,11,12 ✔ / **13 ✘** | int64 树中禁用 |
+| 1 | float32 | ✔ | `size==4 && type=="float"`，MaxValue=FLT_MAX |
+| 2 | float64 | ✔ | `size==8 && type=="double"`，MaxValue=DBL_MAX |
+| 3 / 4 | **保留槽（无产出点）** | ✘ | **第二轮确证：全程序无任何代码写入 3/4**，只在 `FUN_1400504d0` 的禁用名单里 |
+| 5 | bool | ✔ | `size==1 && (type=="bool"‖"_Bool")`，MaxValue=1.0 |
+| 6–9 | uint8/16/32/**64** | 6,7,8 ✔ / **9 ✘** | 无符号 + size，MaxValue=255/65535/4294967295/2⁶⁴ |
+| 10–13 | int8/16/32/**64** | 10,11,12 ✔ / **13 ✘** | 有符号 + size，MaxValue=127/32767/2147483647/2⁶³ |
+| **14 (0xE)** | **位域** | ✔ | **第二轮新增**：DWARF `DW_AT_bit_size` 存在时；位宽 `+0x338`、位偏移 `+0x33C`，取样 `(raw>>shift)&((1<<width)-1)` |
 
 不支持时 UI 行为 [观测]：`QTreeWidgetItem::setDisabled(true)` + 第 4 列文本 `"Symbol type is not supported"`。
 
-> **[推断]** TypeID 3/4 的确切语义未在本轮确证；结合 demangler 类型表中出现的 `half`、`__float128`，推测为 128 位浮点与 16 位浮点。
+> **[观测·第二轮]** TypeID 3/4 无产出点；第一轮的"float128/half"推测不成立。
+> 判定函数 `FUN_140040050` 的完整分支见 `analysis/elf.md` §3。
+> **J-Scope 9.66 无法观测任何 64 位整型**（9/13 分类得出但树中禁用）。
 
 ---
 
@@ -436,14 +472,20 @@ RTT 读缓冲：`readBufSize = min(0x2000, channelBufSize)`，分配标签 `"RTT
 | 偏移 | 含义 |
 |---|---|
 | `+0x38C` | `ScriptFile` |
-| `+0x59C` | `TargetInterface`（0=JTAG, 7=?, 1=SWD）[推断] |
+| `+0x59C` | `TargetInterface`（0=JTAG, 1=SWD, 7=JTAG 变体） |
 | `+0x5A0` | `InterfaceSpeed` (kHz) |
 | `+0x5A4` | 模式：0=HSS, 1=RTT |
 | `+0x5A5` | `IsRTTWithTimeStamp` |
 | `+0x5A6` | RTT 子模式（Data/Plus） |
 | `+0x5A8` | `SamplingPeriod` (µs) |
-| `+0x5B0`/`+0x5B4` | `JTAG_IRPre` / JTAG 配置值 |
-| `+0x5B8` | 停止时是否跳过 HSS_Stop |
+| `+0x5AC` | 连接类型：0=USB, 2=TCP/IP, 4=会话 |
+| `+0x5B0` | **`JTAG_DRPre`**（第二轮修正） |
+| `+0x5B4` | **`JTAG_IRPre`**（真正传给 `JLINKARM_ConfigJTAG` 的值） |
+| `+0x5B8` | **会话模式标志**：置位时停止采集**跳过 `JLINK_HSS_Stop`** |
+
+> ⚠ **读偏移前先确认基址**：XML 读写走"项目结构" `P`（0x5E8），运行期配置 `C`（0x5BC）是它的 `+0x08` 成员，
+> 因此同一字段在两处的偏移天然相差 8（如 `IsRTTSession`：写方读 `C+0x5A4`、读取方写 `P+0x5AC`）。
+> 第一轮把两者混看，才出现"+0x5B0 是 IRPre"这类偏差。
 
 ---
 
@@ -492,10 +534,19 @@ RTT 读缓冲：`readBufSize = min(0x2000, channelBufSize)`，分配标签 `"RTT
 注册表：`Software\SEGGER\%s\`（`%s` = "J-Scope"）。
 解析错误串：`Error while parsing subkey "%s" in settings file. Syntax error.`
 
-### 10.3 数据导出
+### 10.3 数据导出（第二轮逐字节补齐，详见 `analysis/export.md`）
 
-支持 `.raw`（`Binary file (*.raw)`，另有 `Import Raw` 反向导入）、`.elf`、`DataFile`。
-文件大小上限检查：`File too large - maximum file size (%d bytes) exceeded!`
+| 功能 | 实现 | 格式要点 |
+|---|---|---|
+| Export Data…（Ctrl+D） | `FUN_140047390`，**同步** | CSV 文本：`Timestamp;名1;名2…`，**分隔符是分号**；时间戳 `%u`、浮点 `;%f`(6 位)、整型 `;%i`（无符号也按有符号打印）；TypeID 3/4/9/13 **整列不输出**；范围 = 物理下标 `0..writeIdx-2`（最新样本不导出；**`writeIdx==0` 时下溢成 2³² 次循环 —— 真实缺陷**） |
+| Export Raw…（Ctrl+R） | `FUN_1400476d0`，**同步** | **JRAW：无头裸样本流** `repeat N { u32 ts_us; var0.size; var1.size; … }`，小端、无对齐；N = `lastIdx`（绕回后 `0x800000`，逻辑下标从最老样本开始）；变量顺序 = 变量树顺序 = HSS 描述符顺序 |
+| Import Raw（Ctrl+T） | 作业 `APP: <ImportRaw>` → `FUN_140046e80` | 只校验 `fileSize % sampleSize == 0`（不满足仅提示）与容量上限 `nSym×64 MB + 32 MB`；**清双环 → 强制"有时间戳" → 复用实时 `UnpackSamples`** |
+
+**采集过程不落盘**：全二进制只有三处数据文件 I/O（CSV 写、JRAW 写、JRAW 读）。
+`<DataFile>/<RawFile>` 仅是"上次导出路径"。
+
+> **[第二轮修正]** `File too large - maximum file size (%d bytes) exceeded!` 属 **`JScopeSettings.ini` 读取器**
+> （上限 30000 字节，`FUN_14004f590`），**与数据导出无关**。
 
 ---
 
@@ -549,13 +600,18 @@ RTT 读缓冲：`readBufSize = min(0x2000, channelBufSize)`，分配标签 `"RTT
 | 带守卫的自研堆分配器 | **可选** | 调试期价值高（能抓越界/野指针），发布期有开销 |
 | `JLINKARM_DEVICE_SelectDialog` 选型弹窗 | **不抄** | 与 request.md 第 17/21 条「不要弹窗选芯片」直接冲突 |
 
-### 12.3 已知坑（逆向中发现）
+### 12.3 已知坑（逆向中发现，第二轮更新）
 
-- `JLINK_HSS_Start` 第 4 参数为 `1`（flags）[观测]，语义未知 [未知]。
-- `caps.field_at_4` 的单位需实测确认（§4 末）。
-- TypeID 3/4 语义未确证（§8）。
-- `-USB` / `-IP` 选项**必须**与 `-openprj` 同用，否则报错 —— 因连接参数来自工程文件。
+- `JLINK_HSS_Start` 第 4 参数恒为 `1`（flags）[观测]；DLL 侧日志串证实该参数是位标志，**具体位义 [未知]**。
+- `caps.field_at_4` 单位需实测（`1e6/x` 得 µs → 应为 Hz）；该全局**只写不读**，不影响采样。
+- **采样率显示疑有 10 倍因子**（§6），需实测确认。
+- **RTT-Plus 配置串与 SEGGER UM08028 文档不一致**（16 B/条 vs 文档 8 B/条），以二进制为准并需实测。
+- TypeID 3/4 是保留槽（无产出点）；**64 位整型（9/13）不可观测**。
+- `-USB` / `-IP` **必须**与 `-openprj` 同用（两阶段解析：phase2 只跑 `-openprj`，phase1 才跑其余），
+  否则分别报 `"-USB/-IP should only be used in combination with -openprj."`。
 - RTT 模式**强制要求**指定目标器件：`In RTT mode specifying the target device is mandatory.`
+- CSV 导出在 `writeIdx==0` 时下溢（2³² 次循环）；JRAW/CSV **都丢掉最新那个样本**。
+- 全部未解项与实测方案见 `report.html` §17。
 
 ---
 
@@ -563,23 +619,23 @@ RTT 读缓冲：`readBufSize = min(0x2000, channelBufSize)`，分配标签 `"RTT
 
 | 路径 | 内容 |
 |---|---|
-| `JSCOPE_ANALYSIS.md` | 本报告 |
-| `tools/ghidra_scripts/*.java` | 4 个 Ghidra 脚本：概览导出 / 字符串交叉引用反编译 / 调用者反编译 / 按字符串自动重命名 |
-| `tools/run_*.bat` | Ghidra headless 调用封装 |
-| `dumps/decomp_hss.txt` | HSS 全路径反编译 |
-| `dumps/decomp_rtt.txt` | RTT 全路径反编译（含 VarFormat 解析器） |
-| `dumps/datapath.txt` | 样本存储/时间戳逻辑 |
-| `dumps/xml_fmt.txt` | 工程文件读写 |
-| `dumps/elf_syms.txt` | ELF 符号树与类型判定 |
-| `dumps/functions.txt` | 2712 个函数清单 |
-| `dumps/defined_strings.txt` | 3035 条字符串（含地址） |
-| `ghidra_proj/` | Ghidra 工程（可直接打开继续分析） |
+| **`report.html`** | **完整报告页（19 节，含 8 个专题的全部细节，双主题单文件）** |
+| `JSCOPE_ANALYSIS.md` | 本报告（精编版 + 第二轮修正说明） |
+| `analysis/*.md` | 8 个专题报告：trigger / export / graph / elf / rttplus / infra / session |
+| `dumps/alldecomp/` | **全部 2,001 个函数反编译**（9 分块 + `index.tsv` 调用图索引） |
+| `dumps/globals.txt` | 4,837 个全局变量（地址/类型/初值/引用者） |
+| `tools/ghidra_scripts/*.java` | 7 个 Ghidra 脚本：`DumpAllDecomp` / `DumpGlobals` / `DumpOverview` / `XrefDecomp` / `CallersDecomp` / `RenameByStringRef` / `RefsTo` |
+| `tools/run_*.bat` | Ghidra headless 调用封装（每次调用一个专用 .bat，避免 cmd 引号陷阱） |
+| `dumps/decomp_hss.txt` 等 | 第一轮专题反编译（HSS / RTT / XML / ELF / 数据通路 / 动态缓冲） |
+| `dumps/defined_strings.txt` | 3,035 条字符串（含 RTTI 类名） |
+| `ghidra_proj/` | Ghidra 工程（可直接打开继续分析；未进 git） |
 
 **复现方法**：
 ```bash
 tools\run_ghidra.bat                 # 导入 + 全量分析（约 65 s）
+tools\run_all.bat                    # 全量反编译 + 全局变量导出
 tools\run_script.bat DumpOverview.java
-tools\run_hss.bat                    # 或 run_rtt.bat / run_b.bat ...
+python analysis\report\build.py       # 由 analysis/report/*.html 拼装 report.html
 ```
 
 ---

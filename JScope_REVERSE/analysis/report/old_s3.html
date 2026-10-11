@@ -1,0 +1,43 @@
+<section id="s3">
+      <h2><span class="sec-n">03</span>J-Link API 清单（29 个）</h2>
+      <p class="lead">
+        全部通过 <code>GetProcAddress</code> 按字符串名解析，并由懒加载 thunk 缓存。
+        每个 thunk 形如：
+      </p>
+      <div class="code">
+<pre><code><span class="k">if</span> (!pFn) pFn = GetProcAddress(h, <span class="n">"JLINK_HSS_Start"</span>);
+<span class="k">if</span> (!pFn) <span class="k">return</span>;
+pFn(...);</code></pre>
+      </div>
+
+      <h4>连接与配置（22）</h4>
+      <div class="code">
+<pre><code>JLINKARM_OpenEx              JLINKARM_Close
+JLINKARM_EMU_SelectByUSBSN   JLINK_EMU_SelectByUSBNickname
+JLINKARM_SelectIP
+JLINKARM_DEVICE_SelectDialog JLINKARM_DEVICE_GetInfo
+JLINKARM_TIF_Select          JLINKARM_SetSpeed        JLINKARM_ConfigJTAG
+JLINKARM_ExecCommand         JLINK_ExecCommand
+JLINKARM_Connect             JLINKARM_Reset
+JLINKARM_Halt                JLINKARM_Go              JLINK_Go
+JLINKARM_IsHalted            JLINK_IsHalted
+JLINKARM_EMU_HasCapEx
+JLINKARM_GetDLLVersion       JLINKARM_GetCompileDateTime</code></pre>
+      </div>
+
+      <h4>采集（7）—— 核心</h4>
+      <div class="code">
+<pre><code>JLINK_HSS_GetCaps   JLINK_HSS_Start   JLINK_HSS_Read   JLINK_HSS_Stop      <span class="c">// 高速采样(异步)</span>
+JLINK_RTTERMINAL_Read   JLINK_RTTERMINAL_Write   JLINK_RTTERMINAL_Control    <span class="c">// RTT(同步)</span></code></pre>
+      </div>
+
+      <div class="callout">
+        <p><strong>注意 ——</strong> <code>JLINK_HSS_*</code> 属于 <strong>J-Link SDK 功能，SEGGER 未公开文档化</strong>。
+        KB 仅说明它是 SDK 的一部分，J-Scope / Ozone / Embedded Studio 使用它。
+        但函数确实从 <code>JLinkARM.dll</code> 导出，第三方可调用 ——
+        <a href="#s5">§05</a> 即为其真实调用契约。</p>
+      </div>
+    </section>
+
+    <!-- ══ 04 ══ -->
+    

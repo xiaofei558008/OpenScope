@@ -1,0 +1,108 @@
+<section id="s7">
+      <h2><span class="sec-n">07</span>RTT 同步模式</h2>
+
+      <h3>7.1 两种子模式</h3>
+      <p class="lead">函数 <code>FUN_140042100</code>。启动时先 <code>JLINK_RTTERMINAL_Control(0, 0)</code>。</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>子模式</th><th>条件</th><th>上行通道</th><th>下行通道</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>RTT-Plus / Data</strong></td>
+              <td class="m">config+0x5A6 != 0</td>
+              <td class="m">JScope_Data<br>+ 可选 JScope_Data_t</td>
+              <td class="m">JScope_Config</td>
+            </tr>
+            <tr>
+              <td><strong>RTT / VarFormat</strong></td>
+              <td class="m">config+0x5A6 == 0</td>
+              <td class="m">前缀 JScope_ 的任意上行通道</td>
+              <td class="m">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>7.2 VarFormat 编码 —— 本次逆向的关键成果</h3>
+      <p class="lead">
+        上行通道名形如 <code>JScope_&lt;VarFormat&gt;</code>，
+        其中 <code>VarFormat</code> 是<strong>「类型字符 + 尺寸数字」严格成对</strong>的串：
+      </p>
+      <div class="code">
+<pre><code>JScope_t4i4f4     →  时间戳 + int32 + float32
+JScope_u2i2u4     →  uint16 + int16 + uint32
+JScope_t4f4f4f4   →  时间戳 + 3 个 float32</code></pre>
+      </div>
+      <p>解析逻辑（<code>FUN_14003fc90</code>）：跳过首个 <code>_</code> 之前的内容，之后每次固定取 2 个字符（含 <code>t</code>，它同样消耗一位）。</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:70px">类型字符</th><th style="width:120px">尺寸数字</th><th style="width:80px">TypeID</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">t</td><td class="m" style="color:var(--fg-faint)">（占位，值忽略）</td><td class="m">—</td><td><strong>时间戳标志</strong>（置 <code>IsRTTWithTimeStamp</code>）</td></tr>
+            <tr><td class="m">b</td><td class="m">1</td><td class="m">5</td><td>bool</td></tr>
+            <tr><td class="m">f</td><td class="m">4</td><td class="m">1</td><td>float32</td></tr>
+            <tr><td class="m">f</td><td class="m">8</td><td class="m">2</td><td>float64</td></tr>
+            <tr><td class="m">u</td><td class="m">1 / 2 / 4 / 8</td><td class="m">6 / 7 / 8 / 9</td><td>uint8 / 16 / 32 / 64</td></tr>
+            <tr><td class="m">i</td><td class="m">1 / 2 / 4 / 8</td><td class="m">10 / 11 / 12 / 13</td><td>int8 / 16 / 32 / 64</td></tr>
+            <tr><td class="m" style="color:var(--fg-faint)">其它</td><td class="m">—</td><td class="m">—</td><td style="color:var(--fg-muted)">忽略</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>解析出的类型用于 <code>AddSymbolFromFormat(size, typeID, 0, desc)</code>，描述串即二进制中的：</p>
+      <div class="code">
+<pre><code><span class="n">"%d Byte bool RTT Data %d"</span>      <span class="n">"%d Byte float RTT Data %d"</span>
+<span class="n">"%d Byte unsigned RTT Data %d"</span>  <span class="n">"%d Byte signed RTT Data %d"</span></code></pre>
+      </div>
+      <p>失败路径的两条原文：</p>
+      <div class="code">
+<pre><code>No RTT Up-Channel named "JScope_%Format%" found
+The first RTT Channel named JScope_... found did not contain a valid VarFormat</code></pre>
+      </div>
+      <div class="callout key">
+        <p><strong>注意 ——</strong> RTT-VarFormat 模式下<strong>目标端无需 ELF</strong>：通道名自带完整布局。
+        这是与 HSS 模式的本质差异。</p>
+      </div>
+
+      <h3>7.3 跨读取的样本拼接</h3>
+      <p class="lead">
+        RTT 无「整样本」保证，读取会在样本中间截断。J-Scope 用
+        <strong>≤64 字节的残留缓冲</strong>拼接跨读取的半个样本（<code>FUN_140042260</code>）：
+      </p>
+      <div class="code">
+<pre><code><span class="k">if</span> (targetErrorPending()) { partialLen = <span class="n">0</span>; <span class="c">/* 清状态 */</span> }
+<span class="k">else</span> partialLen = carryLen;                       <span class="c">// 上次残留</span>
+
+memcpy(buf, carry, partialLen);                    <span class="c">// 先补上残留</span>
+n = JLINK_RTTERMINAL_Read(ch, buf + partialLen,
+                          min(readBufSize, <span class="n">0x200000</span>) - partialLen);
+
+total     = n + partialLen;
+remainder = total % sampleSize;
+UnpackSamples(total - remainder, buf);             <span class="c">// 只解完整样本</span>
+<span class="k">if</span> (remainder == <span class="n">0</span>) carryLen = <span class="n">0</span>;
+<span class="k">else</span> { carryLen = min(remainder, <span class="n">0x40</span>);             <span class="c">// ★ 上限 64 字节</span>
+       memcpy(carry, buf + (total - remainder), carryLen); }</code></pre>
+      </div>
+      <p>RTT 读缓冲：<code>readBufSize = min(0x2000, channelBufSize)</code>，分配标签 <code>"RTT read buffer allocation"</code>。</p>
+
+      <h3>7.4 控制通道</h3>
+      <div class="code">
+        <p class="cap">FUN_140040ed0 —— 最多 101 次重试</p>
+<pre><code>循环最多 <span class="n">101</span> 次：
+    n = JLINK_RTTERMINAL_Read(ch, tmp, <span class="n">256</span>)
+    累计满 <span class="n">256</span> 字节 →
+        若 tmp[<span class="n">0</span>] != <span class="n">0</span> → 报 <span class="n">"Target Error: %s"</span> 并返回失败
+        否则返回成功
+    Sleep(<span class="n">1</span>)
+超时 → 返回 <span class="n">0xFFFFFFFE</span></code></pre>
+      </div>
+
+      <div class="callout key">
+        <p><strong>架构亮点 ——</strong> HSS 与 RTT <strong>共用同一个 <code>UnpackSamples</code></strong>
+        （<code>FUN_14003fa70</code>）：上层数据模型完全统一，只有「字节从哪来」不同。
+        这是非常干净的抽象。</p>
+      </div>
+    </section>
+
+    <!-- ══ 08 ══ -->
+    

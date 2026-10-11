@@ -1,0 +1,92 @@
+<section id="s6">
+      <h2><span class="sec-n">06</span>双环数据模型</h2>
+      <p class="lead">这是 J-Scope 高性能绘图的核心设计。两个环都是 <strong>8,388,608 样本</strong> 深，索引取模 <code>0x7FFFFF</code>。</p>
+
+      <div class="rings">
+        <div class="ring">
+          <div class="ring-h">
+            <span class="t">时间戳环</span>
+            <span class="s">静态 · 8,388,608 × uint32 = 32 MB</span>
+          </div>
+          <div class="ring-b">
+            <div class="strip">
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div>
+            </div>
+            <code>tsRing[i] = sample[0]</code> · 写指针 <code>DAT_14285da80</code>，绕回标志 <code>DAT_14285da78</code>
+          </div>
+        </div>
+
+        <div class="ring">
+          <div class="ring-h">
+            <span class="t">每变量数据环</span>
+            <span class="s">堆 · 8,388,608 × 8 B = 64 MB / 变量</span>
+          </div>
+          <div class="ring-b">
+            <div class="strip">
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div>
+            </div>
+            <code>memcpy(v-&gt;dataBuf + idx*8, sample + v-&gt;sampleOffset, v-&gt;size)</code><br>
+            分配处 <code>memset(v-&gt;dataBuf, 0, 0x4000000)</code>。
+            <strong>无论变量是 1/2/4/8 字节，都占 8 字节槽位</strong> —— 用内存换 O(1) 均匀索引。
+          </div>
+        </div>
+      </div>
+
+      <h3>时间戳语义</h3>
+      <p class="lead">函数 <code>FUN_14003ff40</code> —— 三种模式分支：</p>
+      <div class="code">
+<pre><code><span class="k">if</span> (mode == HSS)            tsRing[i] = sample[<span class="n">0</span>];      <span class="c">// 探针给的 µs</span>
+<span class="k">else if</span> (rttWithTimestamp)  tsRing[i] = sample[<span class="n">0</span>];      <span class="c">// 目标给的 µs</span>
+<span class="k">else</span> {                      <span class="c">// RTT 无时间戳 → 合成 100 µs 均匀栅格</span>
+    <span class="k">if</span> (i != <span class="n">0</span>)         tsRing[i] = tsRing[last] + <span class="n">100</span>;
+    <span class="k">else if</span> (wrapped)  tsRing[<span class="n">0</span>] = tsRing[last] + <span class="n">100</span>;
+    <span class="k">else</span>              tsRing[<span class="n">0</span>] = <span class="n">0</span>;              <span class="c">// 首个样本 t=0</span>
+}</code></pre>
+      </div>
+      <p>与二进制中告警串逐字吻合：</p>
+      <div class="code">
+<pre><code>RTT channel is set up to provide no timestamp!
+Without timestamp J-Scope will assume that data points are uniformly
+distributed with a gap of 100 [us] each.</code></pre>
+      </div>
+
+      <h3>样本解包与采样率</h3>
+      <div class="code">
+        <p class="cap">FUN_14003fa70 —— HSS 与 RTT 共用</p>
+<pre><code>numSamples = nBytes / sampleSize;              <span class="c">// DAT_14085d1ec</span>
+<span class="k">for</span> (每个样本) {
+    StoreTimestamp(p);                          <span class="c">// 写时间戳环</span>
+    <span class="k">for</span> (每个变量 v) {
+        StoreVarSample(v, p);                   <span class="c">// memcpy 到 v 的环</span>
+        <span class="c">/* 触发判定 FUN_1400415a0(...) → 0/1/2/3；命中则 FUN_140042ac0(v) */</span>
+    }
+    p += sampleSize;
+    writeIdx = (writeIdx + <span class="n">1</span>) &amp; <span class="n">0x7FFFFF</span>;
+}</code></pre>
+      </div>
+      <div class="code">
+        <p class="cap">FUN_140041710 尾部 —— 状态栏速率</p>
+<pre><code>elapsed = timer_ticks();                                  <span class="c">// 100 ns 单位 [推断]</span>
+samplesPerSec = (uint)(numSamples * <span class="n">10000000</span> / elapsed);</code></pre>
+      </div>
+      <p>对应 UI 字符串 <code>kSamples/s</code>、<code>Samples/s</code>、<code>FPS: </code>、<code>Buffer: </code>。</p>
+
+      <div class="callout">
+        <p><strong>代价与启示 ——</strong> 4 变量 = 256 MB，8 变量 = 512 MB。
+        OpenScope 若要做长时间记录，应改为<strong>按类型宽度紧凑存储</strong>（1/2/4/8 B），或分段 / 落盘。
+        这是 J-Scope 一个明显的可优化点。</p>
+      </div>
+    </section>
+
+    <!-- ══ 07 ══ -->
+    

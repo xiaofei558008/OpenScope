@@ -1,0 +1,46 @@
+<section id="s2">
+      <h2><span class="sec-n">02</span>总体架构</h2>
+      <div class="code">
+        <p class="cap">进程与线程模型</p>
+<pre><code>┌──────────────────────────────────────────────────────────────┐
+│  JScope.exe   (Qt4 GUI，单进程)                                │
+│                                                               │
+│   MainWindow ──┬── GraphContainer / GraphWidget               │
+│                ├── SymbolSelection   (变量树)                  │
+│                ├── TableWidget       (数值窗口)                │
+│                ├── TriggerWidget                               │
+│                └── DIALOG_CustMsgBox                           │
+│                                                               │
+│   异步 Job 队列（命名 Job，工作线程执行）                        │
+│     ├ APP: &lt;CreateProject&gt; / &lt;Init&gt; / &lt;Exit&gt;                 │
+│     ├ APP: &lt;ParseELFFile&gt;                                     │
+│     ├ APP: &lt;ReadStart&gt; / &lt;ReadPause&gt; / &lt;ReadStop&gt;             │
+│     ├ APP: &lt;ReadPeriodic&gt;   ◀── 10 ms 周期采样泵               │
+│     ├ APP: &lt;CheckELFModifications&gt;                            │
+│     └ APP: &lt;UpdateProjSettings&gt; / &lt;SetAppStartAction&gt;         │
+│                                                               │
+│   自研带守卫的堆分配器                                          │
+│     "Wrong alloc signature in memory block !"                 │
+│     "Buffer overflow in memory block. %d bytes overflowed."   │
+└──────────────────┬───────────────────────────────────────────┘
+                   │ GetProcAddress —— 按字符串名解析 29 个 API
+                   ▼
+          JLink_x64.dll ──USB / TCP──▶ J-Link 探针 ──SWD/JTAG──▶ MCU</code></pre>
+      </div>
+
+      <h3>DLL 查找顺序</h3>
+      <p>由字符串 <code>JLink_x64.dll</code>、<code>bin_x64\JLink_x64.dll</code> 与注册表键确认：</p>
+      <ol class="body">
+        <li><code>JLink_x64.dll</code>（当前目录 / 搜索路径）</li>
+        <li><code>bin_x64\JLink_x64.dll</code></li>
+        <li>注册表 <code>HKLM\Software\SEGGER\J-Link\InstallPath</code>、<code>HKLM\Software\SEGGER\Flasher\InstallPath</code></li>
+      </ol>
+      <div class="callout">
+        <p><strong>对 OpenScope 的意义 ——</strong> J-Scope 不静态链接 JLinkARM，而是运行时按名解析：
+        同一个 exe 因此能适配任意 J-Link 版本。若 OpenScope 要同时支持 J-Link 与 ST-Link，
+        应沿用「后端抽象 + 运行时加载」这一模式。</p>
+      </div>
+    </section>
+
+    <!-- ══ 03 ══ -->
+    

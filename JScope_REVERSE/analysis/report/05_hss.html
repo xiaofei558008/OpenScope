@@ -1,0 +1,183 @@
+    <!-- ══ 05 ══ -->
+    <section id="s5">
+      <h2><span class="sec-n">05</span>HSS 高速采样协议（异步）</h2>
+      <p class="lead">
+        <code>JLINK_HSS_*</code> 是 J-Link SDK 的能力，SEGGER 未在公开手册里给出调用契约。
+        本节给出的是<strong>从 JScope.exe 反汇编还原、并用 JLink_x64.dll 内部字符串交叉验证</strong>的完整契约。
+      </p>
+
+      <h3>5.1 变量描述符数组 <span class="badge b-obs">观测</span></h3>
+      <p class="lead"><code>FUN_140041f30</code> 构造并下发（括号内为 JLink_x64.dll 中的对应日志串，证实了签名）：</p>
+      <div class="code">
+<pre><code><span class="c">// JLink_x64.dll: "HSS started: %d DataBlocks, %d (period_us), 0x%.8X (Flags)"</span>
+<span class="c">//               "Block %d: %d bytes @ 0x%.8X"</span>
+<span class="k">struct</span> HssVar {          <span class="c">// 16 bytes / 变量</span>
+    <span class="k">uint32_t</span> addr;       <span class="c">// +0x00  变量绝对地址        ← v+0x318</span>
+    <span class="k">uint32_t</span> size;       <span class="c">// +0x04  字节数（1/2/4/8）  ← v+0x31C</span>
+    <span class="k">uint32_t</span> reserved0;  <span class="c">// +0x08  = 0（memset 后未再写）</span>
+    <span class="k">uint32_t</span> reserved1;  <span class="c">// +0x0C  = 0</span>
+};
+
+<span class="k">uint32_t</span> n = numSelectedVars;                  <span class="c">// 全局 DAT_14085d1e8</span>
+HssVar *list = Alloc((n + <span class="n">1</span>) * <span class="n">16</span>);            <span class="c">// ★ +1 个终止项</span>
+memset(list, <span class="n">0</span>, (n+<span class="n">1</span>) * <span class="n">16</span>);
+
+<span class="k">uint32_t</span> off = <span class="n">4</span>;                            <span class="c">// ★ 前 4 字节留给时间戳</span>
+<span class="k">for</span> (<span class="k">each</span> 选中变量 v, 按符号链 DAT_14286d3b8 顺序) {
+    v-&gt;sampleOffset = off;          <span class="c">// v+0x38C</span>
+    off += v-&gt;size;                 <span class="c">// v+0x31C</span>
+    list[i].addr = v-&gt;addr;
+    list[i].size = v-&gt;size;
+    <span class="c">/* 复位（每次开始采集） */</span>
+    v-&gt;dataBuf(+0x3D0) = <span class="n">0</span>;          <span class="c">// 64 MB 环稍后由 FUN_14003e050 分配并清零</span>
+    v-&gt;lastSamplePtr(+0x3C8) = <span class="n">0</span>;
+    v-&gt;field390 = <span class="n">0</span>;
+    v-&gt;yAvg(+0x3A8)   = <span class="n">0</span>;
+    v-&gt;yMax(+0x398)   = -DBL_MAX;   <span class="c">// 0xFFEFFFFFFFFFFFFF</span>
+    v-&gt;yMin(+0x3A0)   = +DBL_MAX;   <span class="c">// 0x7FEFFFFFFFFFFFFF</span>
+    v-&gt;hasData(+0x388) = <span class="n">0</span>;
+}
+list[n].size = <span class="n">0</span>;                            <span class="c">// 终止项（addr 已 memset 为 0）</span>
+
+sampleSize = off;   <span class="c">// 全局 DAT_14085d184 ← 采样包长</span>
+rc = <span class="k">JLINK_HSS_Start</span>(list, n, config+0x5A8 <span class="c">/*period_us*/</span>, <span class="n">1</span> <span class="c">/*Flags*/</span>);
+<span class="k">if</span> (rc &gt;= <span class="n">0</span>) {
+    hssActive = <span class="n">1</span>;                       <span class="c">// DAT_14085d180</span>
+    <span class="k">if</span> (JLINK_IsHalted()) JLINK_Go();   <span class="c">// 让目标跑起来</span>
+}</code></pre>
+      </div>
+
+      <h4>返回码（错误串逐字来自二进制）</h4>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:80px">rc</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">-2</td><td class="m">Failed to allocate memory on debug probe</td></tr>
+            <tr><td class="m">-3</td><td class="m">Too many variables specified</td></tr>
+            <tr><td class="m">-4</td><td class="m">Target hardware does not support HSS</td></tr>
+            <tr><td class="m">其它 &lt;0</td><td class="m">Failed to inititalize HSS. <span style="color:var(--f-faint)">（原文拼写错误 inititalize，未再细分的兜底分支）</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>5.2 采样包格式 <span class="badge b-obs">观测</span></h3>
+      <p class="lead">
+        <code>JLINK_HSS_Read(buf, size)</code> 返回本次读到的<strong>字节数</strong>，缓冲区内容为紧密排列的定长样本；
+        变量在样本内的偏移在下发描述符前就已固定（<code>v+0x38C</code>），读取后直接按偏移切片。
+      </p>
+      <div class="packet">
+        <p class="cap" style="font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--f-faint);margin:0">
+          实例：3 个变量 g_speed(float32) · g_state(uint8) · g_count(int16) → 样本 = 4+4+1+2 = 11 字节
+        </p>
+        <div class="pkt-row">
+          <div class="pkt ts"><span class="off">offset 0</span><span class="nm">timestamp</span><span class="sz">uint32 · µs</span></div>
+          <div class="pkt v"><span class="off">offset 4</span><span class="nm">g_speed</span><span class="sz">float32 · 4 B</span></div>
+          <div class="pkt v2"><span class="off">offset 8</span><span class="nm">g_state</span><span class="sz">uint8 · 1 B</span></div>
+          <div class="pkt v3"><span class="off">offset 9</span><span class="nm">g_count</span><span class="sz">int16 · 2 B</span></div>
+        </div>
+        <div class="strip" aria-hidden="true">
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+        </div>
+        <div class="strip-key">
+          <span><i class="swatch" style="background:var(--ch1)"></i>ts (µs)</span>
+          <span><i class="swatch" style="background:var(--accent)"></i>g_speed</span>
+          <span><i class="swatch" style="background:var(--ch4)"></i>g_state</span>
+          <span><i class="swatch" style="background:var(--ch3)"></i>g_count</span>
+          <span style="color:var(--f-faint)">→ 样本首尾相接填满读缓冲</span>
+        </div>
+      </div>
+      <p>
+        <strong>字节序与对齐</strong>：探针按目标机的原生布局回传（Cortex-M 为小端），变量紧凑排列、<strong>无 padding</strong>——
+        描述符里的 size 就是真实宽度，因此 <code>uint8</code> 之后紧跟的 <code>uint32</code> 是<strong>非对齐</strong>偏移。
+        主机侧 <code>memcpy</code> 到 8 字节槽位时不做对齐假设。
+      </p>
+
+      <h3>5.3 读取泵 <span class="badge b-obs">观测</span></h3>
+      <div class="code">
+        <p class="cap">FUN_140040fa0（由 10 ms 周期作业调用）</p>
+<pre><code><span class="k">int</span> bufSize = <span class="n">0x200000</span> - (<span class="n">0x200000</span> % (sampleSize * numVars));   <span class="c">// ≈2 MB</span>
+<span class="k">void</span> *buf = Alloc(bufSize);
+<span class="k">if</span> (hssActive) {
+    <span class="k">int</span> n = JLINK_HSS_Read(buf, bufSize);       <span class="c">// 返回读到的字节数；&lt;0 = 错误</span>
+    <span class="k">if</span> (n &gt;= <span class="n">0</span>) UnpackSamples(n, buf);
+}
+Free(buf);
+<span class="k">if</span> (n &lt; <span class="n">0</span>) FUN_14003e680();                       <span class="c">// 读取失败 → 停采 + 报错</span></code></pre>
+      </div>
+      <div class="callout">
+        <p><strong>对齐式的一个"怪味"：</strong>缓冲大小按 <code>sampleSize × 变量数</code> 向下取整，而不是按 <code>sampleSize</code>。
+        因为 <code>Read</code> 本就只返回整样本字节数，这个乘法是<strong>过度保守</strong>的（每 2 MB 浪费几十~几百字节），
+        属于无害的原样照抄即可 —— 但重实现时应改成按 <code>sampleSize</code> 对齐。</p>
+      </div>
+      <div class="callout key">
+        <p><strong>为什么要 2 MB：</strong>探针在后台按设定周期<strong>自主采样并缓存</strong>，
+        主机每 10 ms 批量取走积压数据。<code>JLINK_HSS_Read</code> 只做内存搬运（USB 批量传输），
+        <strong>采样率与主机轮询频率完全解耦</strong> —— 这是 HSS 能到 µs 级、而"主机轮询读内存"做不到的根本原因。
+        缓冲取 2 MB 是为了容忍主机侧的调度抖动（10 ms 内探针可产生数十万样本）。</p>
+      </div>
+
+      <h3>5.4 启动 / 暂停 / 停止语义</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:130px">动作</th><th>实现</th><th>关键点</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>启动</strong><br><span class="mono-sm">FUN_14003d5c0</span></td>
+              <td>清配置副本 → <code>FUN_14003ef60</code>（连探针+器件）→ <code>FUN_140042a60</code>（<strong>样本布局计算器</strong>：逐变量写 +0x38C 偏移并累加出 sampleSize）
+                  → 清双环 <code>memset(tsRing,0,0x2000000)</code> + <code>FUN_140040980</code>（每变量环清零）
+                  → 下发 HSS 描述符并启动 → 挂 10 ms 周期作业</td>
+              <td>HSS 的 <code>JLINK_Go()</code> 只在目标处于 halt 时调用；<br>周期作业失败会释放并回滚</td>
+            </tr>
+            <tr>
+              <td><strong>暂停</strong><br><span class="mono-sm">APP: &lt;ReadPause&gt;</span></td>
+              <td>周期作业保留但丢弃数据（<code>paused</code> 标志），<strong>不下发 HSS_Stop</strong></td>
+              <td>UI 字符串：<em>"When paused, all incoming data samples are discarded."</em></td>
+            </tr>
+            <tr>
+              <td><strong>停止</strong><br><span class="mono-sm">FUN_14003d7d0</span></td>
+              <td>① 释放周期作业 → ② 取配置快照 → ③ 模式分派：
+                  <br>　RTT：<code>JLINK_RTTERMINAL_Control(1)</code> + 释放 RTT 读缓冲
+                  <br>　HSS：<code>if (!sessionMode) JLINK_HSS_Stop()</code>
+                  → ④ 释放描述符数组、清空引擎配置副本、复位全部状态全局</td>
+              <td><strong>会话模式（config+0x5B8）下不调用 HSS_Stop</strong>，把探针留给别人的会话</td>
+            </tr>
+            <tr>
+              <td><strong>复位缓冲</strong><br><span class="mono-sm">FUN_140040980</span></td>
+              <td>每变量 <code>memset(dataBuf,0,0x4000000)</code>（64 MB！）+ 清写指针/标志；<code>writeIdx=wrapped=lastIdx=0</code>；通知 UI</td>
+              <td>8 个变量 = 512 MB 清零，这是"重新开始记录"的代价 <span class="badge b-inf">推断</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>5.5 与 JLink_x64.dll 的交叉验证</h3>
+      <p class="lead">
+        J-Scope 只告诉我们"怎么调"，DLL 一侧的字符串则佐证了"调用进去会发生什么"：
+      </p>
+      <div class="code">
+<pre><code><span class="c">// JLink_x64.dll V9.66 内（字符串常量，非导出符号表）</span>
+<span class="s">"HSS started: %d DataBlocks, %d (period_us), 0x%.8X (Flags)"</span>   <span class="c">// ← 证实 (blocks, n, period, flags) 四参</span>
+<span class="s">"Block %d: %d bytes @ 0x%.8X"</span>                                  <span class="c">// ← 证实每块 (size, addr)</span>
+<span class="s">"HSS sampling rate %d kHz is set too high for this J-Link! Using highest possible rate %d kHz"</span>
+<span class="s">"HSS has not been started."</span>   <span class="s">"HSS_Process"</span>   <span class="s">"HSSLogFile"</span>
+<span class="s">"Current setup does not support background memory access mode"</span>  <span class="c">// ← HasCapEx(0x35) 失败路径</span>
+<span class="c">// 内部命令枚举：CMD_HSS_START / CMD_HSS_STOP / CMD_HSS_READ / CMD_HSS_GET_CAPS</span>
+<span class="c">// 命令经 CPU2 固件通道下发：CMD_CPU2_EXEC_CMD (HSS)</span></code></pre>
+      </div>
+      <p>
+        这段日志串还给出一个重要事实：<strong>HSS 的采样率上限由探针型号决定</strong>，
+        DLL 会把过高的周期自动钳到该探针能支持的最高速率 —— 也就是 OpenScope 直接用 HSS 时，
+        "周期设成 1 µs 也不会报错，只会被静默钳位"。这一点在 J-Scope 侧看不到任何反馈（它不检查返回值以外的信息）。
+      </p>
+    </section>

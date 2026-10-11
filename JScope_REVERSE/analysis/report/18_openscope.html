@@ -1,0 +1,91 @@
+    <!-- ══ 18 ══ -->
+    <section id="s18">
+      <h2><span class="sec-n">18</span>对 OpenScope 的启示</h2>
+      <p class="lead">
+        本节只保留<strong>可执行</strong>的结论：每条都指明"抄什么/不抄什么/为什么"，并给出对应的证据位置。
+        前置背景：OpenScope 是 C11 主线、多实例（net_drive 三实例）、网络采集与远端回放是核心场景。
+      </p>
+
+      <h3>18.1 三条最有价值的结论</h3>
+      <div class="callout key">
+        <p><strong>① HSS 是"真 µs 采样"的现成答案，且不需要目标端配合。</strong>
+        <code>JLINK_HSS_Start(描述符数组, n, 周期µs, 1)</code> + 10 ms 周期的 <code>JLINK_HSS_Read</code> 到 ~2 MB 缓冲。
+        探针<strong>自主采样并缓存</strong>，采样率与主机轮询彻底解耦；描述符只有 <code>{addr,size}</code>，
+        所以<strong>目标端不需要跑任何采样代码</strong>（走 AHB-AP 后台访问，不占 DWT/SWO）。
+        对 OpenScope 的"µs 级 + 不打扰目标"需求，这是唯一不需要改固件的路径。</p>
+      </div>
+      <div class="callout key">
+        <p><strong>② 采集后端只产出"带时间戳的定长样本流"，其余全部复用。</strong>
+        HSS 与 RTT（两种完全不同的传输语义）在 <code>UnpackSamples</code> 处合流，
+        之后触发、统计、绘图、导出、甚至"导入离线文件"都共用同一条数据通路
+        （导入 = 清环 + 强制有时间戳 + 灌进同一个解包器）。
+        OpenScope 的网络模块应照搬这条分界线：<strong>本地后端 / 远端后端 / 文件回放，三者同构</strong>。</p>
+      </div>
+      <div class="callout key">
+        <p><strong>③ RTT-Plus 让主机决定采什么、目标端零 ELF 依赖。</strong>
+        下行通道 <code>JScope_Config</code> 送变量表，上行 <code>JScope_Data[_t]</code> 回数据；
+        VarFormat 模式甚至把布局编码进<strong>通道名</strong>（<code>JScope_t4i4f4</code>）。
+        对 OpenScope 的"远端无 ELF 也要显示波形"，这是成本最低的方案 ——
+        <strong>但必须先做 §17#4 的字节抓取实验</strong>，因为 J-Scope 9.66 实际发的格式与 SEGGER 文档不一致。</p>
+      </div>
+
+      <h3>18.2 抄 / 不抄对照表</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:250px">项</th><th style="width:80px">裁决</th><th>理由（含证据）</th></tr></thead>
+          <tbody>
+            <tr><td>运行时按名解析后端 DLL（<code>GetProcAddress</code> + 懒加载 thunk）</td><td class="verdict v-yes">抄</td><td>同一 exe 适配任意 J-Link 版本；OpenScope 已有此模式，继续用于 J-Link/ST-Link 双后端</td></tr>
+            <tr><td>「后端产出定长样本流」的抽象分界</td><td class="verdict v-yes">抄</td><td>§18.1②；网络远端与文件回放可直接复用</td></tr>
+            <tr><td>单工作线程 + 环形命令队列 + id 分派 + 作业自销毁</td><td class="verdict v-yes">抄</td><td>无锁消费者、代码量极小（§15.1）；但要补两件 J-Scope 没做好的事：<strong>满队列策略</strong>（J-Scope 原地睡 1 ms 轮询）与<strong>真取消</strong>（J-Scope 的"取消/超时"只是生产者不再等待，作业照样执行）</td></tr>
+            <tr><td>"锁内改状态 → emit 队列信号"回投 UI + worker 阻塞等 UI 的模态同步</td><td class="verdict v-yes">抄</td><td>实测无 <code>PostMessage</code>/<code>SetTimer</code>/<code>invokeMethod</code>，全靠 Qt 队列连接；比 OpenScope 现有的 <code>WM_*</code> 自定义消息更省事，且天然跨平台</td></tr>
+            <tr><td>带签名守卫 + 尾部哨兵的调试堆（<code>0xDEADBEEF</code>、32×<code>0xCE</code>、块标签）</td><td class="verdict v-yes">抄（默认开）</td><td>能直接报出"哪个标签的块被溢出多少字节"。注意 J-Scope 自己把开关 <code>DAT_14285eb9c</code> 写成只读 → 发布版守卫全关，等于白写；OpenScope 应<strong>默认开启但可关</strong></td></tr>
+            <tr><td>分段日志：<code>FUN_14003f830(段名)</code> 进入 → 段内 ERROR/WARNING/INFO → 段末若有错弹一次汇总</td><td class="verdict v-yes">抄</td><td>天然适配自动化 E2E（段名 + 级别 + 耗时可直接进测试断言），也是 OpenScope 多实例联调最缺的东西</td></tr>
+            <tr><td>QPC → µs 的单点换算（含频率缓存与首调用基准）</td><td class="verdict v-yes">抄</td><td>§15.6；但<strong>别用 <code>timeGetTime</code> 做 ms 级调度</strong>（15.6 ms 分辨率，J-Scope 的 10 ms 周期实际 ≥15.6 ms）</td></tr>
+            <tr><td>RTT 跨读取 ≤64 B 残留拼接</td><td class="verdict v-yes">抄</td><td>流式协议必备；比"丢弃半样本"健壮得多（§7.5）</td></tr>
+            <tr><td>JRAW 无头裸流格式的读写</td><td class="verdict v-opt">抄格式，加头</td><td>互操作价值极高（J-Scope 能直接导入），但裸流离开工程不可解释；建议 OpenScope 默认写"魔数+版本+变量描述"头，另给 <code>--jscope-compat</code> 出裸流</td></tr>
+            <tr><td>每变量固定 64 MB 环 + 8 B 槽位</td><td class="verdict v-no">不抄</td><td>8 变量即 512 MB；应按类型宽度紧凑存储或分段落盘（§6.4）</td></tr>
+            <tr><td>固定 8,388,608 样本深度</td><td class="verdict v-no">不抄</td><td>OpenScope 有长时记录与历史回传需求，深度应可配/可落盘</td></tr>
+            <tr><td>时间戳用 uint32 µs（71.6 分钟回绕）</td><td class="verdict v-no">不抄</td><td>J-Scope 对回绕<strong>完全不做处理</strong>；OpenScope 应存 64 位或做回绕续接</td></tr>
+            <tr><td>CSV 的 <code>%i</code> 打印（无符号按有符号）与"物理下标"导出</td><td class="verdict v-no">不抄</td><td>uint32 &gt; 2³¹ 显示为负；绕回后导出语义混乱；且 <code>writeIdx==0</code> 会跑 2³² 次（§10.3）</td></tr>
+            <tr><td>全局单例状态 + 一把大锁串起整个应用</td><td class="verdict v-no">不抄</td><td>J-Scope 是单实例桌面程序，这套在 OpenScope 的三实例网络测试里会直接撞车</td></tr>
+            <tr><td>栈上描述符投进跨线程队列；用全局对象指针当函数指针调用</td><td class="verdict v-no">不抄</td><td>§15 未知点里的两处隐患，纯属历史包袱</td></tr>
+            <tr><td><code>JLINKARM_DEVICE_SelectDialog</code> 弹窗选型</td><td class="verdict v-no">不抄</td><td>与 OpenScope "不弹窗选芯片"的既定要求冲突</td></tr>
+            <tr><td>未声明 DPI 感知的清单</td><td class="verdict v-no">不抄</td><td>高 DPI 下靠系统位图拉伸，界面发虚（§1）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>18.3 三个可以直接落地的接口草案</h3>
+      <div class="code">
+        <p class="cap">① OpenScope 的 J-Link HSS 后端（契约已完全确定）</p>
+<pre><code><span class="c">/* 描述符数组：末尾补一个 {0,0} 终止项，sampleSize = 4 + Σsize */</span>
+<span class="k">typedef struct</span> { <span class="k">uint32_t</span> addr, size, r0, r1; } os_hss_var_t;   <span class="c">// 16 B/条</span>
+
+uint32_t off = <span class="n">4</span>;
+<span class="k">for</span> (i = <span class="n">0</span>; i &lt; n; i++) { d[i] = (os_hss_var_t){ v[i].addr, v[i].size, <span class="n">0</span>, <span class="n">0</span> }; v[i].off = off; off += v[i].size; }
+d[n] = (os_hss_var_t){<span class="n">0</span>};
+rc = JLINK_HSS_Start(d, n, period_us, <span class="n">1</span>);        <span class="c">// rc: -2 探针内存不足 / -3 变量过多 / -4 目标不支持</span>
+<span class="k">if</span> (rc &gt;= <span class="n">0</span> &amp;&amp; JLINK_IsHalted()) JLINK_Go();
+
+<span class="c">/* 10 ms 泵（OpenScope 侧用高精度等待，别用 timeGetTime） */</span>
+<span class="k">size_t</span> bufSz = (<span class="n">2</span>&lt;&lt;<span class="n">20</span>) - ((<span class="n">2</span>&lt;&lt;<span class="n">20</span>) % sampleSize);
+<span class="k">int</span> nBytes = JLINK_HSS_Read(buf, bufSz);               <span class="c">// 返回字节数</span>
+<span class="k">if</span> (nBytes &gt; <span class="n">0</span>) os_unpack_samples(nBytes / sampleSize, buf);  <span class="c">// 与 RTT 共用</span></code></pre>
+      </div>
+      <div class="code">
+        <p class="cap">② 与 J-Scope 互通的数据文件（裸流 + 自描述头双模式）</p>
+<pre><code><span class="c">/* 兼容模式（J-Scope 可直接 Import Raw）：无头裸流 */</span>
+<span class="k">for</span> (i = <span class="n">0</span>; i &lt; nSamples; i++) {
+    <span class="k">uint32_t</span> ts = ts_us[i];
+    fwrite(&amp;ts, <span class="n">4</span>, <span class="n">1</span>, fp);                     <span class="c">// 小端 u32 µs</span>
+    <span class="k">for</span> (<span class="k">each</span> var v) fwrite(var_ring(v) + i*<span class="n">8</span>, v-&gt;size, <span class="n">1</span>, fp);  <span class="c">// 变量顺序 = 变量树顺序</span>
+}
+<span class="c">/* OpenScope 原生模式：+ 魔数/版本/变量描述/单位，可长期归档 */</span></code></pre>
+      </div>
+      <div class="code">
+        <p class="cap">③ 网络对端零 ELF 的布局传递（借 VarFormat 思路，用显式握手包）</p>
+<pre><code><span class="c">/* 采集端 → 远端：一次握手把"名字+类型+宽度+顺序"发过去 */</span>
+<span class="k">struct</span> os_wave_desc { <span class="k">uint8_t</span> n; <span class="k">struct</span> { <span class="k">char</span> name[<span class="n">32</span>]; <span class="k">uint8_t</span> type; <span class="k">uint8_t</span> size; } v[<span class="n">16</span>]; };
+<span class="c">/* 之后只发定长样本流（与本地 HSS 完全同构），远端复用同一绘图/触发/导出代码 */</span></code></pre>
+      </div>
+    </section>

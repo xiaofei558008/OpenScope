@@ -1,0 +1,18 @@
+<section id="s11">
+      <h2><span class="sec-n">11</span>命令行接口</h2>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:260px">选项</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="m">-openprj &lt;FILENAME&gt;</td><td>打开已有工程</td></tr>
+            <tr><td class="m">-USB &lt;SN/nickname&gt;</td><td>按序列号 / 昵称选择 USB 探针<br><strong>仅可与 <code>-openprj</code> 同用</strong></td></tr>
+            <tr><td class="m">-IP &lt;hostname/SN&gt;</td><td>选择 TCP/IP 探针（同样仅配 <code>-openprj</code>）</td></tr>
+            <tr><td class="m">-RTTSearchRanges &lt;A&gt;,&lt;S&gt;[,…]</td><td>定义 RTT 搜索范围；转为 <code>SetRTTSearchRanges</code> 下发给 DLL</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>SuppressGUI = 1/0</code> 会作为 ExecCommand 下发。</p>
+    </section>
+
+    <!-- ══ 12 ══ -->
+    

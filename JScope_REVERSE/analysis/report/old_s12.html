@@ -1,0 +1,59 @@
+<section id="s12">
+      <h2><span class="sec-n">12</span>对 OpenScope 的启示</h2>
+
+      <h3>12.1 三条最有价值的结论</h3>
+      <ol class="body">
+        <li>
+          <strong>HSS 是 OpenScope 高速采样的现成答案。</strong>
+          <code>JLINK_HSS_Start(变量表, 数量, 周期µs, 1)</code> + 周期 <code>JLINK_HSS_Read</code> 到 2 MB 缓冲。
+          探针<strong>自主</strong>按周期采样并缓存、带 µs 时间戳、主机批量取走 —— 采样率与 USB 往返解耦。
+          这正对应 request.md 第 15 条「第二步：真 µs 采样（片上缓冲，XCP 式）」，
+          且<strong>不需要在 MCU 上跑采样代码</strong>（HSS 走 AHB-AP 后台访问，不占用 DWT/SWO）。
+          <br><span style="color:var(--fg-muted);font-size:13.5px">注意：HSS 属 J-Link SDK 功能，无公开文档；§05 是可直接使用的调用契约。</span>
+        </li>
+        <li>
+          <strong>HSS 与 RTT 可以共用同一数据模型。</strong>
+          J-Scope 把两者的字节流都喂给同一个 <code>UnpackSamples</code>，
+          统一成「定长样本 + 首 4 字节 µs 时间戳」。
+          OpenScope 的网络模块（request.md 第 14 条）应当照搬这个抽象：
+          <strong>采集后端只负责产出「带时间戳的定长样本流」，压缩 / 传输 / 绘图全部复用</strong>。
+          这也直接解决「本地 ST-Link/J-Link 采集 → 网络传给远端」的接口设计。
+        </li>
+        <li>
+          <strong>RTT VarFormat 让目标端零 ELF 依赖。</strong>
+          通道名 <code>JScope_t4i4f4</code> 自带完整布局。OpenScope 若要在网络对端（无 ELF）显示波形，
+          这是最省事的方案 —— 发送方把变量布局编码进通道名 / 握手包即可。
+        </li>
+      </ol>
+
+      <h3>12.2 建议抄 / 不抄</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:280px">项</th><th style="width:110px">建议</th><th>理由</th></tr></thead>
+          <tbody>
+            <tr><td>运行时按名解析后端 DLL</td><td><span class="verdict v-yes">抄</span></td><td>已在 OpenScope 网络模块验证过的模式；同时兼容 J-Link / ST-Link</td></tr>
+            <tr><td>双环数据模型（时间戳环 + 每变量环）</td><td><span class="verdict v-yes">抄，改进</span></td><td>索引 O(1)、绘图简单；但 8 B/样本固定槽位太浪费</td></tr>
+            <tr><td>8,388,608 样本固定深度</td><td><span class="verdict v-no">不抄</span></td><td>应改为可配置深度或分段落盘（OpenScope 已有历史回传需求）</td></tr>
+            <tr><td>每变量 64 MB 预分配</td><td><span class="verdict v-no">不抄</span></td><td>8 变量即 512 MB；应按类型宽度紧凑存储（1/2/4/8 B）</td></tr>
+            <tr><td>时间戳统一为 µs、uint32</td><td><span class="verdict v-yes">抄</span></td><td>与 J-Scope 对齐便于互操作；注意 2³² µs ≈ 71.6 分钟后回绕</td></tr>
+            <tr><td>无时间戳时合成 100 µs 栅格</td><td><span class="verdict v-yes">抄</span></td><td>低成本兜底，避免绘图断链</td></tr>
+            <tr><td>RTT 跨读取 ≤64 B 残留拼接</td><td><span class="verdict v-yes">抄</span></td><td>流式协议必备；比「丢弃半样本」健壮得多</td></tr>
+            <tr><td>10 ms 采样泵 + 2 MB 批读</td><td><span class="verdict v-yes">抄</span></td><td>让探针 / 目标做缓冲，主机不与采样率耦合</td></tr>
+            <tr><td>带守卫的自研堆分配器</td><td><span class="verdict v-opt">可选</span></td><td>调试期价值高（能抓越界 / 野指针），发布期有开销</td></tr>
+            <tr><td><code>JLINKARM_DEVICE_SelectDialog</code> 选型弹窗</td><td><span class="verdict v-no">不抄</span></td><td>与 request.md 第 17 / 21 条「不要弹窗选芯片」直接冲突</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>12.3 已知坑</h3>
+      <ul class="body">
+        <li><code>JLINK_HSS_Start</code> 第 4 参数为 <code>1</code>（flags）<span class="badge b-obs">观测</span>，语义<span class="badge b-unk">未知</span>。</li>
+        <li><code>caps.field_at_4</code> 的单位需实测确认（§04 末）。</li>
+        <li>TypeID 3/4 语义未确证（§08）。</li>
+        <li><code>-USB</code> / <code>-IP</code> 选项<strong>必须</strong>与 <code>-openprj</code> 同用，否则报错 —— 因连接参数来自工程文件。</li>
+        <li>RTT 模式<strong>强制要求</strong>指定目标器件：<code>In RTT mode specifying the target device is mandatory.</code></li>
+      </ul>
+    </section>
+
+    <!-- ══ 13 ══ -->
+    

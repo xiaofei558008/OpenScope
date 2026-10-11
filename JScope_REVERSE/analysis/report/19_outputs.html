@@ -1,0 +1,62 @@
+    <!-- ══ 19 ══ -->
+    <section id="s19">
+      <h2><span class="sec-n">19</span>产出物、复现与来源</h2>
+
+      <h3>19.1 本次分析产出物</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:300px">路径</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td class="m">JSCOPE_ANALYSIS.md</td><td>完整分析报告（Markdown 版，与本页同源）</td></tr>
+            <tr><td class="m">report.html</td><td>本页（单文件、双主题、可离线分享）</td></tr>
+            <tr><td class="m">analysis/*.md</td><td>8 个专题的独立深度报告：<code>trigger</code> / <code>export</code> / <code>graph</code> / <code>elf</code> / <code>rttplus</code> / <code>infra</code> / <code>session</code></td></tr>
+            <tr><td class="m">dumps/alldecomp/</td><td><strong>全部 2,001 个函数的反编译 C 代码</strong>（9 个分块 + 带调用者/被调用者的 <code>index.tsv</code>）</td></tr>
+            <tr><td class="m">dumps/globals.txt</td><td>4,837 个全局变量（地址/类型/长度/初值/引用者）</td></tr>
+            <tr><td class="m">dumps/defined_strings.txt</td><td>3,035 条字符串（含地址与 RTTI 类名）</td></tr>
+            <tr><td class="m">dumps/*.txt</td><td>上一轮的专题反编译（HSS / RTT / XML / ELF / 数据通路 / 动态缓冲）</td></tr>
+            <tr><td class="m">tools/ghidra_scripts/</td><td>7 个 Ghidra 脚本：<code>DumpAllDecomp</code>（全量反编译）· <code>DumpGlobals</code> · <code>DumpOverview</code> · <code>XrefDecomp</code> · <code>CallersDecomp</code> · <code>RenameByStringRef</code> · <code>RefsTo</code></td></tr>
+            <tr><td class="m">tools/run_*.bat</td><td>headless 调用封装（每个调用一个专用 .bat —— 避免 cmd 引号陷阱）</td></tr>
+            <tr><td class="m">ghidra_proj/</td><td>Ghidra 工程数据库（29 MB，<strong>未进 git</strong>，可重新导入复现）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>19.2 复现方法</h3>
+      <div class="code">
+<pre><code><span class="c"># 1) 导入 + 全量分析（约 65 s；工具链见 RESTORE.md）</span>
+tools\run_ghidra.bat
+
+<span class="c"># 2) 全量反编译 + 全局变量导出</span>
+tools\run_all.bat            <span class="c"># DumpAllDecomp(250) + DumpGlobals</span>
+
+<span class="c"># 3) 定点分析（对已导入工程重复跑脚本，不必重新分析）</span>
+tools\run_script.bat DumpOverview.java
+tools\run_hss.bat            <span class="c"># 或 run_g.bat / run_globals.bat …</span>
+
+<span class="c"># 4) 生成报告页</span>
+python analysis\report\build.py     <span class="c"># 拼装 analysis/report/*.html → report.html</span></code></pre>
+      </div>
+      <div class="callout">
+        <p><strong>两个必须知道的工具链坑：</strong>① <code>.bat</code> 里必须显式 <code>set JAVA_HOME=…\tools\jdk-21.0.12.1+1</code>；
+        ② <strong>不要</strong>在 Git Bash 里用 <code>cmd //c "…带引号或正则的参数…"</code> —— 引号会被吞掉或转义错乱，
+        每次调用写一个专用 <code>.bat</code>。Ghidra 脚本里 <code>Pattern.matcher(s).matches()</code> 是整串匹配，子串匹配要用 <code>.find()</code>。</p>
+      </div>
+
+      <h3>19.3 外部佐证</h3>
+      <ul>
+        <li><a href="https://kb.segger.com/UM08028_J-Scope">SEGGER KB — UM08028 J-Scope</a>：官方用户手册页。本轮用它对照 RTT 通道命名、<code>JScope_Config/JScope_Data</code> 语义、快捷键表与命令行选项表（发现 RTT-Plus 配置串格式与实现不一致，见 §7.7）。</li>
+        <li><a href="https://kb.segger.com/J-Link_High-Speed_Sampling">SEGGER KB — J-Link High-Speed Sampling</a>：确认 HSS 属 J-Link SDK 能力（无 API 细节，故本报告 §5 的契约来自二进制本身）。</li>
+        <li><strong>JLink_x64.dll V9.66 内部字符串</strong>：<code>"HSS started: %d DataBlocks, %d (period_us), 0x%.8X (Flags)"</code>、<code>"Block %d: %d bytes @ 0x%.8X"</code> 等，用于交叉验证 HSS 参数顺序与失败路径。</li>
+        <li><strong>Qt 4.8.7</strong>（SEGGER 自建，2024-12-17）：<code>QtCore4.dll</code> / <code>QtGui4.dll</code> 版本资源。</li>
+        <li>方法论参考：REA（<code>morluto/rea</code>）—— 区分「观测 / 推导 / 推断 / 未知」并保留证据出处。</li>
+      </ul>
+
+      <h3>19.4 免责与边界</h3>
+      <p>
+        本报告全部结论来自<strong>静态逆向</strong>（反汇编 + PE 结构 + 字符串 + 只读原始字节读）。
+        未运行 J-Scope、未连接调试探针、未调用任何 J-Link API、未修改被分析文件。
+        凡涉及"运行时行为"的结论都已标注 <span class="badge b-inf">推断</span> 或 <span class="badge b-unk">未知</span>，
+        并在 §17 给出实测方案。J-Scope / J-Link 是 SEGGER Microcontroller GmbH 的产品；
+        本文档用于互操作与自有工具（OpenScope）的设计参考。
+      </p>
+    </section>

@@ -1,0 +1,85 @@
+    <!-- ══ 17 ══ -->
+    <section id="s17">
+      <h2><span class="sec-n">17</span>未解之谜与实测建议</h2>
+      <p class="lead">
+        静态分析的边界在这里。下面每一项都写清了"已知什么、缺什么、怎么用一次实验拿下来"。
+        按对 OpenScope 的影响排序。
+      </p>
+
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:34px">#</th><th style="width:230px">问题</th><th>已知 / 缺什么</th><th style="width:280px">一次实测即可确定</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="m">1</td>
+              <td><strong>采样率显示 10 倍因子</strong></td>
+              <td>公式 <code>numSamples×10⁷ / elapsed</code> 已确认；<code>elapsed</code> 由 <code>FUN_140043050</code> 算出，按 <code>freq/1e6</code> 换算应为 <strong>µs</strong> —— 代入后结果比真实样本率大 10 倍 <span class="badge b-unk">未知</span></td>
+              <td>用固定 HSS 周期（如 100 µs）+ 已知变量数采集 10 s，比较 J-Scope 状态栏数字与"实际样本数/时间"</td>
+            </tr>
+            <tr>
+              <td class="m">2</td>
+              <td><strong><code>JLINK_HSS_Start</code> 的 Flags=1 语义</strong></td>
+              <td>DLL 日志串 <code>"HSS started: %d DataBlocks, %d (period_us), 0x%.8X (Flags)"</code> 证实它是位标志；J-Scope 恒传 <code>1</code> <span class="badge b-unk">未知</span></td>
+              <td>对同一目标分别用 Flags=0/1/2 调用 <code>JLINK_HSS_Start</code>，观察时间戳是否出现 / 是否连续</td>
+            </tr>
+            <tr>
+              <td class="m">3</td>
+              <td><code>JLINK_HSS_GetCaps</code> 的 8 字节结构</td>
+              <td>已知 <code>+4</code> 是频率类字段（<code>1e6/x</code> 得 µs）；<code>+0</code> 从未被读 <span class="badge b-inf">推断</span></td>
+              <td>打印 caps 原始 8 字节，与探针型号/最大采样率对照</td>
+            </tr>
+            <tr>
+              <td class="m">4</td>
+              <td><strong>RTT-Plus 配置串与文档不一致</strong></td>
+              <td>二进制实测：<strong>每条 16 字节</strong>（<code>+0 Addr / +4 0 / +8 Size / +12 未初始化</code>），终止 12 字节 0；
+                  UM08028 文档写的是每条 8 字节 <code>&lt;4B Size&gt;&lt;4B Addr&gt;</code> + 8 字节 0 <span class="badge b-obs">观测</span></td>
+              <td>写一个只有下行通道的固件，把收到的字节原样打印出来（<strong>这是最值得先做的一个实验</strong>，直接决定 OpenScope 目标端库怎么写）</td>
+            </tr>
+            <tr>
+              <td class="m">5</td>
+              <td>RTT 读缓冲上限 <code>max(0x2000, chBufSize)</code></td>
+              <td>已修正旧报告的 min→max；<code>chBufSize</code>（<code>DAT_14085d1b0</code>）的写入者未定位 <span class="badge b-obs">观测</span>/<span class="badge b-unk">未知</span></td>
+              <td>用不同 RTT 上行缓冲大小（1 KB / 32 KB）建会话，观察 <code>_HEAP</code> 中该分配的大小</td>
+            </tr>
+            <tr>
+              <td class="m">6</td>
+              <td>作业处理器表中 7 项未取到函数体</td>
+              <td>16 项表 <code>0x140073ef0</code> 中 id 2/6/7/8/9/11/14 的执行体地址需从原始字节读取（本轮已知：0=init、1=退出线程、3=InitProjSettings、4=ParseELF、5=ReadStart、10=OpenProj、12=CheckELF、13=UpdateProjSettings）<span class="badge b-unk">未知</span></td>
+              <td>静态即可补：dump <code>0x140073ef0..0x140073fef</code> 的 16×16 字节表</td>
+            </tr>
+            <tr>
+              <td class="m">7</td>
+              <td><code>-RTTSearchRanges</code> 之外的选项解析余量</td>
+              <td>表里只有 4 项，帮助文本不可达；<code>Binary file (*.raw)</code> / <code>Import Raw</code> 字符串<strong>无代码引用</strong>（疑为拖放或旧版路径）<span class="badge b-inf">推断</span></td>
+              <td>把 <code>.raw</code> 文件拖到 J-Scope 窗口上，看是否触发导入</td>
+            </tr>
+            <tr>
+              <td class="m">8</td>
+              <td>≈30 MB 未引用静态区（<code>0x1400a5d1f0–0x14285d1f0</code>）</td>
+              <td>globals 全量扫描 0 引用；.data 虚拟大小 41.7 MB 中除了 32 MB 时间戳环就剩它 <span class="badge b-unk">未知</span></td>
+              <td>运行时读 J-Scope 进程的 <code>VirtualQuery</code>/提交页，看这块是否真被提交过（若从未提交，就是纯 linker 预留）</td>
+            </tr>
+            <tr>
+              <td class="m">9</td>
+              <td>触发配置里 XML 的 <code>&lt;Auto/&gt;</code> 字段</td>
+              <td>触发结构（0x18 B）中的使能/边沿/阈值已全部还原，但 XML 的 <code>Auto</code> 属性对应哪个字段尚无直接证据（见 §12）<span class="badge b-unk">未知</span></td>
+              <td>在 UI 上分别切换"上升/下降/双边沿"各存一次工程，diff XML</td>
+            </tr>
+            <tr>
+              <td class="m">10</td>
+              <td>CSV 导出 <code>writeIdx==0</code> 时 2³² 次循环</td>
+              <td>反汇编确认为 32 位无符号下溢（真实缺陷）<span class="badge b-obs">观测</span></td>
+              <td>清空缓冲后立刻导出（不采集）即可复现——<strong>建议只在隔离环境试</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>17.1 建议的实测顺序（成本从低到高）</h3>
+      <ol>
+        <li><strong>RTT-Plus 下行字节抓取</strong>（#4）—— 一块板子 + 20 行固件，直接决定目标端库的写法；</li>
+        <li><strong>HSS Flags 位语义</strong>（#2）与 <strong>caps 结构</strong>（#3）—— 决定 OpenScope 的 HSS 后端参数；</li>
+        <li><strong>采样率 10 倍因子</strong>（#1）—— 决定状态栏与记录时间轴是否需要补偿；</li>
+        <li>作业表补齐（#6）与静态区确认（#8）—— 纯静态/轻量实验，补全报告完整性。</li>
+      </ol>
+    </section>

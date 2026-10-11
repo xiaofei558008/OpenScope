@@ -1,0 +1,144 @@
+    <!-- ══ 02 ══ -->
+    <section id="s2">
+      <h2><span class="sec-n">02</span>总体架构：单进程、双线程、双环</h2>
+      <p class="lead">
+        启动链已完整还原：<code>entry → __scrt_common_main → WinMain(FUN_14004c520) → QApplication →
+        MainWindow 构造(FUN_14004c6a0) → exec()</code>。GUI 与采集分属两个线程，
+        两者之间只通过「全局模型快照 + 双环缓冲 + 32 槽事件表」通信。
+      </p>
+
+      <div class="code">
+        <p class="cap">启动与运行期结构</p>
+<pre><code>entry <span class="c">0x1400595c8</span>
+ └─ __scrt_common_main(FUN_140059454)
+     └─ <span class="k">WinMain</span> FUN_14004c520        <span class="c">// setvbuf(stdout,_IONBF)；QApplication(argc,argv)</span>
+         ├─ <span class="k">MainWindow::MainWindow</span> FUN_14004c6a0
+         │    ├─ MenuBar / ToolBar / StatusBar
+         │    ├─ QSplitter{ GraphContainer(GraphWidget) | TableWidget(CTableView) }
+         │    ├─ QTimer::start()          <span class="c">// 界面刷新（状态栏 / 表格 / 波形重绘）</span>
+         │    └─ 临界区 + 作业调度器初始化（FUN_140043110 / FUN_140039400）
+         └─ QApplication::exec()          <span class="c">// —— 主线程进入 Qt 事件循环 ——</span>
+
+<span class="c">// 主线程与工作线程的分工</span>
+主线程  : Qt 事件循环、绘制、对话框        <span class="c">// 绝不碰 J-Link API</span>
+工作线程: 作业执行器 FUN_140039140         <span class="c">// J-Link 调用、采样解包、ELF 解析全部在此</span>
+          └─ 32 槽事件/定时表 DAT_14085cf50[32] × 16 B {状态, 回调, 周期ms, 超时}
+              └─ 周期作业：<span class="k">FUN_140041710</span> 每 <span class="n">10 ms</span> 拉取一次样本（HSS 或 RTT）</code></pre>
+      </div>
+
+      <h3>2.1 作业（Job）模型 —— 标签即作业名</h3>
+      <p class="lead">
+        逆向中一个容易误读的点：那些 <code>APP: &lt;ReadPeriodic&gt;</code> 之类的<strong>字符串不是作业名，而是堆分配标签</strong>
+        —— 它们由带守卫的自研分配器 <code>FUN_140043d20(size, label)</code> 记录，用于内存审计。作业对象本身的布局极简：
+      </p>
+      <div class="code">
+        <p class="cap">作业对象（0x28 字节，FUN_14003d5c0 现场构造）</p>
+<pre><code><span class="k">struct</span> Job {            <span class="c">// 0x28 B，由 FUN_140043d20(0x28, "APP: &lt;...&gt;") 分配</span>
+    <span class="k">Job</span>    *next;       <span class="c">// +0x00  全局作业链 DAT_14085d150</span>
+    <span class="k">void</span>   *data;       <span class="c">// +0x08  作业负载（含各自的 out 指针与结果码）</span>
+    <span class="k">int</span>   (*fn)(...);   <span class="c">// +0x10  执行体</span>
+    <span class="k">int</span>     period;     <span class="c">// +0x18  周期（ms）；ReadPeriodic 固定写 10</span>
+    <span class="k">int</span>     rc;         <span class="c">// +0x1c  结果码（负数=失败，UI 据此弹框）</span>
+};</code></pre>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:250px">分配标签（= 作业）</th><th class="m" style="width:80px">大小</th><th>用途</th></tr></thead>
+          <tbody>
+            <tr><td class="m">APP: &lt;Init&gt; Job</td><td class="m">0x30</td><td>引擎初始化（连接、DLL 版本）</td></tr>
+            <tr><td class="m">APP: &lt;CreateProject&gt; Job</td><td class="m">0x128</td><td>新建工程：清空符号、装载默认配置</td></tr>
+            <tr><td class="m">APP: &lt;OpenProjFile&gt; Job</td><td class="m">0x128</td><td>打开 .jscope</td></tr>
+            <tr><td class="m">APP: &lt;ParseELFFile&gt;</td><td class="m">0x128</td><td>解析 ELF/DWARF，构建符号树</td></tr>
+            <tr><td class="m">APP: &lt;CheckELFModifications&gt; Job</td><td class="m">0x28</td><td>轮询 ELF 文件时间戳/大小变化，自动重载</td></tr>
+            <tr><td class="m">APP: &lt;ImportRaw&gt;</td><td class="m">0x128</td><td>导入 .raw 记录文件</td></tr>
+            <tr><td class="m">APP: &lt;ReadStart&gt; / &lt;ReadPause&gt; / &lt;ReadStop&gt;</td><td class="m">0x28</td><td>采集启停（ReadStop 内含 HSS_Stop / RTT 停止）</td></tr>
+            <tr><td class="m">APP: &lt;ReadPeriodic&gt;</td><td class="m">0x28</td><td><strong>10 ms 采样泵</strong>，运行期唯一的周期作业</td></tr>
+            <tr><td class="m">APP: &lt;InitProjSettings&gt; / &lt;UpdateProjSettings&gt; Job</td><td class="m">0x608</td><td>把 0x5E8 工程设置结构应用到运行期（含符号列表重建）</td></tr>
+            <tr><td class="m">APP: &lt;SaveProject&gt; / &lt;SaveProjectAs&gt;</td><td class="m">0x28</td><td>写 .jscope</td></tr>
+            <tr><td class="m">APP: &lt;SetAppStartAction&gt; Job</td><td class="m">0x28</td><td>启动动作（新建 / 打开 / 空）</td></tr>
+            <tr><td class="m">APP: &lt;Exit&gt;</td><td class="m">0x28</td><td>退出清理</td></tr>
+            <tr><td class="m">Project settings</td><td class="m">0x5bc</td><td>配置结构临时快照</td></tr>
+            <tr><td class="m">Mutex info</td><td class="m">0x30</td><td>{类型, …, CRITICAL_SECTION/HANDLE}；命名互斥体用于单实例</td></tr>
+            <tr><td class="m">RTT read buffer allocation</td><td class="m">≥0x2000</td><td>RTT 读取缓冲（见 §7）</td></tr>
+            <tr><td class="m">Temp. MsgBox string</td><td class="m">0x8000</td><td>消息框临时串（32 KB，故 J-Scope 的报错可以很长）</td></tr>
+            <tr><td class="m">Node dimension size / Dimension size sibling</td><td class="m">0x10</td><td>符号树节点尺寸缓存</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>2.2 全局模型：双缓冲 + 临界区</h3>
+      <p class="lead">
+        配置与工程设置各有<strong>一份锁保护的全局主副本</strong>，任何线程要读就先"取快照"到自己栈上/堆上，改完再"提交"。
+        这是 J-Scope 避免数据竞争的唯一手段 —— 简单、粗暴、有效：
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:210px">全局</th><th class="m" style="width:80px">大小</th><th>内容</th><th>访问器</th></tr></thead>
+          <tbody>
+            <tr>
+              <td class="m">DAT_142864a88<br>Configuration</td><td class="m">0x5BC</td>
+              <td>连接参数（器件/接口/速度/序列号/IP/昵称）、采样模式、周期、JTAG、会话标志</td>
+              <td class="m">取: FUN_14004e9c0<br>提交: FUN_14004ea40</td>
+            </tr>
+            <tr>
+              <td class="m">DAT_142864a80<br>ProjectSettings</td><td class="m">0x5E8</td>
+              <td>上者 + 符号列表 / 视图状态（<strong>0x5E8 = 0x5BC + 0x2C 扩展</strong>，两者地址仅差 8 字节，
+                  说明 Configuration 是它的 +0x08 成员）</td>
+              <td class="m">取: FUN_14004e9e0<br>提交: FUN_14004ea50</td>
+            </tr>
+            <tr>
+              <td class="m">DAT_14285d420</td><td class="m">0x5BC</td>
+              <td>采样引擎自用的配置副本（启动采集时从主副本拷入，停采时清零）</td>
+              <td class="m">FUN_14003d5c0 / FUN_14003d7d0</td>
+            </tr>
+            <tr>
+              <td class="m">DAT_14285d9e0</td><td class="m">0x18</td>
+              <td>触发配置 { 符号指针, 阈值 double, 使能, 上升沿, 下降沿, 已触发 }（详见 §12）</td>
+              <td class="m">FUN_14004ea20 / FUN_14004ed00</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <p><strong>工程结构的一个坑：</strong>文件读写用的结构基址与运行期 Configuration 基址<strong>相差 8 字节</strong>
+        （如 <code>IsRTTSession</code> 在文件结构 <code>+0x5AC</code>、在运行期结构 <code>+0x5A4</code>）。
+        早期分析若把两者混为一谈，会得到互相矛盾的字段表 —— 本报告已按基址分别标注。</p>
+      </div>
+
+      <h3>2.3 模块地图（按地址区间）</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th class="m" style="width:150px">地址区间</th><th>子系统</th><th>标志性证据</th></tr></thead>
+          <tbody>
+            <tr><td class="m">0x140001000–0x140026000</td><td>菜单/动作、ELF 段处理、<strong>MSVC C++ 名字反修饰器</strong>（<code>" clone "</code>, <code>" noexcept"</code>, <code>" restrict"</code>）、容器与字符串基础设施</td><td>字符串 <code>.debug_info/.debug_abbrev</code>、demangler 关键字表</td></tr>
+            <tr><td class="m">0x140027000–0x14002b900</td><td>Qt 字符串/文件/界面辅助封装；<strong>J-Link API 懒加载 thunk</strong></td><td><code>JLINK_*</code> 名字串 + <code>GetProcAddress</code> 桩</td></tr>
+            <tr><td class="m">0x14002b900–0x14003c000</td><td>对话框族：About / NewProject / 器件选择 / 消息框 / 自绘控件 / 文本视图</td><td>RTTI 类名、Qt 信号槽串</td></tr>
+            <tr><td class="m">0x14003c000–0x140044000</td><td><strong>采集引擎</strong>：作业调度、事件表、连接、HSS/RTT 启停、双环、解包、触发判定、时间基准、内存分配器</td><td><code>JLINK_HSS_*</code>、<code>UnpackSamples</code>、<code>APP: &lt;Read*&gt;</code></td></tr>
+            <tr><td class="m">0x140044000–0x140050000</td><td>ELF/DWARF 解析、符号记录构建、.jscope XML 读写、<strong>导入导出</strong></td><td><code>.debug_*</code> 段名、XML 属性名、<code>JRAW</code></td></tr>
+            <tr><td class="m">0x140050000–0x14005b000</td><td>UI 主体：MainWindow / GraphContainer / GraphWidget / TableWidget / SymbolSelection / TriggerWidget / StatusBar</td><td>RTTI 类名与虚表构造点</td></tr>
+            <tr><td class="m">0x14005b000–0x14005bb00</td><td>CRT / 异常 / 安全 Cookie 支撑代码</td><td><code>__scrt_*</code>、<code>_guard_*</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>2.4 一次采样的数据流</h3>
+      <div class="code">
+<pre><code>J-Link 探针 ──HSS 后台采样──▶ 探针内部缓冲
+                                  │  JLINK_HSS_Read(buf, ~2 MB)     <span class="c">// 工作线程，每 10 ms</span>
+                                  ▼
+                        UnpackSamples(FUN_14003fa70)              <span class="c">// HSS 与 RTT 共用</span>
+                          ├─ 时间戳 → tsRing[writeIdx]            <span class="c">// 32 MB 静态环</span>
+                          ├─ 每变量 → v-&gt;dataBuf[writeIdx*8]      <span class="c">// 每变量 64 MB 堆环，8 B 槽位</span>
+                          ├─ 触发判定 FUN_1400415a0（逐变量）      <span class="c">// 命中则重置环索引，从头记录</span>
+                          └─ 统计 FUN_140042ac0（min/max/avg）     <span class="c">// 刷新表格三列</span>
+                                  ▼
+                     主线程 QTimer 到期 ──▶ 重绘波形 + 刷新状态栏/表格
+                                             <span class="c">// 环形缓冲 → 每像素列取点，与采样率解耦</span></code></pre>
+      </div>
+      <div class="callout key">
+        <p><strong>架构上最值得抄的一点：</strong>"采集后端只负责产出<strong>带时间戳的定长样本流</strong>"。
+        HSS 与 RTT 两条完全不同的传输路径（一个主机轮询、一个目标推送）在
+        <code>UnpackSamples</code> 处合流，之后的数据模型、触发、统计、绘图、导出<strong>全部复用</strong>。
+        OpenScope 的网络采集（本地采集→压缩→远端显示）应当照搬这个分界线。</p>
+      </div>
+    </section>

@@ -1,0 +1,88 @@
+    <!-- ══ 04 ══ -->
+    <section id="s4">
+      <h2><span class="sec-n">04</span>连接序列与探针选择</h2>
+      <p class="lead">
+        采集启动 = <code>FUN_14003ef60</code>（"ReadStart" 的第一步）。它串起「加载 DLL → 选探针 → 开探针 → 配器件 → 连目标 → 探测 HSS 能力」六步；
+        任一步失败都会写一条 ERROR 日志（<code>FUN_14003f110</code> → <code>"ERROR: %s"</code>）并中止；
+        该日志在<strong>作业段结束时</strong>汇总为一次模态消息框（见 §15.5 的分段日志机制）。
+      </p>
+
+      <div class="code">
+        <p class="cap">FUN_1400418f0（选探针 + 打开）→ FUN_1400419f0（配器件 + 连接 + 能力探测）</p>
+<pre><code><span class="c">// ① 加载库（FUN_140028ec0 内部按顺序 LoadLibraryA）</span>
+<span class="k">if</span> (!JLINK_LoadLibrary())  <span class="k">return</span> err("Failed to load J-Link library.");
+
+<span class="c">// ② 选探针：连接类型 config+0x5AC</span>
+<span class="k">switch</span> (connType) {
+  <span class="k">case</span> <span class="n">2</span>:  <span class="c">// TCP/IP</span>
+      <span class="k">if</span> (JLINKARM_SelectIP(config+0x490 <span class="c">/*IP 串*/</span>, <span class="n">0</span>) != <span class="n">0</span>) err("Failed to select J-Link via IP ('%s').");
+      <span class="k">break</span>;
+  <span class="k">case</span> <span class="n">0</span>:  <span class="c">// USB —— 优先昵称</span>
+      <span class="k">if</span> (config+0x510 <span class="c">/*nickname*/</span>[0])
+          <span class="k">if</span> (JLINK_EMU_SelectByUSBNickname(config+0x510) &lt; <span class="n">0</span>) err("Failed to select J-Link with nickname ('%s') via USB.");
+      <span class="k">break</span>;
+  <span class="k">default</span>: <span class="c">// USB —— 按序列号</span>
+      <span class="k">if</span> (JLINKARM_EMU_SelectByUSBSN() &lt; <span class="n">0</span>) err("Failed to select J-Link with serial number ('%d') via USB.");
+}
+<span class="k">if</span> (JLINKARM_OpenEx(<span class="n">0</span>, <span class="n">0</span>) != <span class="n">0</span>)  <span class="k">return</span> err("Failed to connect to J-Link: %s");
+
+<span class="c">// ③ 器件（config+0x00 起 128 B）：空/未知名 → 弹出 DLL 自带的器件选择框</span>
+<span class="k">if</span> (device[0] == <span class="n">0</span> || !lookupDevice(device)) {
+    idx = JLINKARM_DEVICE_SelectDialog(hMainWnd, <span class="n">0</span>, <span class="n">0</span>);
+    <span class="k">if</span> (idx == <span class="n">-1</span>) <span class="k">return</span> err("User cancelled device selection.");
+    <span class="k">struct</span> DevInfo info;  info.size = <span class="n">0x978</span>;
+    JLINKARM_DEVICE_GetInfo(idx, &amp;info);      <span class="c">// 0x978 B，前 0x80 B 为器件名等字符串</span>
+    <span class="c">/* 把 info 的字符串字段逐 8 字节搬进 config+0x00..0x7C，再 FUN_14004ec40 刷新派生字段 */</span>
+}
+JLINKARM_ExecCommand("device = %s", device);     <span class="c">// 失败 → "Failed to select target device '%s'."</span>
+<span class="k">if</span> (config+0x38C <span class="c">/*ScriptFile*/</span>[0])
+    JLINKARM_ExecCommand("ScriptFile = %s", ...); <span class="c">// 失败 → "Failed to select script file '%s'."</span>
+
+<span class="c">// ④ 接口与速度</span>
+JLINKARM_TIF_Select(config+0x59C);               <span class="c">// 0=JTAG, 1=SWD, 7=?（JTAG 变体）</span>
+JLINKARM_SetSpeed(config+0x5A0);                 <span class="c">// kHz</span>
+<span class="k">if</span> (rttSearchRanges[0]) {
+    rc = JLINK_ExecCommand(rttSearchRanges, <span class="n">0</span>, <span class="n">0</span>);   <span class="c">// "SetRTTSearchRanges ..." 由 -RTTSearchRanges 生成</span>
+    <span class="k">if</span> (rc != <span class="n">0</span>) <span class="k">return</span> err("Wrong syntax for \"-RTTSearchRange\".\n");
+}
+<span class="k">if</span> (JLINKARM_Connect() &lt; <span class="n">0</span>)  <span class="k">return</span> err("Failed to establish connection to target.");</code></pre>
+      </div>
+
+      <h3>4.1 HSS 能力探测：只影响一个"写了不读"的全局</h3>
+      <div class="code">
+<pre><code><span class="k">if</span> (config+0x5A4 == HSS) {                       <span class="c">// 仅 HSS 模式探测</span>
+    <span class="k">if</span> (JLINKARM_EMU_HasCapEx(<span class="n">0x35</span>) == <span class="n">0</span>) {        <span class="c">// 0x35 = HSS 能力位（EMU 能力扩展）</span>
+        samplingPeriod = <span class="n">20000</span>;                     <span class="c">// 无 HSS 能力 → 回退 20 ms 轮询</span>
+    } <span class="k">else</span> <span class="k">if</span> (JLINKARM_GetDLLVersion() &gt; <span class="n">0xC79B</span>) {
+        <span class="k">struct</span> { <span class="k">uint32_t</span> f0, f1; } caps;          <span class="c">// 8 字节 caps</span>
+        <span class="k">if</span> (JLINK_HSS_GetCaps(&amp;caps) == <span class="n">0</span>)
+            DAT_14285da90 = <span class="n">1000000</span> / caps.f1;      <span class="c">// ★ 全局只写不读（见 §6.4）</span>
+    } <span class="k">else</span> {
+        samplingPeriod = <span class="n">10</span>;                        <span class="c">// 老 DLL → 固定 10 µs</span>
+    }
+}</code></pre>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:220px">项</th><th>值 / 含义</th><th style="width:90px">等级</th></tr></thead>
+          <tbody>
+            <tr><td><code>JLINKARM_EMU_HasCapEx(0x35)</code></td><td>能力位 <code>0x35</code> = 53 → HSS 支持。<strong>JLink_x64.dll 中存在对应能力分支</strong>（字符串 <code>"Current setup does not support background memory access mode"</code> 即其后端失败路径）</td><td><span class="badge b-obs">观测</span></td></tr>
+            <tr><td>DLL 版本门槛 <code>0xC79B</code></td><td>= 51099。<code>JLINKARM_GetDLLVersion()</code> 的十进制编码（<code>%d.%.2d</code> 打印），即要求 DLL ≥ <strong>V5.10.99</strong> 才调用 <code>JLINK_HSS_GetCaps</code></td><td><span class="badge b-inf">推断</span></td></tr>
+            <tr><td><code>caps.f1</code> 单位</td><td>反编译为 <code>TimeResUs = 1000000 / caps.f1</code> → <code>f1</code> 是 Hz（时间戳频率），1e6/Hz = µs/tick。因该全局只写不读，实际不影响采样</td><td><span class="badge b-inf">推断</span></td></tr>
+            <tr><td>回退周期</td><td>无 HSS → 20 ms；老 DLL → 10 µs（按 <code>FUN_14003f400</code> 写入配置 <code>+0x5A8</code> 采样周期）</td><td><span class="badge b-obs">观测</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>4.2 前置命令与"会话模式"</h3>
+      <div class="tw">
+        <table>
+          <tbody>
+            <tr><td style="width:290px"><code>JLINKARM_ConfigJTAG(config+0x5B4)</code></td><td>仅当 TIF ∈ {0(JTAG), 7} 且 <code>config+0x5B0</code>（JTAG_IRPre 原始值）≥ 0 —— <strong>真正下发给 DLL 的是 <code>+0x5B4</code></strong>（IRPre），<code>+0x5B0</code> 是 DRPre</td></tr>
+            <tr><td><code>JLINKARM_ExecCommand("SetSkipInitECCRAMOnConnect = 1")</code></td><td>每次连接前固定下发，跳过 ECC RAM 初始化（对无 ECC 的目标加速连接）</td></tr>
+            <tr><td><code>SuppressGUI = 1 / 0</code></td><td>命令行解析期间抑制 DLL 弹窗（<code>FUN_140041cd0</code> 前后包夹）</td></tr>
+            <tr><td>会话模式 <code>config+0x5B8</code></td><td>由文件结构的 <code>Connection == 4</code> 置位；<strong>停止采集时若该位为 1 则不下发 <code>JLINK_HSS_Stop</code></strong> —— 即"寄生"在别人的调试会话上，不夺走探针的控制权</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>

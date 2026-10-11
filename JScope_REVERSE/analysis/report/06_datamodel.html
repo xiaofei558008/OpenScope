@@ -1,0 +1,137 @@
+    <!-- ══ 06 ══ -->
+    <section id="s6">
+      <h2><span class="sec-n">06</span>双环数据模型</h2>
+      <p class="lead">
+        这是 J-Scope 高性能绘图的核心设计：<strong>一个全局时间戳环（静态 32 MB）+ 每变量一个数据环（堆上 64 MB）</strong>，
+        两者深度相同（8,388,608 样本），索引一一对应。绘图、游标取值、导出全部靠"时间戳环索引 ↔ 变量环索引"的直接对应关系，
+        没有任何时间查找。
+      </p>
+
+      <div class="rings">
+        <div class="ring">
+          <div class="ring-h"><span class="t">时间戳环 tsRing</span><span class="s">uint32[0x800000] · 32 MB · .data 静态</span></div>
+          <div class="ring-b">
+            <div class="strip" aria-hidden="true">
+              <div class="cell ts" style="flex-grow:3"></div><div class="cell ts" style="flex-grow:3"></div>
+              <div class="cell ts" style="flex-grow:3"></div><div class="cell ts" style="flex-grow:3"></div>
+              <div class="cell ts" style="flex-grow:3"></div><div class="cell ts" style="flex-grow:3"></div>
+              <div class="cell ts" style="flex-grow:3"></div><div class="cell ts" style="flex-grow:3"></div>
+            </div>
+            <p class="mono-sm" style="margin:8px 0 0;color:var(--fg-muted)">
+              索引 <code>writeIdx</code> (DAT_14285da80) · 上一索引 <code>lastIdx</code> (DAT_14285da7c) ·
+              高水位 <code>wrapped</code> (DAT_14285da78) · 当前值 <code>curTs</code> (DAT_14285da84)
+            </p>
+          </div>
+        </div>
+        <div class="ring">
+          <div class="ring-h"><span class="t">变量数据环 dataBuf</span><span class="s">每变量 64 MB · 固定 8 B/样本槽位</span></div>
+          <div class="ring-b">
+            <div class="strip" aria-hidden="true">
+              <div class="cell v" style="flex-grow:3"></div><div class="cell v2" style="flex-grow:3"></div>
+              <div class="cell v3" style="flex-grow:3"></div><div class="cell v" style="flex-grow:3"></div>
+              <div class="cell v2" style="flex-grow:3"></div><div class="cell v3" style="flex-grow:3"></div>
+              <div class="cell v" style="flex-grow:3"></div><div class="cell v2" style="flex-grow:3"></div>
+            </div>
+            <p class="mono-sm" style="margin:8px 0 0;color:var(--fg-muted)">
+              <code>memcpy(dataBuf + writeIdx*8, sample + v-&gt;offset, v-&gt;size)</code> —— 1/2/4/8 字节的值都占 8 字节槽位
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <h3>6.1 环索引语义（FUN_14003fa70）</h3>
+      <div class="code">
+<pre><code><span class="k">for</span> (<span class="k">each</span> sample) {
+    StoreTimestamp(sample);                 <span class="c">// tsRing[writeIdx] = sample-&gt;ts（详见 6.2）</span>
+    curTs = tsRing[writeIdx];
+    <span class="k">for</span> (<span class="k">each</span> 变量 v) {
+        StoreVarSample(v, sample);          <span class="c">// memcpy 到 v 的环（★ 先存后判触发）</span>
+        rc = IsFirstSample() ? SKIP : TriggerEval(&amp;trig, v, prevPtr, curPtr);
+        <span class="k">if</span> (rc == <span class="n">0</span>) {  <span class="c">/* 未触发 */</span>  v-&gt;lastPtr = 仅当 v 是触发符号时更新;  v-&gt;hasData = <span class="n">0</span>; }
+        <span class="k">else</span> {
+            <span class="k">if</span> (rc == <span class="n">1</span>) { writeIdx = <span class="n">0</span>; wrapped = <span class="n">0</span>; }   <span class="c">// ★ 触发命中：环从头开始记录</span>
+            <span class="k">if</span> (rc == <span class="n">2</span> || rc == <span class="n">3</span>) { <span class="c">/* 无触发配置 / 已触发过 */</span> }
+            v-&gt;lastPtr = v-&gt;dataBuf + writeIdx*8;
+            UpdateStats(v);                 <span class="c">// min / max / 滑动平均</span>
+            v-&gt;hasData = <span class="n">1</span>;
+        }
+    }
+    <span class="k">if</span> (writeIdx &lt; wrapped) wrapped++;      <span class="c">// 高水位随写指针推进</span>
+    writeIdx++;
+    <span class="k">if</span> (writeIdx &gt; <span class="n">0x7FFFFF</span>) { writeIdx = <span class="n">0</span>; wrapped = <span class="n">1</span>; }  <span class="c">// 环绕</span>
+    lastIdx = writeIdx - <span class="n">1</span>;
+}</code></pre>
+      </div>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:170px">全局</th><th>语义（由 <code>FUN_14003ead0</code> / <code>FUN_140041540</code> / <code>FUN_14003ff40</code> 三处用法反推）</th></tr></thead>
+          <tbody>
+            <tr><td class="m">writeIdx</td><td>下一个待写槽位；取值 0…0x7FFFFF</td></tr>
+            <tr><td class="m">lastIdx</td><td><code>writeIdx - 1</code>（上一次写入的槽位），用于时间戳合成与"上一采样值"</td></tr>
+            <tr><td class="m">wrapped</td><td><strong>高水位 + 是否已满</strong>：环绕前置 0（缓冲按 <code>lastIdx/0x800000</code> 计填充率）；环绕后它始终等于 <code>writeIdx+1</code>，
+                于是 <code>lastIdx &lt; wrapped</code> 恒真 → 填充率显示 100%（缓冲确实已满）</td></tr>
+            <tr><td class="m">curTs</td><td>当前样本时间戳（供 UI 读取"最新时刻"）</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>6.2 时间戳语义（FUN_14003ff40）</h3>
+      <div class="code">
+<pre><code><span class="k">if</span> (mode == HSS)            tsRing[writeIdx] = sample[<span class="n">0</span>];        <span class="c">// 探针给的 µs，原样存</span>
+<span class="k">else</span> <span class="k">if</span> (rttWithTimestamp)  tsRing[writeIdx] = sample[<span class="n">0</span>];        <span class="c">// 目标给的 µs，原样存</span>
+<span class="k">else</span> {                       <span class="c">// RTT 无时间戳 → 合成 100 µs 均匀栅格</span>
+    <span class="k">if</span> (writeIdx != <span class="n">0</span>)        tsRing[writeIdx] = tsRing[lastIdx] + <span class="n">100</span>;
+    <span class="k">else</span> <span class="k">if</span> (wrapped &lt; lastIdx) tsRing[<span class="n">0</span>] = tsRing[lastIdx] + <span class="n">100</span>;  <span class="c">// 刚环绕，继续栅格</span>
+    <span class="k">else</span>                     tsRing[<span class="n">0</span>] = <span class="n">0</span>;                    <span class="c">// 真·首样本 t=0</span>
+}</code></pre>
+      </div>
+      <p>
+        与二进制中的告警串逐字吻合：
+      </p>
+      <div class="code">
+<pre><code><span class="s">"RTT channel is set up to provide no timestamp!"</span>
+<span class="s">"Without timestamp J-Scope will assume that data points are uniformly distributed with a gap of 100 [us] each."</span></code></pre>
+      </div>
+      <p>
+        <strong>时间基是纯 uint32 µs</strong>：计数在 2³² µs ≈ <strong>71.6 分钟</strong>后回绕。
+        J-Scope 不做任何展开/续接处理 —— 长时间记录会出现时间戳回绕（波形横轴跳变）。这是重实现时必须修的坑。
+      </p>
+
+      <h3>6.3 统计量与采样率</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:150px">量</th><th>计算（FUN_140042ac0 / FUN_140041710 / FUN_14003ead0）</th><th>备注</th></tr></thead>
+          <tbody>
+            <tr><td>yMax / yMin</td><td>逐样本与 <code>-DBL_MAX / +DBL_MAX</code> 初值比较，按变量 TypeID 分派到具体类型转换（float/double/有符号/无符号 8·16·32 位）</td><td>浮点分支带 NaN 保护（<code>x != x</code> 则不更新）</td></tr>
+            <tr><td>yAvg（Moving average）</td><td><code>avg = ((writeIdx-1)*avg + x) / writeIdx</code> —— 用<strong>环索引当样本计数</strong></td><td>⚠ 环绕后或触发重置后 <code>writeIdx</code> 归零，平均值会"重新开始"——J-Scope 的既有行为</td></tr>
+            <tr><td>缓冲填充率</td><td><code>FUN_14003ead0</code>：<code>wrapped &gt; lastIdx ? 100.0 : lastIdx*100/0x800000</code></td><td>状态栏 <code>Buffer: … (0x800000 samples), N%</code></td></tr>
+            <tr><td>采样率</td><td><code>FUN_140041710</code>：<code>rate = numSamples * 10<sup>7</sup> / elapsed</code>，<code>elapsed = FUN_140043970()</code>（QPC 差值 ÷ (freq/1e6) = <strong>µs</strong>）</td><td>每 10 ms 窗口刷新一次；≥1000 显示 <code>kSamples/s</code>，否则 <code>Samples/s</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <p><strong>一处需要实测的量纲疑点：</strong>按上面的单位，<code>numSamples × 10⁷ / µs</code> 比真实样本率
+        <code>numSamples × 10⁶ / µs</code> <strong>大 10 倍</strong>。两种可能：① <code>FUN_140043970</code> 实际返回的是 100 ns 单位（则该式为真值）；
+        ② 这确实是 J-Scope 的一个显示 bug。静态分析无法判定 —— 挂上 J-Link、用已知周期的 HSS 跑一次、对照真实采样率即可确认。
+        <span class="badge b-unk">未知</span></p>
+      </div>
+
+      <h3>6.4 内存代价：J-Scope 最该被改进的地方</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:150px">变量数</th><th>数据环</th><th>+ 时间戳环</th><th>合计常驻</th><th>若按类型紧凑存储（float32+uint8+int16 混选）</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td class="m">64 MB</td><td class="m">32 MB</td><td class="m">96 MB</td><td class="m">~12 MB</td></tr>
+            <tr><td>4</td><td class="m">256 MB</td><td class="m">32 MB</td><td class="m">288 MB</td><td class="m">~40 MB</td></tr>
+            <tr><td>8</td><td class="m">512 MB</td><td class="m">32 MB</td><td class="m">544 MB</td><td class="m">~76 MB</td></tr>
+            <tr><td>16</td><td class="m">1 GB</td><td class="m">32 MB</td><td class="m">1.03 GB</td><td class="m">~148 MB</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        固定 8 B 槽位的唯一好处是<strong>索引 O(1) 且与类型无关</strong>（<code>dataBuf + idx*8</code> 一条指令算出任何类型的位置），
+        代价是 4 字节变量浪费 50%、1 字节变量浪费 87.5%。J-Scope 选择"用内存换代码简单"，
+        因为它是 64 位桌面程序、且深度固定 8 M 样本。
+        <strong>OpenScope 若要支持长时间记录 / 网络回传，应按类型宽度紧凑存储（或分段落盘）</strong> —— 这是本次逆向里最明确的一条"别抄"。
+      </p>
+    </section>

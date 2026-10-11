@@ -1,0 +1,63 @@
+<section id="s4">
+      <h2><span class="sec-n">04</span>连接序列</h2>
+      <p class="lead">函数 <code>FUN_1400419f0</code>。这是完整且有序的建链配方。</p>
+      <div class="code">
+        <p class="cap">建链 · 按序执行</p>
+<pre><code><span class="n">1)</span> <span class="k">if</span> ((TIF == 0 <span class="c">/*JTAG*/</span> || TIF == 7) &amp;&amp; JTAG_IRPre &gt;= 0)
+       JLINKARM_ConfigJTAG(JTAG_IRPre)
+
+<span class="n">2)</span> JLINKARM_ExecCommand(<span class="n">"SetSkipInitECCRAMOnConnect = 1"</span>, NULL, 0)
+
+<span class="n">3)</span> <span class="k">if</span> (设备名为空 || 设备查找失败):
+       idx = JLINKARM_DEVICE_SelectDialog(parent, 0, 0)   <span class="c">// 弹窗选型</span>
+       JLINKARM_DEVICE_GetInfo(idx, &amp;info)                <span class="c">// 0x978 B 结构</span>
+   <span class="k">else</span>:
+       JLINKARM_ExecCommand(<span class="n">"device = %s"</span>, errbuf, 0x400)
+
+<span class="n">4)</span> 若有脚本: JLINKARM_ExecCommand(<span class="n">"ScriptFile = %s"</span>, errbuf, 0x400)
+
+<span class="n">5)</span> JLINKARM_TIF_Select(TIF)
+<span class="n">6)</span> JLINKARM_SetSpeed(speed_khz)
+
+<span class="n">7)</span> 若命令行给了 -RTTSearchRanges:
+       JLINK_ExecCommand(<span class="n">"SetRTTSearchRanges &lt;addr&gt;,&lt;size&gt;[,...]"</span>, 0, 0)
+
+<span class="n">8)</span> rc = JLINKARM_Connect();   rc &lt; 0 → 失败</code></pre>
+      </div>
+
+      <h3>HSS 能力探测与时间基</h3>
+      <div class="code">
+<pre><code><span class="k">if</span> (mode == HSS) {
+    <span class="k">if</span> (!JLINKARM_EMU_HasCapEx(<span class="n">0x35</span>)) {          <span class="c">// 0x35 = HSS 能力位</span>
+        period_us = <span class="n">20000</span>;                        <span class="c">// 回退 20 ms 轮询</span>
+    } <span class="k">else</span> {
+        <span class="k">if</span> (JLINKARM_GetDLLVersion() &gt; <span class="n">0xc79b</span>) {   <span class="c">// DLL 版本门限 [推断]</span>
+            JLINK_HSS_GetCaps(&amp;caps);
+            TimeResUs = <span class="n">1000000</span> / caps.field_at_4;
+        } <span class="k">else</span> {
+            period_us = <span class="n">10</span>;
+        }
+    }
+}</code></pre>
+      </div>
+
+      <div class="callout">
+        <p><span class="badge b-inf">推断</span> <code>caps.field_at_4</code> 应为 HSS 时间戳频率（Hz），
+        故 <code>1e6 / freq = µs/tick</code>。若它是「ns/tick」，此式量纲不符。
+        <strong>这是重实现时最需要实测确认的一处。</strong></p>
+      </div>
+
+      <div class="callout key">
+        <p><strong>重要修正</strong> <span class="badge b-obs">观测</span> ——
+        该全局（<code>_DAT_14285da90</code>）经 Ghidra 全量交叉引用确认
+        <strong>只有 2 处写入、0 处读取</strong>（写入点：caps 换算、以及一个纯 setter <code>FUN_14003f400</code>）。即：</p>
+        <p>· 本版本中「时间分辨率」是<strong>写后即弃的残留状态</strong>；<br>
+           · 更关键的是 —— <strong>样本里的时间戳是原样存储的</strong>
+           （<code>FUN_14003ff40</code> 直接 <code>tsRing[i] = sample[0]</code>，无任何缩放）。</p>
+        <p><strong>结论：HSS 探针给出的时间戳本身就是 µs，主机侧无需换算。</strong>
+        这大幅简化了 OpenScope 的重实现。</p>
+      </div>
+    </section>
+
+    <!-- ══ 05 ══ -->
+    

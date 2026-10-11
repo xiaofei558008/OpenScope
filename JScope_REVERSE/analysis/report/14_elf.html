@@ -1,0 +1,637 @@
+    <!-- ══ 14 ══ -->
+    <section id="s14">
+      <h2><span class="sec-n">14</span>ELF/DWARF 与符号模型</h2>
+      <p><strong>对象</strong>：<code>C:\Program Files\SEGGER\JLink_V966\JScope.exe</code>（9.66，PE32+ x64，基址 <code>0x140000000</code>，Qt4，静态链接 DWARF 解析库） <strong>资料</strong>：<code>dumps/alldecomp/chunk_000..008.c</code>（2001 函数反编译）、<code>dumps/globals.txt</code>、<code>dumps/defined_strings.txt</code>、<code>dumps/jobs.txt</code>、<code>JSCOPE_ANALYSIS.md</code> <strong>方法</strong>：纯静态。除读取 exe 原始字节（定位 <code>.rdata</code> 常量表，只读）外未运行任何工具链、未修改 <code>dumps/</code>。</p>
+      <h3>0. 证据分级</h3>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>标记</th>
+<th>含义</th>
+</tr></thead>
+<tbody>
+<tr><td><strong><span class="badge b-obs">观测</span></strong></td><td>反编译代码/原始字节/字符串直接可见</td></tr>
+<tr><td><strong><span class="badge b-der">推导</span></strong></td><td>由观测经确定性推理得到（偏移、语义）</td></tr>
+<tr><td><strong><span class="badge b-inf">推断</span></strong></td><td>合理但未完全证实</td></tr>
+<tr><td><strong><span class="badge b-unk">未知</span></strong></td><td>未解决</td></tr>
+</tbody>
+</table>
+</div>
+      <p>地址均为 VA。行号 <code>chunk_NNN.c:NNNN</code> 可直接定位。</p>
+      <hr>
+      <h3>1. ELF 载入流程</h3>
+      <h4>1.1 作业表：类型号 ↔ 执行体 ↔ 显示名 <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_140043d20</code>（带守卫分配器）的作业对象都带一个"类型号"。该类型号是<strong>命令分派表的 1 基下标</strong>，表位于 <code>.rdata 0x140073ef0</code>（每项 16 字节 <code>{worker_fn, name}</code>，实测原始字节）：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>idx(=type-1)</th>
+<th>type</th>
+<th>worker</th>
+<th>名称串</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td>1</td><td><code>FUN_14003cc50</code></td><td><code>Initialize application</code></td></tr>
+<tr><td>1</td><td>2</td><td><code>FUN_14003ce50</code></td><td><code>Exit application</code></td></tr>
+<tr><td>2</td><td>3</td><td><code>FUN_14003cea0</code></td><td><code>Create project</code></td></tr>
+<tr><td>3</td><td>4</td><td><code>FUN_14003cec0</code></td><td><code>Initialize Project Settings</code></td></tr>
+<tr><td>4</td><td><strong>5</strong></td><td><strong><code>FUN_14003d210</code></strong></td><td><strong><code>Parse ELF File</code></strong></td></tr>
+<tr><td>5</td><td>6</td><td><code>FUN_14003d5c0</code></td><td><code>Start reading data</code></td></tr>
+<tr><td>6</td><td>7</td><td><code>FUN_14003d7c0</code></td><td><code>Pause reading data</code></td></tr>
+<tr><td>7</td><td>8</td><td><code>FUN_14003d7d0</code></td><td><code>Stop reading data</code></td></tr>
+<tr><td>8</td><td>9</td><td><code>FUN_14003d930</code></td><td><code>Save project</code></td></tr>
+<tr><td>9</td><td>10</td><td><code>FUN_14003d940</code></td><td><code>Save project as</code></td></tr>
+<tr><td>10</td><td>11</td><td><code>FUN_14003d950</code></td><td><code>Open project file</code></td></tr>
+<tr><td>11</td><td>12</td><td><code>FUN_14003d9a0</code></td><td><code>Import Raw</code></td></tr>
+<tr><td>12</td><td><strong>13</strong></td><td><strong><code>FUN_14003d9b0</code></strong></td><td><strong><code>Check modified ELF</code></strong></td></tr>
+<tr><td>13</td><td>14</td><td><code>FUN_14003db70</code></td><td><code>Update project settings</code></td></tr>
+<tr><td>14</td><td>15</td><td><code>FUN_14003dc70</code></td><td><code>Set AppStart action</code></td></tr>
+</tbody>
+</table>
+</div>
+      <p><strong>推论</strong>：作业类型 = 表下标+1 ⇒ <em>Parse ELF File</em> = <strong>type 5</strong>，<em>Check modified ELF</em> = <strong>type 13</strong>。（<code>FUN_14003e4e0</code> 写 <code>*(undefined4 *)(puVar7 + 3) = 4</code>、<code>FUN_14003e0b0</code> 写 <code>= 0xc</code> 是"0 基下标"，两者一致。）</p>
+      <p>作业对象另两个名字（<code>APP: &lt;ParseELFFile&gt;</code> @0x1400750b8、<code>APP: &lt;CheckELFModifications&gt; Job</code> @0x140075170）是<strong>堆分配标签</strong>，传给 <code>FUN_140043d20(size, tag)</code>，不是显示名。 <span class="badge b-obs">观测</span></p>
+      <h4>1.2 ParseELFFile</h4>
+      <ul>
+<li><strong>入队</strong>：<code>FUN_14003e4e0(jobParam, flag)</code> — <code>chunk_005.c:461</code> ``<code> puVar7 = FUN_140043d20(0x128, "APP: &lt;ParseELFFile&gt;"); ... 把调用方的 0x104 字节参数结构拷贝到 job+0x20 ... *(undefined1 *)((longlong)puVar7 + 0x124) = param_2;   // "reparse &amp; match" 标志 *puVar7 = FUN_140042f30;  *(undefined4 *)(puVar7 + 3) = 4;   // 类型 4 → (0 基) FUN_140039100(puVar7);                                    // 入队 </code>`<code> 参数结构 = 工程设置 </code>config+0x80<code> 起的 **ElfFile 路径(0x104 字节)**（</code>FUN_14004d6c0<code> 传 </code>lVar1 + 0x80`）。 <span class="badge b-obs">观测</span></li>
+<li><strong>执行</strong>：<code>FUN_14003d210(job)</code> — <code>chunk_004.c:7274</code>，943 字节。流程： ``<code> FUN_14003f830("Parsing elf file"); lVar3 = FUN_140002f60(lVar5 + 0x20, 1);          // 打开并解析 ELF（见 1.3） if (lVar3 == 0) FUN_14003f110("Could not open ELF file!"); uVar1 = FUN_140002950(lVar3);                    // ELF 符号总数 uVar4 = FUN_14004e1f0(...,"Parsing ELF file ...",uVar1);   // 进度框 for (i = 0; i &lt; uVar1; i++) {                    // 逐个符号 lVar5 = FUN_140002920(lVar3, i);             // 取第 i 个符号 puVar6 = FUN_140002da0(local_318, lVar5);    // 取该符号的信息块（0x108 字节） if (local_3b8 != 0) {                        // 该符号有源码归属 name = FUN_140002cf0(lVar5);             // 所属源文件名 if (name 与上一个不同) {                  // 新建"文件节点" uVar7 = FUN_140040ab0(0);            // ★ 分配 0x3F0 符号记录 FUN_140027140(uVar7 + 0x210, name, 0x104);   // +0x210 = File *(undefined1 *)(uVar7 + 0x340) = 1;          // +0x340 = 文件根标记 FUN_14003fc40(uVar7);                        // 挂到全局树根 DAT_14286d3b0 uVar10 = *(ulonglong *)(uVar7 + 0x3d8);      // 该文件节点的首子 } else { FUN_14003fee0(uVar10); uVar10 = ...→+0x3e0; }  // 同文件：追加兄弟 FUN_1400404c0(lVar3, lVar5, uVar10, uVar7);  // 递归遍历 DWARF DIE 建树 } } FUN_14004e1f0(...); FUN_1400028c0(lVar3);        // 关文件 DAT_14286d3b0 = uVar11;                          // ★ 发布新符号树 hObject = FUN_140043750(lVar5 + 0x20, 0xd);      // 重新打开 ELF FUN_140043660(hObject, 0, &amp;local_270);           // 读"最后写时间" DAT_14285d9f8/da00/da04 = 时间戳;                 // ★ 存档供 Check 用 if (*(char *)(lVar5 + 0x124) != '\0') {          // 若是"重解析" FUN_14004de60(...); FUN_140040a10();         // 旧新符号按身份配对，拷显示选项 FUN_14003e880();                             // 清空已选列表 DAT_14286d3b8 = DAT_14285da08;               // 换成"重匹配"出来的列表 DAT_14085d1e8 = DAT_14285d9dc; FUN_140040bd0(local_3e8);                    // 释放旧树 } </code>``</li>
+<li><strong>建树递归体</strong> <code>FUN_1400404c0</code> — <code>chunk_005.c:2415</code>，见 §4/§5。</li>
+</ul>
+      <h4>1.3 文件读取方式：一次性全量读入（非 mmap） <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_140002f60(path, dumpFlag)</code> — <code>chunk_000.c:1794</code>：</p>
+      <div class="code">
+<pre><code>iVar1 = FUN_1400078f0(0, param_2, param_3, param_1);   // elf_begin（先探路）
+if (iVar1 == -1) { FUN_14000a770(0x45); ... }          // 太多个 ELF 已打开
+_File = fopen(param_1, "rb");
+if (_File == NULL) { FUN_14000a770(0x46); ... }        // 打不开
+fseek(_File,0,2); lVar2 = ftell(_File); fseek(_File,0,0);   // 取文件长度
+if (_Count &lt; 1) { FUN_14000a770(0x47); ... }           // 长度异常
+puVar4 = FUN_140019ae0(0x498);                         // 解析器上下文 0x498 字节
+*(size_t *)(puVar4 + 0x28) = _Count;                   // 记录文件长度
+_DstBuf = FUN_140019ae0(lVar2);                        // ★ 分配整个文件大小
+sVar5 = fread(_DstBuf, 1, _Count, _File);              // ★ 一次性读入内存
+if (sVar5 == _Count) { fclose(_File); ...  }           // 失败 → FUN_14000a770(0x49) "error reading file data"</code></pre>
+</div>
+      <p>随后 <strong>4 步解析</strong>（任一返回负即失败）：</p>
+      <div class="code">
+<pre><code>FUN_14000c2c0(puVar4)   // ELF 头 → 内部段表
+FUN_14000cea0(puVar4)   // .debug_types
+FUN_14000ca30(puVar4)   // .debug_info（CU 主解析）
+FUN_14000bf80(puVar4)   // 源码行信息</code></pre>
+</div>
+      <p>时间统计串与之对应（<code>%s</code> 归属函数 <code>FUN_14000aaf0</code>）：<code>parsed debug types section in ms: %ld</code>、<code>parsed debug info section in ms: %ld</code>、<code>parsed source line info in ms: %ld</code>、<code>parsed macro info in ms: %ld</code>、<code>parsed call frame info in ms: %ld</code>。 <span class="badge b-obs">观测</span></p>
+      <p><strong>同时打开上限 2 个 ELF</strong>：注册表 <code>DAT_140097c00</code> 只有 2 槽（<code>FUN_140002f80</code> 循环到 <code>0x140097c10</code>），对应错误 <code>0x45 a maximum number of ELF files are already open</code>。 <span class="badge b-obs">观测</span></p>
+      <p><strong>ELF32/ELF64 都支持</strong>：<code>FUN_14000c2c0</code> 按 <code>*(char *)(ehdr+4) == 2</code> 分派 64 位（<code>FUN_14000c520</code>）/ 32 位（<code>FUN_14000c340</code>）段表展开。 <span class="badge b-obs">观测</span></p>
+      <h4>1.4 头部校验与错误串 <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_14000dfc0</code> — <code>chunk_001.c</code> 内，逐项校验 <code>e_ident</code>：</p>
+      <div class="code">
+<pre><code>if (*piVar3 != 0x464c457f) { FUN_14000a770(0x3f); return -1; }  // "\x7fELF"
+iVar2 = FUN_140007950(); if (iVar2 != 2) { FUN_14000a770(0x40); ... }  // e_type != ET_EXEC
+iVar2 = FUN_140007860(); if (iVar2 == 0) { FUN_14000a770(0x41); ... }  // EI_CLASS == 0
+iVar2 = FUN_140005310(); if (iVar2 == 2) { FUN_14000a770(0x42); ... }  // EI_DATA == 0
+cVar1 = FUN_1400078d0(); if (cVar1 != '\x01') { FUN_14000a770(0x43); ... }  // EI_VERSION != EV_CURRENT(1)
+iVar2 = FUN_140007980(); if (iVar2 == 0) { FUN_14000a770(0x44); ... }  // e_version == 0</code></pre>
+</div>
+      <p>错误码 → 文本表 <code>FUN_140007c50</code>（<code>chunk_000.c:6113</code>，<code>switch</code> 0x2B..0x4A），<strong>逐字</strong>：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>码</th>
+<th>文本</th>
+</tr></thead>
+<tbody>
+<tr><td>0x3F</td><td>file not tagged with ELF magic number</td></tr>
+<tr><td>0x40</td><td>not an executable ELF file</td></tr>
+<tr><td>0x41</td><td>file class is ELF_CLASS_NONE</td></tr>
+<tr><td>0x42</td><td>data encoding is ELF_DATA_NONE</td></tr>
+<tr><td>0x43</td><td>header version number is not EV_CURRENT</td></tr>
+<tr><td>0x44</td><td>unsupported file version number</td></tr>
+<tr><td>0x45</td><td>a maximum number of ELF files are already open</td></tr>
+<tr><td>0x46</td><td>file could not be opened for reading</td></tr>
+<tr><td>0x47</td><td>unexpected file size</td></tr>
+<tr><td>0x48</td><td>parser is out of memory</td></tr>
+<tr><td>0x49</td><td>error reading file data</td></tr>
+<tr><td>0x4A</td><td>failed to initialize libdwarf library</td></tr>
+<tr><td>0x35</td><td>compilation unit with DWARF5 debug information detected - DWARF5 is not yet fully supported</td></tr>
+<tr><td>0x3E</td><td>a debug information entry (DIE) at a specific data section offset could not be parsed/generated</td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p><strong>重要</strong>：<strong><code>e_type</code> 必须是 <code>ET_EXEC(2)</code></strong> —— 可重定位目标文件（<code>ET_REL=1</code>，即 <code>.o</code>）与共享库（<code>ET_DYN=3</code>）都会被拒（"not an executable ELF file"）。<strong>必须是可执行 ELF</strong>，这是 OpenScope 必须照抄的一条硬性约束。 <span class="badge b-obs">观测</span></p>
+</div>
+      <p>J-Scope 层自己的两条：<code>Could not open ELF file!</code>（<code>FUN_14003f110</code> @<code>FUN_14003d210</code>）、文件对话框 <code>Output files (*.elf *.out *.obj *.axf);;All files (*.*)</code> / <code>No ELF file selected.</code>。 <span class="badge b-obs">观测</span></p>
+      <h4>1.5 CheckELFModifications：<strong>只比时间戳，不重新解析</strong> <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_14003d9b0</code> — <code>chunk_004.c:7622</code>，433 字节（type 13 的 worker）：</p>
+      <div class="code">
+<pre><code>lVar3 = FUN_140043d10(0x5bc); FUN_14004e9c0(lVar3);   // 取当前工程设置
+iVar1 = FUN_14004ea40();
+if (iVar1 != 0 &amp;&amp;
+    ((*(char *)(lVar3+0x5a4) != 1 || *(char *)(lVar3+0x5a6) != 0) &amp;&amp;   // 跳过 RTT-VarFormat 模式
+     (DAT_14286d3b0 != 0))) {                                           // 且已有符号树
+  hObject = FUN_140043750(lVar3 + 0x80, 0xd);        // 打开 ElfFile 路径
+  if (hObject == INVALID) {
+      if (GetLastError() == 2)                       // ERROR_FILE_NOT_FOUND
+          FUN_140028380(..., "The elf file at\n%s\nwas deleted or moved to a different location.\n", path);
+      DAT_14286d378 = 0; return;                     // ★ 不重解析
+  }
+  iVar1 = FUN_140043660(hObject, 0, &amp;local_238);     // ★ 只读"最后写时间"
+  if (iVar1 == 0 &amp;&amp; (时间 != DAT_14285d9f8/da00/da04)) {
+      FUN_140028380(..., "The elf file at\n%s\nwas modified.\n"
+                         "Should J-Scope reparse the elf file and try to match the selected symbols?", path);
+      iVar1 = FUN_14003f4f0(msg, "Reparse &amp; Match symbols", "Reparse &amp; Clear symbols", 0);
+      if (iVar1 == 1) FUN_14003e880();               // 选"Match"→清空旧选择
+      DAT_14286d379 = 1;
+      FUN_14003e4e0(lVar3 + 0x80, 1);                // ★ 才入队 ParseELFFile（flag=1）
+  }
+}</code></pre>
+</div>
+      <p><strong>结论</strong>：<code>CheckELFModifications</code> 是<strong>纯时间戳比对</strong>（<code>GetFileTime</code> → <code>FileTimeToSystemTime</code>，<code>FUN_140043660</code>）， ① 文件不存在 → 只弹提示，<strong>不</strong>重解析； ② 时间戳变了 → 弹 "Reparse &amp; Match symbols / Reparse &amp; Clear symbols" 二选一，然后入队一个 <strong>完整</strong> 的 <code>ParseELFFile</code>（flag=1 触发 §1.2 尾部的配对/清空逻辑）。 配对 = <code>FUN_140040a10</code>（按 <code>FUN_1400429c0</code> 的身份四元组把旧符号的显示选项拷到新符号）；清空 = <code>FUN_14003e880</code>。 <strong>触发时机</strong>：<code>FUN_14004d7e0</code>（<code>chunk_006.c:4231</code>，随 GUI 定时/刷新路径调用，且 <code>DAT_14286d379/378</code> 为 0 时）与菜单项 <code>Check modified ELF</code>（<code>@0x140073fb8</code>）。 <span class="badge b-obs">观测</span></p>
+      <hr>
+      <h3>2. libdwarf 使用</h3>
+      <h4>2.1 库身份</h4>
+      <p>静态链接的 C 语言 ELF+DWARF 解析库，对外只暴露一张<strong>门面</strong>（<code>FUN_1400028c0</code> … <code>FUN_140002fb0</code>，地址 0x140002xxx），内部是自带的 libelf 层（错误串 <code>file not tagged with ELF magic number</code> 等属 libelf <code>elf_errmsg</code> 家族）+ libdwarf API。 [观测/推断]</p>
+      <p>libdwarf API 名（静态字符串，<code>.rdata</code> 0x140060e00 起）： <code>dwarf_attrval_flag</code>、<code>dwarf_attrval_string</code>、<code>dwarf_attrval_signed</code>、<code>dwarf_attrval_unsigned</code>、<code>dwarf_next_cu_header_c</code>、<code>dwarf_child_b</code>、<code>dwarf_siblingof_b</code>、<code>_dwarf_search_die_within_cu</code>、<code>dwarf_offdie_b</code>、<code>dwarf_tag</code>、<code>dwarf_get_address_size</code>、<code>dwarf_formaddr</code>、<code>dwarf_formflag</code>、<code>dwarf_formudata</code>、<code>dwarf_formsdata</code>、<code>dwarf_formexprloc</code>、<code>dwarf_srclines</code>、<code>dwarf_srcfiles</code>、<code>dwarf_loclist_n</code>、<code>dwarf_get_macro_details</code>、<code>dwarf_get_ranges</code>、<code>dwarf_get_str</code>、<code>_dwarf_abbrev_parse</code> … <span class="badge b-obs">观测</span></p>
+      <h4>2.2 会被读取的 DWARF 段 <span class="badge b-obs">观测</span></h4>
+      <p>段名常量表在 <code>.rdata</code>（<code>defined_strings.txt</code> 34–57 行）：</p>
+      <div class="code">
+<pre><code>.debug_info .debug_types .debug_loc .debug_str .debug_abbrev .debug_frame .debug_line
+.debug_macinfo .debug_macro .debug_ranges .debug_aranges
+.eh_frame .symtab .strtab .symtab_shndx .note .note.iar
+.debug_loclists .debug_rnglists .debug_line_str .debug_names .debug_addr .debug_str_offsets</code></pre>
+</div>
+      <p><strong>J-Scope 实际走的</strong>（由 §1.3 的 4 步 + 统计串反推）： <code>.debug_info</code>（主）、<code>.debug_types</code>（次）、<code>.debug_abbrev</code>、<code>.debug_str</code>、<code>.debug_line</code>、<code>.symtab/.strtab</code>，可选 <code>.debug_macinfo/.debug_macro</code>、<code>.debug_frame/.eh_frame</code>、<code>.debug_loc/.debug_ranges</code>（位置表达式）。DWARF5 的新段名（<code>.debug_loclists</code>/<code>.debug_rnglists</code>/<code>.debug_line_str</code>/<code>.debug_names</code>/<code>.debug_addr</code>/<code>.debug_str_offsets</code>）在表内但功能不完整。 [观测/推断]</p>
+      <h4>2.3 DWARF 版本</h4>
+      <ul>
+<li>DWARF2/3/4：完整（<code>_ParseCFI_V4_Members</code>、<code>dwarf_next_cu_header_c</code>）。</li>
+<li><strong>DWARF5：能识别但明确不支持</strong> —— 错误 0x35 <code>compilation unit with DWARF5 debug information detected - DWARF5 is not yet fully supported</code>。 <span class="badge b-obs">观测</span></li>
+<li>自报统计（<code>FUN_14000aaf0</code> 的 dump，仅在 <code>FUN_140002f60(...,1)</code> 时执行）：<code>%8u ELF symbols</code> / <code>%8u DWARF symbols</code> / <code>%8lld Funcs</code> / <code>%8lld InlineFuncs</code> / <code>%8lld Global variables</code> / <code>%8lld Types</code> / <code>%8u Members</code> / <code>%8u Local variables</code> / <code>%8lld Compilation units</code> / <code>%8lld SrcLines</code> / <code>%8lld Namespaces</code> / <code>%8lld Namespace extensions</code> / <code>%8lld Macros</code> / <code>%8u FDEs</code> / <code>%8u CIEs</code> / <code>Total init time: %ld ms</code>。 <span class="badge b-obs">观测</span></li>
+<li>地址信息完整性校验：<code>Symbol at address %llX: did not pass allocation size sanity check</code>（<code>FUN_14000e080</code>）。 <span class="badge b-obs">观测</span></li>
+</ul>
+      <h4>2.4 符号→DIE 门面（<code>FUN_140002xxx</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>门面</th>
+<th>内层</th>
+<th>语义</th>
+</tr></thead>
+<tbody>
+<tr><td><code>FUN_140002f60(path,1)</code></td><td><code>FUN_1400078f0</code></td><td>打开 ELF 并完成 4 步解析，返回 0x498 上下文</td></tr>
+<tr><td><code>FUN_140002950</code></td><td><code>FUN_140007a10</code>→<code>FUN_140008f40(...,0x34)</code></td><td>ELF 符号表项数</td></tr>
+<tr><td><code>FUN_140002920(i)</code></td><td><code>FUN_140007420(...,&amp;LAB_140007a00,i)</code></td><td>第 i 个 ELF 符号句柄</td></tr>
+<tr><td><code>FUN_140002da0</code></td><td><code>FUN_1400088e0</code></td><td>符号信息块（0x88 字节：含名字、地址、大小、源文件…）</td></tr>
+<tr><td><code>FUN_140002c00</code></td><td><code>FUN_140005560</code>/<code>FUN_14000b830</code></td><td><strong>类型信息块</strong>（含 type_id、维度数、bit_size、bit_offset…）</td></tr>
+<tr><td><code>FUN_140002d20(die,1)</code></td><td><code>FUN_1400072b0(FUN_140005380,…)</code></td><td><strong>DIE tag</strong>（标准 <code>DW_TAG_*</code>：实测 0x2E=subprogram、0x13=structure_type、0x17=union_type、0x01=array_type、0x02=class_type）</td></tr>
+<tr><td><code>FUN_140002d40</code></td><td><code>FUN_1400070e0</code>→<code>FUN_140002fb0</code></td><td><strong>类型名文本</strong>（2578 字节的拼接器，产出 <code>float</code>/<code>double</code>/<code>_Bool</code> 等）</td></tr>
+<tr><td><code>FUN_140002cf0(die)</code></td><td><code>FUN_1400065c0(...,0x58)</code></td><td>所属源文件名</td></tr>
+<tr><td><code>FUN_140002eb0</code></td><td><code>FUN_140006d80</code></td><td>有符号标志（→ <code>+0x330 IsSigned</code>）</td></tr>
+<tr><td><code>FUN_140002cd0</code> / <code>FUN_140002cb0</code></td><td><code>FUN_140005dc0</code> / <code>FUN_140005ab0</code></td><td><strong>bit_size</strong> / <strong>bit_offset</strong>（位域）</td></tr>
+<tr><td><code>FUN_140002e80</code></td><td><code>FUN_140006b10</code></td><td>成员在父结构中的字节偏移（<code>DW_AT_data_member_location</code>）</td></tr>
+<tr><td><code>FUN_140002e50</code>/<code>FUN_140002e30(hi)</code></td><td><code>FUN_140006a40</code> / <code>FUN_1400072b0(FUN_140006a00,…)</code></td><td>子 DIE 数 / 第 i 个子 DIE</td></tr>
+<tr><td><code>FUN_140002d80</code>/<code>FUN_140002d60(hi)</code></td><td><code>FUN_140007aa0</code> / <code>FUN_1400072b0(FUN_140007a60,…)</code></td><td>数组维度数 / 第 i 个维度</td></tr>
+<tr><td><code>FUN_1400028c0</code></td><td><code>FUN_140003a30</code>/<code>FUN_140003a70</code></td><td>关闭</td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p>注意：<strong>树里的"符号"来自 ELF 符号表（<code>FUN_140002950/2920</code>），不是直接遍历 CU 的 DIE</strong>；DWARF 只用于给这些符号补类型/成员/数组维度。见 §4。 <span class="badge b-obs">观测</span></p>
+</div>
+      <hr>
+      <h3>3. TypeID 类型系统（1 … 14）</h3>
+      <p><code>TypeID</code> 存于符号记录 <code>+0x314</code>。全程序只有 <strong>3 个产出点</strong>、<strong>1 个外来入口</strong>。</p>
+      <h4>3.1 产出点 A：ELF/DWARF 分类器 <code>FUN_140040050</code> <span class="badge b-obs">观测</span></h4>
+      <p><code>chunk_005.c:2269</code>，在 <code>FUN_1400404c0</code> 建完节点后调用。<strong>逐字逻辑</strong>：</p>
+      <div class="code">
+<pre><code>if (*(longlong *)(param_1 + 0x3d8) != 0) {            // 有子节点 = 聚合体
+    *(undefined4 *)(param_1 + 0x314) = 0; return; }   // TypeID 0，且不给勾选框
+*(undefined1 *)(param_1 + 0x35f) = 1;                 // 叶 → 显示勾选框
+if (*(int *)(param_1 + 0x314) == 0xe) return;         // 位域已定，保持
+uVar2 = FUN_1400423a0(param_1 + 0x110);               // 类型名去掉尾部空格
+/* --- bool --- */
+if (size==1 &amp;&amp; (strcmp(type,"")==0 || strcmp(type,"_Bool")==0))
+      { MaxValue(+0x3B0)=1.0; TypeID=5; IsSigned(+0x330)=0; return; }
+/* --- 浮点按名字 ---- */
+if (size==4 &amp;&amp; strcmp(type,"float")==0)  { Max=0x47efffffe0000000 /*FLT_MAX*/; TypeID=1; IsSigned=1; return; }
+if (size==8 &amp;&amp; strcmp(type,"double")==0) { Max=0x7fefffffffffffff /*DBL_MAX*/; TypeID=2; IsSigned=1; return; }
+/* --- 其余按 [大小 × 有符号] 二维表 --- */
+iVar1 = *(int *)(param_1 + 0x31c);                    // Size
+if (*(char *)(param_1 + 0x330) == '\0') {             // IsSigned == 0 ⇒ 无符号
+    size 1 → TypeID=6, Max=255.0
+    size 2 → TypeID=7, Max=65535.0
+    size 4 → TypeID=8, Max=4294967295.0
+    size 8 → TypeID=9, Max=2^64
+} else {                                              // IsSigned != 0 ⇒ 有符号
+    size 1 → TypeID=10, Max=127.0
+    size 2 → TypeID=11, Max=32767.0
+    size 4 → TypeID=12, Max=2147483647.0
+    size 8 → TypeID=13, Max=2^63
+}
+*(undefined4 *)(param_1 + 0x314) = 0;                 // 其它（含 size=3/16 等）→ 0</code></pre>
+</div>
+      <p><strong>判定依据表</strong>：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>TypeID</th>
+<th>语义</th>
+<th>判定依据（实测）</th>
+<th>消费（绘图/取值/文本/表格）</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td>非叶/未知</td><td>有子节点，或大小∉{1,2,4,8} 且非 float/double/_Bool</td><td>树中无勾选框、不绘图</td></tr>
+<tr><td>1</td><td>float32</td><td><code>Size==4 &amp;&amp; Type=="float"</code></td><td>✔ <code>FUN_140042ac0:case 1</code>、<code>FUN_14004a1b0:1</code>、<code>FUN_140056f60:1</code></td></tr>
+<tr><td>2</td><td>float64</td><td><code>Size==8 &amp;&amp; Type=="double"</code></td><td>✔</td></tr>
+<tr><td><strong>3</strong></td><td><strong>无任何产出点</strong>（见 §3.4）</td><td>—</td><td>✘ <code>FUN_140042ac0</code> 无 case；树中禁用</td></tr>
+<tr><td><strong>4</strong></td><td><strong>无任何产出点</strong></td><td>—</td><td>✘ 同上</td></tr>
+<tr><td>5</td><td>bool</td><td><code>Size==1 &amp;&amp; (Type=="" || Type=="_Bool")</code></td><td>✔ 文本 <code>True/False</code></td></tr>
+<tr><td>6/7/8</td><td>uint8/16/32</td><td><code>IsSigned==0</code>，size=1/2/4</td><td>✔</td></tr>
+<tr><td>9</td><td>uint64</td><td><code>IsSigned==0</code>，size=8</td><td>✘ <strong>树中禁用</strong>，无绘图/取值分支</td></tr>
+<tr><td>10/11/12</td><td>int8/16/32</td><td><code>IsSigned!=0</code>，size=1/2/4</td><td>✔</td></tr>
+<tr><td>13</td><td>int64</td><td><code>IsSigned!=0</code>，size=8</td><td>✘ <strong>树中禁用</strong></td></tr>
+<tr><td><strong>14 (0xE)</strong></td><td><strong>位域 bitfield</strong></td><td>见 §3.3</td><td>✔ 有绘图/取值/文本分支（走 <code>FUN_14003eaa0</code>）</td></tr>
+</tbody>
+</table>
+</div>
+      <p><code>+0x330</code> 的语义经 <code>.jscope</code> 读入器<strong>直接证实</strong>：<code>FUN_140044f40</code> 里 <code>FUN_140045250(param_1,"IsSigned",param_2 + 0x330)</code> ⇒ <strong><code>+0x330 = IsSigned</code></strong>。 <span class="badge b-obs">观测</span></p>
+      <h4>3.2 产出点 B：RTT-VarFormat 解析 <code>FUN_14003fc90</code> <span class="badge b-obs">观测</span></h4>
+      <p><code>chunk_005.c:2041</code>。通道名 <code>JScope_&lt;TypeChar&gt;&lt;SizeDigit&gt;…</code>，逐对解析：</p>
+      <div class="code">
+<pre><code>cVar2 = local_148[lVar1];  iVar4 = local_148[lVar1+1]; iVar7 = iVar4 - '0';
+' t' → *(param_1 + 0x5a5) = 1;                       // IsRTTWithTimeStamp
+' b' → iVar5 = (iVar7==1) ? 5 : 0;  fmt = "%d Byte bool RTT Data %d"
+' f' → (iVar7==4) ? 1 : ((iVar7==8) ? 2 : 0);  fmt = "%d Byte float RTT Data %d"
+' u' → '1'→6, '2'→7, 4→8, 8→9;   fmt = "%d Byte unsigned RTT Data %d"
+' i' → '1'→10,'2'→11, 4→12, 8→13; fmt = "%d Byte signed RTT Data %d"
+if (iVar5 != 0) FUN_14003dfa0(iVar7 /*size*/, iVar5 /*TypeID*/, 0, local_128);</code></pre>
+</div>
+      <p><code>FUN_14003dfa0</code> 里：<code>*(undefined4 *)(lVar2 + 0x31c) = size; *(undefined4 *)(lVar2 + 0x314) = TypeID; *(undefined1 *)(lVar2 + 0x330) = 0;</code> ⇒ <strong>RTT 通道名里的类型也进同一套 TypeID</strong>，且 <code>IsSigned</code> 恒为 0（因为 TypeID 已区分有无符号）。注意：<code>f</code> 只有 4/8，<strong>没有 3/4</strong>；<code>u/i</code> 也不产 3/4。 <span class="badge b-obs">观测</span></p>
+      <h4>3.3 <code>case 0xe</code> = 位域（<strong>新发现</strong>）<span class="badge b-obs">观测</span></h4>
+      <p>树/绘图 switch 里出现的 <code>0xE</code>：</p>
+      <div class="code">
+<pre><code>// FUN_140042ac0 (chunk_005.c:4423)
+case 0xe:
+    uVar4 = FUN_14003eaa0(*(float *)param_2, param_1);   // 从样本槽取 raw u32 后抽位
+    dVar7 = (double)uVar4;  ... 参与 min/max/avg 统计 ...</code></pre>
+</div>
+      <div class="code">
+<pre><code>// FUN_14003eaa0 (chunk_005.c:841) —— 唯一的抽取器
+uint FUN_14003eaa0(uint param_1, longlong param_2) {
+  if (param_2 != 0)
+    return (1 &lt;&lt; ((byte)*(undefined4 *)(param_2 + 0x338) &amp; 0x1f)) - 1U
+           &amp; param_1 &gt;&gt; ((byte)*(undefined4 *)(param_2 + 0x33c) &amp; 0x1f);
+  return 0;
+}</code></pre>
+</div>
+      <p>即 <code>value = (raw &gt;&gt; bitOffset) &amp; ((1&lt;&lt;bitWidth)-1)</code>，<code>+0x338 = 位宽</code>，<code>+0x33C = 位偏移</code>。</p>
+      <p><strong>产生点</strong>在 <code>FUN_1400404c0</code>（<code>chunk_005.c:2540-2555</code>）：</p>
+      <div class="code">
+<pre><code>if ((*param_4 &lt; 0x18) &amp;&amp; ((0x880004U &gt;&gt; (*param_4 &amp; 0x1f) &amp; 1) != 0)) {   // 父 tag ∈ {2(class), 0x13(struct), 0x17(union)}
+    iVar5 = FUN_140002e80(param_2);                                       // DW_AT_data_member_location
+    param_3[0xc6] = iVar5 + *(int *)(*(longlong *)(param_3 + 0xfa) + 0x318);   // +0x318 = 成员偏移+父地址
+    if (FUN_140002cd0(param_2) != 0) {                                    // DW_AT_bit_size 非 0
+        param_3[199] = param_4[199];                                      // Size 继承父（存储单元字节数）
+        param_3[0xc5] = 0xe;                                              // ★ TypeID = 14
+        param_3[0xce] = FUN_140002cd0(param_2);                           // ★ +0x338 = bit_size
+        param_3[0xcf] = FUN_140002cb0(param_2);                           // ★ +0x33C = bit_offset
+    }
+}</code></pre>
+</div>
+      <p><strong>结论：TypeID 14 = 位域成员</strong>（<code>DW_TAG_member</code> + <code>DW_AT_bit_size</code>/<code>DW_AT_bit_offset</code>）。16 进制 <code>0x880004</code> 的置位 = bit2 / bit19 / bit23 = tag 2 / 0x13 / 0x17。 [观测/推导]</p>
+      <p>消费点：<code>FUN_140042ac0:case 0xe</code>、<code>FUN_14004a1b0:case 0xe</code>、<code>FUN_140056f60:case 0xe</code>、<code>FUN_14003eaa0</code> 的另外两个调用者 <code>FUN_140053420</code>、<code>FUN_140056f60</code>（表格）。<strong>位域可勾选、可绘图</strong>（与 3/4/9/13 不同）。</p>
+      <h4>3.4 TypeID 3 / 4 的结论</h4>
+      <p>穷举了三个产出点（<code>FUN_140040050</code>、<code>FUN_14003fc90</code>、<code>FUN_14003dfa0</code>）与唯一外来入口（<code>.jscope</code> 读入器 <code>FUN_140044f40</code> 首分支 <code>*(undefined4*)(param_2+0x314) = 文件里的 TypeID</code> 原样透传）：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>产出点</th>
+<th>可能产生</th>
+</tr></thead>
+<tbody>
+<tr><td>ELF/DWARF <code>FUN_140040050</code></td><td>0, 1, 2, 5, 6, 7, 8, 9, 10, 11, 12, 13（+ 已有的 14）</td></tr>
+<tr><td>RTT VarFormat <code>FUN_14003fc90</code></td><td>0, 1, 2, 5, 6…13</td></tr>
+<tr><td><code>.jscope</code> 读入 <code>FUN_140044f40</code></td><td><strong>文件里写多少就是多少</strong>（可手改成 3/4）</td></tr>
+</tbody>
+</table>
+</div>
+      <p>⇒ <strong>本版本没有任何代码路径会产生 TypeID 3 或 4</strong>。它们只能来自<strong>手工编辑/旧版本写的 <code>.jscope</code></strong>（<code>TypeID="3"</code>）。树的禁用分支</p>
+      <div class="code">
+<pre><code>iVar1 = *(int *)(param_2 + 0x314);
+if ((((iVar1 == 3) || (iVar1 == 4)) || (iVar1 == 9)) || (iVar1 == 0xd)) {
+    QTreeWidgetItem::setDisabled(pQVar2,true);
+    setText(pQVar2,4,"Symbol type is not supported"); }</code></pre>
+</div>
+      <p>是<strong>防御式遗留</strong>。§8 曾猜 3=float128、4=half —— <strong>代码里找不到支撑</strong>：<code>long double</code>/<code>__float128</code>/<code>half</code> 这些串位于 <strong>C++ demangler 的类型名表</strong>（<code>0x14005fec0</code> 起的指针数组，被 <code>FUN_14000f540</code> 使用），而 <code>"float"</code>/<code>"double"</code> 的引用者只有 <code>FUN_140040050</code>。 ⇒ <strong><span class="badge b-der">推导</span></strong> 3/4 为保留/历史值，语义 <strong><span class="badge b-unk">未知</span></strong>。（保留 §8 的猜测作为 <span class="badge b-inf">推断</span> 即可，但不应当作事实。）</p>
+      <hr>
+      <h3>4. 符号可见性与树结构规则</h3>
+      <h4>4.1 顶层：源文件节点（不是符号本身）<span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_14003d210</code> 按 ELF 符号表顺序遍历；符号的所属源文件名（<code>FUN_140002cf0</code>）变化时<strong>新建一个"文件节点"</strong>：</p>
+      <div class="code">
+<pre><code>FUN_140027140(uVar7 + 0x210, file, 0x104);   // +0x210 = File
+*(undefined1 *)(uVar7 + 0x340) = 1;          // +0x340 = 文件根
+FUN_14003fc40(uVar7);                        // 挂到全局根 DAT_14286d3b0</code></pre>
+</div>
+      <p>渲染时（<code>FUN_1400507f0</code> 的 "Finishing Symbols" 段）：</p>
+      <div class="code">
+<pre><code>pQVar6 = *(QTreeWidgetItem **)(lVar8 + 0x360);
+if (((*(char *)(lVar8 + 4) == '\0') &amp;&amp; (*(char *)(lVar8 + 0x210) != '\0')) &amp;&amp; ...) {
+    QTreeWidget::setFirstItemColumnSpanned(tree, item, true);   // 整行跨列
+    QTreeWidget::setItemExpanded(tree, item, true); }           // 默认展开</code></pre>
+</div>
+      <p>⇒ <strong>只有"无名字(+0x004 为空) 且 有 File(+0x210)"的节点</strong>才被当作文件标题行（跨列、展开）。 <span class="badge b-obs">观测</span></p>
+      <h4>4.2 可见性规则汇总</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>规则</th>
+<th>证据</th>
+</tr></thead>
+<tbody>
+<tr><td>顶层 = 源文件分组节点；其子 = 该文件里的符号</td><td><code>FUN_14003d210</code>（同上）<span class="badge b-obs">观测</span></td></tr>
+<tr><td>函数（<code>DW_TAG_subprogram</code> 0x2E）不进树</td><td><code>FUN_1400404c0</code>: <code>if (iVar4 == 0x2e) return;</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>叶子（无子节点）才有勾选框 <code>+0x35F=1</code></td><td><code>FUN_140040050</code> 首两行 <span class="badge b-obs">观测</span></td></tr>
+<tr><td>有子节点 ⇒ TypeID=0、无勾选框（容器节点，仍可展开）</td><td>同上 <span class="badge b-obs">观测</span></td></tr>
+<tr><td>无名 struct/union：名字填 <code>&lt;Anonymous&gt;</code></td><td><code>if ((iVar4-0x13U &amp; 0xfffffffb)==0 &amp;&amp; name[0]=='\0') strncpy(name,"&lt;Anonymous&gt;")</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>匿名继承类：名字填 <code>&lt;Inherited&gt;</code></td><td><code>if (tag==2 &amp;&amp; parentTag==2 &amp;&amp; name[0]=='\0')</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>数组成员：<strong>逐个展开成独立叶</strong>，命名 <code>[n]</code></td><td><code>FUN_140040320</code>：<code>FUN_140028380(buf,0x100,&amp;DAT_140074518,uVar4)</code>，格式串实测 = <code>"[%u]"</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>数组展开<strong>上限 30000</strong>（每维）</td><td><code>uVar3 = 30000; if (*param_1 &lt; 30000) uVar3 = *param_1;</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>递归深度上限 <strong>33</strong>（<code>param_2 &lt; 0x21</code>）</td><td><code>FUN_140040320</code> 入口条件 <span class="badge b-obs">观测</span></td></tr>
+<tr><td>数组元素节点 <code>+0x334 = 1</code>，<strong>不参与名字拼接</strong></td><td><code>FUN_140040cd0</code>：<code>if (*(char*)(n+0x334)=='\0' &amp;&amp; *(char*)(n+0x340)=='\0')</code> 才拼名 <span class="badge b-obs">观测</span></td></tr>
+<tr><td><strong><code>NameWithParents</code> = 从根到该叶的 <code>.</code> 连接</strong></td><td><code>FUN_140040cd0</code> 逆序 <code>memcpy</code> + <code>_Dst_00[-1] = 0x2e /*'.'*/</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>不支持类型（3/4/9/13）：条目<strong>禁用</strong>，第 4 列文字 <code>Symbol type is not supported</code></td><td><code>FUN_1400504d0</code> 尾段 <span class="badge b-obs">观测</span></td></tr>
+<tr><td>已选中的叶：第 4 列勾选状态 = 命中 <code>DAT_14286d3b8</code> 已选列表</td><td><code>FUN_1400504d0</code>：<code>FUN_1400512f0(param_1,param_2)</code>（按 <code>+0x318</code> 地址 <strong>且</strong> <code>+0x108</code> NameWithParents 相等判定）<span class="badge b-obs">观测</span></td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p><code>+0x004</code>（叶名）、<code>+0x108</code>（NameWithParents）、<code>+0x110</code>（类型名）、<code>+0x210</code>（文件）、<code>+0x318</code>（地址）、<code>+0x31C</code>（大小）在 <code>FUN_1400504d0</code> 中被直接送进 5 列表格。</p>
+<p><strong>"不支持类型"只挡 ELF 来的 9/13（64 位整型）</strong>——即 <strong>J-Scope 无法观测 64 位整型变量</strong>，这是重实现时必须注意的功能缺口。 <span class="badge b-obs">观测</span></p>
+</div>
+      <hr>
+      <h3>5. 变量/符号记录布局：<strong>0x3F0 字节</strong>（不是 0x3D8）</h3>
+      <p><strong>分配点</strong>：<code>FUN_140040ab0</code>（<code>chunk_005.c:2747</code>，4 个调用者）：</p>
+      <div class="code">
+<pre><code>puVar1 = (undefined4 *)FUN_140043d20(0x3f0);        // ★ 1008 字节</code></pre>
+</div>
+      <p><strong>独立佐证</strong>：<code>chunk_007.c:2397</code> <code>memcmp((void *)*puVar1, (void *)*puVar3, 0x3f0);</code>（符号排序/比较时整块比较 0x3F0 字节）。 ⇒ 任务书里的 "0x3D8 字节" 是误解：<strong>0x3D8 是字段（首子指针）</strong>，记录总长 <strong>0x3F0</strong>。 <span class="badge b-obs">观测</span></p>
+      <p><code>FUN_140040ab0</code> 的初始化（字索引 ×4 = 字节偏移）给出了全字段骨架：</p>
+      <div class="code">
+<pre><code>*(undefined8 *)(puVar1 + 0xee) = 0;                    // +0x3B8
+*(undefined8 *)(puVar1 + 0xf0) = 0;                    // +0x3C0
+*(undefined8 *)(puVar1 + 0xe6) = 0xffefffffffffffff;   // +0x398 = -DBL_MAX (YMax)
+*(undefined8 *)(puVar1 + 0xe8) = 0x7fefffffffffffff;   // +0x3A0 = +DBL_MAX (YMin)
+*puVar1 = 0;            // +0x314 TypeID
+*(undefined1 *)(puVar1 + 1) = 0;                       // +0x004 Name
+*(undefined1 *)(puVar1 + 0x44) = 0;                    // +0x110 Type
+*(undefined1 *)(puVar1 + 0x84) = 0;                    // +0x210 File
+*(undefined8 *)(puVar1 + 0xc6) = 0;                    // +0x318 Address
+puVar1[200] = 0;                                       // +0x320 维度1 元素数
+*(undefined8 *)(puVar1 + 0xca) = 0;                    // +0x328 维度链表头
+puVar1[0xcc] = 0;                                      // +0x330 IsSigned
+*(undefined1 *)(puVar1 + 0xcd) = 0;                    // +0x334 数组元素标记
+*(undefined8 *)(puVar1 + 0xce) = 0;                    // +0x338 bitWidth + +0x33C bitOffset
+*(undefined8 *)(puVar1 + 0x42) = 0;                    // +0x108 NameWithParents
+*(undefined1 *)(puVar1 + 0xd0) = 0;                    // +0x340 文件根标记
+puVar1[0xd7] = 0x10000;                                // +0x35C=0, +0x35D IsAutoConfig=0, +0x35E ShowInGraph=1, +0x35F=0
+*(undefined8 *)(puVar1 + 0xd8) = 0;                    // +0x360 QTreeWidgetItem*
+*(undefined8 *)(puVar1 + 0xda) = 0;                    // +0x368
+*(undefined8 *)(puVar1 + 0xde) = 0;                    // +0x378 QColor*
+*(undefined8 *)(puVar1 + 0xdc) = 0;                    // +0x370
+puVar1[0xd2] = 0;                                      // +0x348 DrawStyle
+*(undefined8 *)(puVar1 + 0xd4) = 0;                    // +0x350 YOffset (double)
+puVar1[0xd6] = 1;                                      // +0x358 YResolution = 1
+*(undefined2 *)(puVar1 + 0xe0) = 0;                    // +0x380 (byte 标志)
+*(undefined8 *)(puVar1 + 0xec) = 0;                    // +0x3B0 MaxValue
+*(undefined1 *)(puVar1 + 0xe2) = 0;                    // +0x388 本周期有数据
+*(undefined8 *)(puVar1 + 0xe4) = 0;                    // +0x390
+*(undefined8 *)(puVar1 + 0xea) = 0;                    // +0x3A8 YAvg
+puVar1[0xe3] = 0;                                      // +0x38C 样本内偏移
+*(undefined8 *)(puVar1 + 0xf2) = 0;                    // +0x3C8
+*(undefined8 *)(puVar1 + 0xf4) = 0;                    // +0x3D0 dataBuf
+*(undefined8 *)(puVar1 + 0xf6) = 0;                    // +0x3D8 firstChild
+*(undefined8 *)(puVar1 + 0xf8) = 0;                    // +0x3E0 nextSibling
+*(undefined8 *)(puVar1 + 0xfa) = 0;                    // +0x3E8 parent</code></pre>
+</div>
+      <h4>5.1 成员偏移表（补全）</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>偏移</th>
+<th>类型</th>
+<th>含义</th>
+<th>等级</th>
+<th>证据</th>
+</tr></thead>
+<tbody>
+<tr><td><code>+0x004</code></td><td>char[0x104]</td><td><code>Name</code>（叶名）</td><td>观测</td><td>XML 属性 <code>Name</code>（<code>FUN_140044ce0</code>）；<code>FUN_1400504d0</code> 列 0</td></tr>
+<tr><td><code>+0x108</code></td><td>char*</td><td><code>NameWithParents</code>（<code>.</code> 连接全路径）</td><td>观测</td><td><code>FUN_140040cd0</code> 构造；XML <code>NameWithParents</code></td></tr>
+<tr><td><code>+0x110</code></td><td>char[0x100]</td><td><code>Type</code>（类型名）</td><td>观测</td><td>XML <code>Type</code>；<code>FUN_140040050</code> 的名字比较</td></tr>
+<tr><td><code>+0x210</code></td><td>char[0x104]</td><td><code>File</code>（源文件）</td><td>观测</td><td><code>FUN_14003d210</code> 写入；XML <code>File</code></td></tr>
+<tr><td><code>+0x314</code></td><td>int</td><td><code>TypeID</code>（0…14，见 §3）</td><td>观测</td><td>XML <code>TypeID</code></td></tr>
+<tr><td><code>+0x318</code></td><td>uint32</td><td><code>Address</code>（绝对地址）</td><td>观测</td><td>XML <code>Address</code>（<code>FUN_140044ac0</code>）；HSS 描述符</td></tr>
+<tr><td><code>+0x31C</code></td><td>int</td><td><code>Size</code>（字节数）</td><td>观测</td><td>XML <code>Size</code>；<code>FUN_140040050</code> 判定</td></tr>
+<tr><td><code>+0x320</code></td><td>uint32</td><td>数组第 1 维元素数</td><td>推导</td><td><code>FUN_1400404c0</code> <code>param_3[200] = (int)uVar2</code></td></tr>
+<tr><td><code>+0x328</code></td><td>ptr</td><td>维度链表头（0x10/节点 <code>{count, ?, next}</code>）</td><td>观测</td><td><code>FUN_140043d20(0x10,"Node dimension size")</code>；<code>FUN_140040bd0</code> 释放链</td></tr>
+<tr><td><code>+0x330</code></td><td>char</td><td><strong>IsSigned</strong></td><td>观测</td><td><code>.jscope</code> 属性名就叫 <code>IsSigned</code>（<code>FUN_140044f40</code>）</td></tr>
+<tr><td><code>+0x334</code></td><td>char</td><td>数组元素标记（不参与名字拼接、不进勾选判定）</td><td>观测</td><td><code>FUN_140040320</code>、<code>FUN_140040cd0</code></td></tr>
+<tr><td><code>+0x338</code></td><td>int</td><td><strong>位域位宽</strong> bitWidth</td><td>观测</td><td><code>FUN_14003eaa0</code></td></tr>
+<tr><td><code>+0x33C</code></td><td>int</td><td><strong>位域位偏移</strong> bitOffset</td><td>观测</td><td><code>FUN_14003eaa0</code></td></tr>
+<tr><td><code>+0x340</code></td><td>char</td><td>文件根标记（跨列显示文件行）</td><td>观测</td><td><code>FUN_14003d210</code>、<code>FUN_1400507f0</code></td></tr>
+<tr><td><code>+0x348</code></td><td>int</td><td><code>DrawStyle</code></td><td>观测</td><td>XML <code>DrawStyle</code>（<code>FUN_140044af0</code>）</td></tr>
+<tr><td><code>+0x350</code></td><td>double</td><td><code>YOffset</code></td><td>观测</td><td>XML <code>YOffset</code>；绘图 <code>FUN_14004a2b0</code></td></tr>
+<tr><td><code>+0x358</code></td><td>int</td><td><code>YResolution</code>（初值 1）</td><td>观测</td><td>XML <code>YResolution</code>（<code>FUN_1400451f0</code>）</td></tr>
+<tr><td><code>+0x35C</code></td><td>char</td><td>未知布尔（初值 0，与 <code>ShowInGraph</code> 一起被 4 字节 init）</td><td>未知</td><td>仅见读写 <code>chunk_006.c:2759</code>、<code>chunk_007.c:417</code></td></tr>
+<tr><td><code>+0x35D</code></td><td>char</td><td><code>IsAutoConfig</code></td><td>观测</td><td>XML <code>IsAutoConfig</code>（<code>FUN_140044c80</code>）</td></tr>
+<tr><td><code>+0x35E</code></td><td>char</td><td><code>ShowInGraph</code>（<strong>初值 1</strong>）</td><td>观测</td><td><code>puVar1[0xd7]=0x10000</code></td></tr>
+<tr><td><code>+0x35F</code></td><td>char</td><td>是否有勾选框（叶子=1）</td><td>观测</td><td><code>FUN_140040050</code>、<code>FUN_1400504d0</code></td></tr>
+<tr><td><code>+0x360</code></td><td>ptr</td><td><code>QTreeWidgetItem*</code>（回指 UI 条目）</td><td>观测</td><td><code>FUN_1400504d0</code>；<code>FUN_140051130</code> 反查</td></tr>
+<tr><td><code>+0x368</code>/<code>+0x36C</code>/<code>+0x370</code>/<code>+0x374</code></td><td>int×4</td><td>颜色/线宽等显示参数块（被重解析配对整块拷贝）</td><td>推导</td><td><code>FUN_140040a10</code> 拷贝 0x368..0x377</td></tr>
+<tr><td><code>+0x378</code></td><td><code>QColor*</code></td><td>曲线颜色对象</td><td>观测</td><td>XML <code>GraphColorRed/Green/Blue</code> → <code>QColor::setRgb</code> → <code>*(QColor**)(param_2+0x378)</code>（<code>FUN_140044bb0</code>）</td></tr>
+<tr><td><code>+0x380</code></td><td>char(+pad)</td><td><strong>排他"当前符号"标志</strong>（置 1 时先清掉其它所有已选符号的该位）</td><td>观测</td><td><code>FUN_14003ee00</code>（<code>chunk_005.c:1137</code>）</td></tr>
+<tr><td><code>+0x388</code></td><td>char</td><td><strong>本周期有数据</strong>（未触发/无新样本=0）</td><td>观测</td><td><code>FUN_14003fa70</code> 依 <code>FUN_1400415a0</code> 结果写 0/1</td></tr>
+<tr><td><code>+0x38C</code></td><td>uint32</td><td><strong>样本内字节偏移</strong>（HSS 布局）</td><td>观测</td><td><code>FUN_140041f30</code>/<code>FUN_140042a60</code>；XML <code>Offset</code></td></tr>
+<tr><td><code>+0x390</code></td><td>8B</td><td>保留（init 清零，未见其它读）</td><td>未知</td><td><code>FUN_14003ffd0</code> 区</td></tr>
+<tr><td><code>+0x398</code></td><td>double</td><td><code>YMaxSampled</code>（init <code>-DBL_MAX</code>）</td><td>观测</td><td>XML <code>YMaxSampled</code>；<code>FUN_140042ac0</code></td></tr>
+<tr><td><code>+0x3A0</code></td><td>double</td><td><code>YMinSampled</code>（init <code>+DBL_MAX</code>）</td><td>观测</td><td>XML <code>YMinSampled</code></td></tr>
+<tr><td><code>+0x3A8</code></td><td>double</td><td><code>YAvgSampled</code></td><td>观测</td><td>XML <code>YAvgSampled</code>；<code>FUN_140042ac0</code> 递推平均</td></tr>
+<tr><td><code>+0x3B0</code></td><td>double</td><td><code>MaxValue</code>（<strong>由类型决定的量程上限</strong>，见 §3.1）</td><td>观测</td><td><code>FUN_140040050</code> 写 FLT_MAX/DBL_MAX/255/65535/…</td></tr>
+<tr><td><code>+0x3B8</code></td><td>8B</td><td>最新样本值（union，供表格直接取）</td><td>推导</td><td><code>chunk_007.c:749-755</code> QVariant 双精度/整型分支</td></tr>
+<tr><td><code>+0x3C0</code></td><td>int</td><td>最新样本值的种类标签（==2 时按 double 取）</td><td>推导</td><td>同上</td></tr>
+<tr><td><code>+0x3C8</code></td><td>ptr</td><td><strong>指向数据环中"最新样本槽"的指针</strong>（<code>dataBuf + writeIdx*8</code>）</td><td>观测</td><td><code>FUN_14003fa70</code>；<code>FUN_140056f60</code> 直接解引用读值</td></tr>
+<tr><td><code>+0x3D0</code></td><td>ptr</td><td>数据环基址（每变量 <code>0x4000000</code> = <strong>64 MB</strong>）</td><td>观测</td><td><code>FUN_14003e050</code></td></tr>
+<tr><td><code>+0x3D8</code></td><td>ptr</td><td><strong>firstChild</strong></td><td>观测</td><td><code>FUN_14003fc40</code>、树遍历</td></tr>
+<tr><td><code>+0x3E0</code></td><td>ptr</td><td><strong>nextSibling</strong></td><td>观测</td><td><code>FUN_14003fee0</code>、树遍历</td></tr>
+<tr><td><code>+0x3E8</code></td><td>ptr</td><td><strong>parent</strong></td><td>观测</td><td><code>FUN_140050e30</code> 沿 +1000(=0x3E8) 上溯到根</td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p>修正既有报告 §9：<code>+0x3C8</code> 不是"写指针"而是"最新样本指针"；<code>+0x360</code> 是 UI 回指指针；<code>+0x3B8/+0x3C0</code> 是"最新值 + 种类"；<code>+0x3E8</code> 是父指针；记录长度 <strong>0x3F0</strong>。</p>
+</div>
+      <hr>
+      <h3>6. 树模型与 UI</h3>
+      <h4>6.1 关键事实：<strong>符号树在模态对话框里</strong>（"Select Symbols"）<span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>类（Qt metaclass 名）</th>
+<th>实现</th>
+<th>说明</th>
+</tr></thead>
+<tbody>
+<tr><td><strong><code>SymbolSelection</code></strong></td><td>ctor <code>FUN_140050140</code>（标题 <code>"Select Symbols"</code>）；metacast <code>FUN_14003c320</code>；metacall <code>FUN_14003c2c0</code>→<code>FUN_14003c240</code></td><td><strong>本专题的"变量树"</strong>。含：搜索框 <code>FUN_140050340</code>、<strong>5 列 QTreeWidget</strong> <code>FUN_1400507f0</code>、OK/Cancel <code>FUN_1400503f0</code></td></tr>
+<tr><td><code>CDeviceSelectionDialog</code></td><td>ctor <code>FUN_14002d5c0</code>；setupUi <code>FUN_140032220</code>；metacast <code>FUN_14003b500</code></td><td><strong>目标 MCU 选型对话框</strong>（objectName <code>DeviceSelectionDialog</code>，标题 <code>Target Device Settings</code>，列 <code>Manufacturer / Device / NumCores / Flash Size</code>），<strong>与变量树无关</strong></td></tr>
+<tr><td><code>CDeviceDataModel</code></td><td>ctor <code>FUN_14002d480</code>（<code>QAbstractItemModel</code> 派生，objectName <code>DeviceDataModel</code>）</td><td>上者的表格模型</td></tr>
+<tr><td><code>CDeviceDataProxyModel</code></td><td>ctor <code>FUN_14002d560</code>（<code>QSortFilterProxyModel</code> 派生）</td><td>上者的过滤代理</td></tr>
+<tr><td><code>UtilFilterHeader</code></td><td><code>FUN_14003caa0</code> 起</td><td>通用"每列带过滤框的表头"：<code>OnColFilterChanged/OnColSelectionChanged/OnColTextChanged</code>、<code>OnToggleFilter(bool)</code>、<code>OnToggleColumn(bool)</code>、<code>SignalFilterChanged/SelectionChanged/TextChanged</code>；给上者的 QTableView 用</td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p><strong>纠正任务书前提</strong>：<code>CDeviceDataModel / CDeviceDataProxyModel / CDeviceSelectionDialog / UtilFilterHeader</code> 这一组是 <strong>J-Link 目标器件选择</strong>（列 = Manufacturer/Device/NumCores/Flash Size），不是变量树。变量树 = <strong><code>SymbolSelection</code> 对话框</strong>里的 <strong>QTreeWidget（不是 QAbstractItemModel 视图）</strong>。 <span class="badge b-obs">观测</span></p>
+</div>
+      <h4>6.2 SymbolSelection 的 5 列与勾选列 <span class="badge b-obs">观测</span></h4>
+      <p>表头字符串数组 <code>0x140077690</code>（每项 <code>{QString data, maxWidth}</code>）：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>列</th>
+<th>表头</th>
+<th>最大宽度</th>
+<th>内容来源</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>Name</code></td><td>500</td><td><code>+0x210 File</code>（文件行，跨列+置灰底色 <code>QColor(6)</code>）或 <code>+0x004 Name</code></td></tr>
+<tr><td>1</td><td><code>Type</code></td><td>500</td><td><code>+0x110 Type</code></td></tr>
+<tr><td>2</td><td><code>Size</code></td><td>50</td><td><code>+0x31C</code>（QVariant int 写入 <code>setData(...,2,...)</code>）</td></tr>
+<tr><td>3</td><td><code>Address</code></td><td>120</td><td><code>"0x%X"</code> 格式化 <code>+0x318</code></td></tr>
+<tr><td>4</td><td><code>Select</code></td><td>300</td><td>勾选框，或 <code>"Symbol type is not supported"</code></td></tr>
+</tbody>
+</table>
+</div>
+      <p><code>FUN_1400504d0</code> 建立条目；<code>QTreeWidget::setSortingEnabled(true)</code>（列头可排序）；<code>setEditTriggers(0)</code>（禁编辑）； 双击列 4 → <code>editItem(tree,item,4)</code>（<code>FUN_140051720</code>）即"手动切换勾选"。 <span class="badge b-obs">观测</span></p>
+      <h4>6.3 搜索框：匹配什么、大小写 <span class="badge b-obs">观测</span></h4>
+      <ul>
+<li>控件：<code>FUN_140050340</code> 创建 QLineEdit（<code>param_1+0x38</code>），占位文字实测 = <strong><code>"Filter symbols"</code></strong>，<code>connect(textChanged(const QString&amp;) → 1_SlotOnTextChangedLineEditSearch(const QString&amp;))</code>。</li>
+<li>槽实现：<code>FUN_1400515f0(param_1, QString)</code>（<code>chunk_006.c:7482</code>）： ``<code>c FUN_140036ec0(local_118, qstring, 0x100);          // QString → 本地 8 位串（toLocal8Bit） if (local_118[0] == '\0') { FUN_140051490();       // 空串 → 全部 setItemHidden(false) FUN_140050f60(...); } else { FUN_1400511f0(...);                         // 先全部 setItemHidden(true) FUN_1400513a0(param_1, DAT_14286d3b0, local_118); }  // 再对命中的枝"显形" </code>``</li>
+<li><strong>匹配谓词</strong> <code>FUN_140050d00</code>（<code>chunk_006.c:7026</code>）——<strong>按顺序试 5 个字段，任一命中即保留</strong>： ``<code>c if (FUN_140051020(param_1, param_2 + 0x210))           return 1;   // ① File if (FUN_140051020(param_1, param_2 + 0x004, param_3))  return 1;   // ② Name text = QTreeWidgetItem::text(item, col);  ...          // ③ 条目文本（列号由寄存器传入，Ghidra 丢失；[推断] 为 Type 列） if (FUN_140051020(param_1, local_e8, param_3))         return 1; FUN_140028380(local_e8,200,&amp;DAT_140077db0, *(int*)(param_2+0x31c));  // ④ Size，格式 "%i" if (FUN_140051020(...)) return 1; FUN_140028380(local_e8,200,&amp;DAT_140071900, *(int*)(param_2+0x318));  // ⑤ Address，格式 "0x%X" if (FUN_140051020(...)) return 1; return 0; </code>``</li>
+<li><strong>子串匹配</strong> <code>FUN_140051020</code> → <code>FUN_1400277f0(pattern, text, len)</code>，逐字符经 <code>FUN_1400279f0()</code> 折叠后比较 ⇒ <strong>大小写不敏感</strong>（<code>FUN_1400277f0</code> 用 <code>FUN_1400279f0</code> 做大小写归一；<code>FUN_140027860</code> 是同类的小写化助手）。 [观测/推导]</li>
+<li><strong>命中"显形"</strong> <code>FUN_140050e30</code>：从命中节点沿 <code>+0x3E8</code> 上溯到根，把整条祖先链 <code>setItemHidden(false)</code> 并 <code>setItemExpanded(true)</code>，同时展开自身子树 ⇒ 搜索是"连同父链一起显示"。 <span class="badge b-obs">观测</span></li>
+</ul>
+      <h4>6.4 勾选状态如何回传 <span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>itemChanged(QTreeWidgetItem*, int)
+   → SymbolSelection::_SlotOnTreeItemChanged  (FUN_14003c240 idx 0 → FUN_140051690)
+        lVar2 = FUN_140051130(param_1, item, DAT_14286d3b0);   // 用 +0x360 反查记录
+        if (checkState(item,4) == Checked)   FUN_140050760(param_1, lVar2);  // 追加到对话框私有链 param_1+0x50
+        if (checkState(item,4) == Unchecked) FUN_140051360(param_1, lVar2);  // 从私有链摘除
+
+BtnOK: "1_SlotOnReleaseBtnOK(void)"  (FUN_14003c240 idx 2 → FUN_140051590)
+        FUN_14003e880();                       // ★ 清空全局已选列表 DAT_14286d3b8
+        for (e = param_1[0x50]; e; e = e-&gt;next) FUN_14003df10(*e);   // ★ 按对话框顺序"尾插"回全局
+        FUN_14004dc70(...); FUN_14004e120(...);  // 刷新
+        vtable[0x198]();                         // → 关闭对话框（accept）
+BtnCancel → FUN_14002b930()                      // reject</code></pre>
+</div>
+      <ul>
+<li>记录链节点：<code>{ record*, next* }</code> 共 <strong>0x10 字节</strong>（<code>FUN_140043d10(0x10)</code>）。全局链头 <code>DAT_14286d3b8</code>、计数 <code>DAT_14085d1e8</code>；对话框私有链头 <code>dialog+0x50</code>。 <span class="badge b-obs">观测</span></li>
+<li>重新打开对话框时勾选状态的恢复：<code>FUN_1400504d0</code> 用 <code>FUN_1400512f0</code> 在<strong>全局已选链</strong>里按 <code>Address(+0x318)</code> 且 <code>NameWithParents(+0x108)</code> 相等判定 → <code>setCheckState(4, 2)</code>。 <span class="badge b-obs">观测</span></li>
+</ul>
+      <hr>
+      <h3>7. 多符号添加路径与样本布局</h3>
+      <h4>7.1 完整路径 <span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>[菜单/工具条 "Add symbol"]
+ F_14004d6c0  (chunk_006.c:4231)
+   ├ 若 (mode==HSS 或 RTT-Plus) 且 DAT_14286d3b0==0:
+   │    DAT_14286d379 = 1; FUN_14003e4e0(config+0x80, 0);     // 入队 ParseELFFile(flag=0)
+   │    while (DAT_14286d379) { processEvents(); Sleep(10); } // ★ 轮询等待异步作业
+   ├ 若符号树非空:
+   │    dlg = new(0x60) SymbolSelection; FUN_140050140(dlg, mainWnd);
+   │    QDialog::exec(dlg);                                    // 模态
+   └ ...
+    
+[对话框内勾选] ─ 见 §6.4 ─
+[OK] FUN_140051590 → FUN_14003e880()(清空) → 逐条 FUN_14003df10(记录) 尾插全局链
+[开始采样] FUN_140041f30 按全局链顺序构造 HSS 描述符数组</code></pre>
+</div>
+      <h4>7.2 顺序确实影响样本布局 <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_140041f30</code>（<code>chunk_005.c:3710</code>）：</p>
+      <div class="code">
+<pre><code>_Dst = FUN_140043d10((DAT_14085d1e8 + 1) * 0x10);   // n+1 项 × 16B
+DAT_14285da70 = _Dst;  DAT_14085d184 = 4;           // ★ 偏移从 4 开始（前 4 字节 = µs 时间戳）
+for (plVar2 = DAT_14286d3b8; plVar2 != NULL; plVar2 = plVar2[1]) {   // ★ 按"已选链"顺序
+    lVar1 = *plVar2;
+    *(int *)(lVar1 + 0x38c) = DAT_14085d184;        // 记录样本内偏移
+    DAT_14085d184 += *(int *)(lVar1 + 0x31c);       // 累加 Size
+    *puVar6 = *(undefined4 *)(lVar1 + 0x318);       // HssVar.addr
+    puVar6[1] = *(undefined4 *)(lVar1 + 0x31c);     // HssVar.size
+    puVar6 += 4;
+    /* 复位统计/指针：+0x3D0=0 +0x3C8=0 +0x390=0 +0x3A8=0 +0x398=-DBL_MAX +0x3A0=+DBL_MAX +0x388=0 */
+}
+puVar6[1] = 0;                                       // 终止项
+iVar4 = JLINK_HSS_Start(_Dst, n, config+0x5A8 /*µs*/, 1);</code></pre>
+</div>
+      <ul>
+<li>顺序 = <strong>勾选先后 / 会话链顺序</strong>（尾插），<strong>样本内偏移 = 4 + 前序各变量 Size 之和</strong>。 ⇒ <strong>顺序影响样本字节布局</strong>（以及 <code>+0x38C</code>、<code>JLINK_HSS_Start</code> 的变量表顺序）。 <span class="badge b-obs">观测</span></li>
+<li>同一逻辑在 RTT 模式复用：<code>FUN_140042a60</code> 用同样方式重算 <code>+0x38C</code>（HSS: 基址 4；RTT-Plus: 基址 4；RTT 无时间戳: 基址 0，即 <code>-(DAT_14285d9c5 != 0) &amp; 4</code>）。 <span class="badge b-obs">观测</span></li>
+<li>解包侧 <code>FUN_14003fa70</code> 按 <code>DAT_14286d3b8</code> 链顺序逐变量 <code>memcpy(ring + idx*8, sample + +0x38C, Size)</code>，每变量固定 <strong>8 字节/样本</strong>槽位，环深 <strong>0x800000 = 8,388,608</strong>（<code>0x4000000</code>/8）。 <span class="badge b-obs">观测</span></li>
+<li>"重解析 &amp; Match"时的自动重选：<code>FUN_140041870</code>（建树时逐个符号）用 <code>FUN_1400429c0</code> 判身份（<code>File &amp;&amp; Name &amp;&amp; NameWithParents &amp;&amp; Type</code> 全等）命中当前已选链 → <code>FUN_14003ffd0</code> 挂入临时链 <code>DAT_14285da08</code>；解析尾部整体替换 <code>DAT_14286d3b8</code>。 <span class="badge b-obs">观测</span></li>
+</ul>
+      <hr>
+      <h3>8. 未知点</h3>
+      <ol>
+<li><code>+0x35C</code> 布尔的确切语义（初值 0；仅见 <code>chunk_006.c:2759</code> 读取与 <code>chunk_007.c:417</code> 置 1 两处）。 <span class="badge b-unk">未知</span></li>
+<li><code>+0x390</code>（8 字节）从未被读，疑似 malloc 残留/保留字段。</li>
+<li><code>FUN_1400404c0</code> 的<strong>真实参数个数</strong>：Ghidra 显示 4 参调用而函数体用到 6 参（<code>param_5</code> 深度、<code>param_6</code> 是否根）；调用点处为栈传参，反编译丢失。结论"深度上限 33 / 根节点处理"基于函数体，行为可信但<strong>调用约定细节未定</strong>。</li>
+<li>ELF 符号表筛选策略：是否包含 <code>STB_LOCAL</code>（static）符号、是否跳过 <code>STT_FUNC</code>（除 tag==0x2e 之外的过滤），未找到显式代码；<code>FUN_140007a10 → FUN_140008f40(...,0x34)</code> 的 <code>0x34</code> 是内部索引种类而非标准 <code>SHT_*</code>。 <span class="badge b-unk">未知</span></li>
+<li>位域样本读取：<code>case 0xe</code> 只从样本里取 <strong>32 位 raw</strong>（<code>*(uint*)</code>），&gt;32 位存储单元的位域如何处理 <span class="badge b-unk">未知</span>。</li>
+<li>TypeID 3/4 的原始语义（现代码不产生）。</li>
+<li><code>FUN_14000aaf0</code> 打印的统计（<code>File Size: %llu</code>、<code>DWARF Version: %d</code>…）输出到哪个渠道（日志窗口/文件）未追踪。</li>
+<li>静态库的<strong>准确版本</strong>与上游项目名未确定（libdwarf + libelf 家族，DWARF5 部分支持）。</li>
+</ol>
+      <hr>
+      <h3>9. 对 OpenScope 的启示</h3>
+      <ol>
+<li><strong>ELF 载入只需"整文件读入 + 4 步解析"，不需要 mmap。</strong> J-Scope 用 <code>fopen/ftell/fread</code> 把整个 ELF 读进堆（<code>FUN_140002f60</code>），随后一次性解析 <code>.debug_info/.debug_types/.debug_line</code>。 对 10 MB 级 MCU ELF 完全够用，实现简单、跨平台。<strong>同时打开的 ELF 上限 2</strong> 也值得照抄为资源约束。 <span class="badge b-obs">观测</span></li>
+</ol>
+      <ol>
+<li><strong>必须校验 <code>e_type == ET_EXEC(2)</code>。</strong> <code>FUN_14000dfc0</code> 拒绝 <code>.o</code>(ET_REL) 与共享库(ET_DYN)，报 "not an executable ELF file"。 OpenScope 若想让用户直接拖 <code>.o</code>/<code>.axf</code>，需自己放宽这一条（并自行处理未重定位地址）；若照抄，用户的 <code>-c</code> 中间产物会被拒——<strong>这是最常见的"用户以为坏掉了"场景</strong>。 建议：<strong>接受 ET_REL/ET_DYN 但在 UI 明确提示地址未重定位</strong>。</li>
+</ol>
+      <ol>
+<li><strong>类型分类器极简且可 1:1 照搬（约 60 行）。</strong> 判据 = <code>名字 ∈ {float, double, _Bool}</code> + <code>Size ∈ {1,2,4,8}</code> + <code>IsSigned</code> 标志，映射到 1/2/5/6..13；<code>DW_AT_bit_size</code> 存在 ⇒ 位域(14)。 J-Scope <strong>不支持 64 位整型与 16 字节浮点</strong>（TypeID 9/13 在树里被禁用；无 long double 分支）。 OpenScope 应把 <strong>int64/uint64 补上</strong>（绘图加 double 通道即可），并显式支持 <strong>bitfield</strong>（J-Scope 的做法值得抄：位宽/位偏移存元数据，取值时 <code>(raw&gt;&gt;off)&amp;mask</code>，不改变样本布局）。</li>
+</ol>
+      <ol>
+<li><strong>符号可见性策略值得整体照抄：</strong> 顶层按<strong>源文件分组</strong>（同名符号在多个 .c 里不混淆）；函数不显示；<code>struct/union</code> 作为<strong>容器节点</strong>（不可勾选）展开到叶；<strong>数组逐元素成叶</strong>（<code>[n]</code> 命名，上限 30000，递归深度 33）；叶的 <code>NameWithParents</code> 用 <code>.</code> 连接。 这套规则让"选一个 <code>g_app.motor.speed</code>"既精确又不会让树爆掉。<strong>上限（30000/深度 33）是必须抄的护栏</strong>——否则一个 <code>uint8_t buf[1&lt;&lt;20]</code> 会直接卡死 UI。</li>
+</ol>
+      <ol>
+<li><strong>采样布局与选择顺序强耦合，尽早固定契约。</strong> <code>+0x38C = 4 + Σ前序 Size</code>，<code>JLINK_HSS_Start</code> 的描述符数组顺序 = 用户勾选顺序。 OpenScope 与"网络远端"协商变量布局时，<strong>必须把这份有序变量表作为唯一真源</strong>（发送方定序、接收方照用），否则同一份数据两端解出的波形会错位——这正是 J-Scope 用 <code>Offset</code> 属性把布局写进 <code>.jscope</code> 的原因。 <span class="badge b-obs">观测</span></li>
+</ol>
+      <ol>
+<li><strong>"ELF 改动检测"是纯时间戳 + 显式重解析，值得照抄。</strong> <code>GetFileTime</code> 比对 + 二选一对话框（Reparse &amp; <strong>Match</strong> / Reparse &amp; <strong>Clear</strong>），Match 用 <code>(File, Name, NameWithParents, Type)</code> 四元组配对旧符号的显示选项。 OpenScope 在"重新编译后自动重载 ELF"时，用同样的四元组匹配即可保留颜色/量程/绘图样式，避免用户每次重编译都要重配。</li>
+</ol>
+      <ol>
+<li><strong>UI 侧的搜索语义值得抄：5 字段（File/Name/Type/Size(' %i')/Address('0x%X')）子串、大小写不敏感、命中后连同父链一起显形、未命中全部隐藏。</strong> 比"只搜名字"好用得多（用户常按地址找变量）。实现上就是遍历一次符号树，代价极低。</li>
+</ol>
+      <hr>
+      <h3>10. 需要补充反编译（本次 dump 中缺失或不足）</h3>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>目标</th>
+<th>原因</th>
+</tr></thead>
+<tbody>
+<tr><td><code>FUN_1400404c0</code> 的<strong>调用点</strong>（<code>FUN_14003d210</code> / <code>FUN_140040320</code> / 自身递归）</td><td>需要<strong>完整参数列表</strong>（栈参数 <code>depth</code>、<code>isRoot</code>）才能确证深度/根逻辑；建议看反汇编而非 C</td></tr>
+<tr><td>ELF 符号表枚举 <code>FUN_140008f40(p, 0x34)</code>、<code>FUN_1400073c0</code>、<code>FUN_1400088e0</code></td><td>确认符号种类过滤（LOCAL/FUNC/SECTION）与 <code>0x34</code> 索引语义</td></tr>
+<tr><td><code>FUN_140002fb0</code>（2578 字节类型名拼接器）全文</td><td>确认 <code>Type</code> 字符串的<strong>规范形式</strong>（<code>struct X *</code>、限定符、typedef 展开），这是类型分类器能否命中的前提</td></tr>
+<tr><td><code>FUN_14000aaf0</code>（2874 字节 dump/统计）</td><td>确认 <code>File Size/debug_info size/DWARF Version</code> 等输出渠道（日志窗口？<code>-log</code> CLI？）</td></tr>
+<tr><td><code>FUN_140053420</code> / <code>FUN_14005660</code> 区（TableWidget 取值）</td><td><code>FUN_140053420</code> 是 <code>FUN_14003eaa0</code> 的第 3 个调用者，用于位域在表格中的显示</td></tr>
+<tr><td><code>FUN_14002d5c0</code> / <code>FUN_14002bc30</code>（Target Device 对话框全链）</td><td>本专题只需定性；若要抄"过滤表头"（UtilFilterHeader）需细读</td></tr>
+<tr><td><code>FUN_14000ca30</code> / <code>FUN_14000bf80</code>（<code>.debug_info</code> / 行信息解析）</td><td>若需确认"是否解析 DWARF 变量作用域/局部变量"及 <code>Source Language</code> 处理</td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <p><em>本报告全部结论可回溯到 <code>dumps/alldecomp/chunk_*.c</code> 的行号与 <code>.rdata</code> 常量表；未改动 <code>dumps/</code>。</em></p>
+    </section>

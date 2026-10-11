@@ -1,0 +1,83 @@
+<header class="masthead">
+  <p class="eyebrow">全量静态逆向 · Ghidra 12.1.4 headless · 2,001 函数全反编译</p>
+  <h1>SEGGER J-Scope 逆向分析</h1>
+  <p class="standfirst">
+    J-Scope 如何在 J-Link 上做到微秒级变量采样？这份档案把 679 KB 的 exe 拆到了底：
+    HSS 与 RTT 两条采集路径的完整调用契约、双环数据模型、触发子系统、DWARF 符号模型、
+    导出格式（CSV/JRAW）、作业/线程/堆三件套，以及 UI 与生命周期的全貌 ——
+    全部来自反汇编，可直接用于 OpenScope 的重实现。
+  </p>
+  <dl class="factbar">
+    <div class="fact"><dt>分析对象</dt><dd>JScope.exe 9.66</dd></div>
+    <div class="fact"><dt>来源</dt><dd>JLink_V966</dd></div>
+    <div class="fact"><dt>架构</dt><dd>x64 PE · Qt 4.8.7</dd></div>
+    <div class="fact"><dt>函数 / 全局</dt><dd>2,001 / 4,837</dd></div>
+    <div class="fact"><dt>字符串</dt><dd>3,035</dd></div>
+    <div class="fact"><dt>日期</dt><dd>2026-10-11</dd></div>
+  </dl>
+</header>
+
+<div class="shell">
+
+  <nav class="toc" aria-label="目录">
+    <ol>
+      <li><a href="#s0"><span class="n">00</span><span>证据等级与分析范围</span></a></li>
+      <li><a href="#s1"><span class="n">01</span><span>二进制基本面</span></a></li>
+      <li><a href="#s2"><span class="n">02</span><span>总体架构</span></a></li>
+      <li><a href="#s3"><span class="n">03</span><span>J-Link API 清单</span></a></li>
+      <li><a href="#s4"><span class="n">04</span><span>连接序列与探针选择</span></a></li>
+      <li><a href="#s5"><span class="n">05</span><span>HSS 高速采样协议</span></a></li>
+      <li><a href="#s6"><span class="n">06</span><span>双环数据模型</span></a></li>
+      <li><a href="#s7"><span class="n">07</span><span>RTT 与 RTT-Plus 协议</span></a></li>
+      <li><a href="#s8"><span class="n">08</span><span>类型系统 TypeID</span></a></li>
+      <li><a href="#s9"><span class="n">09</span><span>数据结构总览</span></a></li>
+      <li><a href="#s10"><span class="n">10</span><span>文件格式与数据导出</span></a></li>
+      <li><a href="#s11"><span class="n">11</span><span>命令行接口</span></a></li>
+      <li><a href="#s12"><span class="n">12</span><span>触发子系统</span></a></li>
+      <li><a href="#s13"><span class="n">13</span><span>波形渲染与交互</span></a></li>
+      <li><a href="#s14"><span class="n">14</span><span>ELF/DWARF 与符号模型</span></a></li>
+      <li><a href="#s15"><span class="n">15</span><span>运行时基础设施</span></a></li>
+      <li><a href="#s16"><span class="n">16</span><span>会话、UI 与生命周期</span></a></li>
+      <li><a href="#s17"><span class="n">17</span><span>未解之谜与实测建议</span></a></li>
+      <li><a href="#s18"><span class="n">18</span><span>对 OpenScope 的启示</span></a></li>
+      <li><a href="#s19"><span class="n">19</span><span>产出物、复现与来源</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ══ 00 ══ -->
+    <section id="s0">
+      <h2><span class="sec-n">00</span>证据等级与分析范围</h2>
+      <p class="lead">
+        本页按 REA 方法论标注每一条结论的来源。徽章出现在标题与表格中，标出该条目的可信度；
+        未标注处默认为 <span class="badge b-obs">观测</span>。
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:130px">标记</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><span class="badge b-obs">观测</span></td><td>直接来自反汇编 / 字符串 / PE 结构 / DLL 字符串，可复核</td></tr>
+            <tr><td><span class="badge b-der">推导</span></td><td>由观测经确定性推理得到（如结构体字段偏移）</td></tr>
+            <tr><td><span class="badge b-inf">推断</span></td><td>合理但未完全证实的解释</td></tr>
+            <tr><td><span class="badge b-unk">未知</span></td><td>本轮未解决，重实现时需实测确认（汇总见 §17）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>本轮做了什么</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:200px">产出</th><th>规模</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td>全量函数反编译</td><td class="m">2,001 函数 / 2.2 MB C 代码</td><td><code>dumps/alldecomp/chunk_000..008.c</code>，含每个函数的调用者/被调用者清单</td></tr>
+            <tr><td>全局变量清单</td><td class="m">4,837 项</td><td><code>dumps/globals.txt</code>（地址 / 类型 / 初值 / 引用者）</td></tr>
+            <tr><td>专题深挖</td><td class="m">8 个专题</td><td>触发 / 导出 / 绘图 / ELF / RTT-Plus / 会话 / 基础设施 / HSS —— 各成独立报告（<code>analysis/*.md</code>）</td></tr>
+            <tr><td>交叉验证</td><td class="m">JLink_x64.dll + 公开文档</td><td>用 DLL 内部日志串证实 HSS 调用契约；用 SEGGER UM08028 对照 RTT 协议（发现一处不一致，见 §7.7）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        全部地址为镜像基址 <code>0x140000000</code> 下的虚拟地址（VA）。
+        分析全程为<strong>静态</strong>：未运行 J-Scope、未连接任何调试探针、未调用任何 J-Link API。
+      </p>
+    </section>

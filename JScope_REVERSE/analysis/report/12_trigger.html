@@ -1,0 +1,499 @@
+    <!-- ══ 12 ══ -->
+    <section id="s12">
+      <h2><span class="sec-n">12</span>触发子系统</h2>
+      <p><strong>对象</strong>：<code>C:\Program Files\SEGGER\JLink_V966\JScope.exe</code>（PE32+ x64，基址 <code>0x140000000</code>） <strong>方法</strong>：静态分析（<code>dumps/alldecomp/*.c</code> 全量反编译 + <code>dumps/globals.txt</code> 交叉引用 + 对关键指令用 capstone 直接反汇编核对，未运行 Ghidra） <strong>证据分级</strong>：<strong><span class="badge b-obs">观测</span></strong> 反汇编/反编译直接可见 · <strong><span class="badge b-der">推导</span></strong> 由观测确定性推出 · <strong><span class="badge b-inf">推断</span></strong> 合理未证实 · <strong><span class="badge b-unk">未知</span></strong></p>
+      <div class="callout">
+<p>本文只覆盖触发子系统，其余部分见 <code>JSCOPE_ANALYSIS.md</code>。凡与既有报告冲突处，以本文（有指令级证据）为准，并已标注修正。</p>
+</div>
+      <hr>
+      <h3>1. 概述</h3>
+      <h4>1.1 一句话结论 <span class="badge b-obs">观测</span></h4>
+      <p>J-Scope 的触发是<strong>「命中即从触发点重开记录」</strong>模型：</p>
+      <ol>
+<li>每收到一个样本，<strong>所有</strong>变量的原始数据都无条件写入 8 字节/样本的环形缓冲（<code>FUN_14003feb0</code>）；</li>
+<li>随后对<strong>每个变量</strong>调用一次触发判定 <code>FUN_1400415a0</code>（返回 0/1/2/3）；</li>
+<li>若返回 <strong>1（首次命中）</strong>：把全局环形写指针 <code>writeIdx</code> 和 <code>wrapped</code> <strong>清零</strong>，该变量的 <code>hasData(+0x388)=1</code>，触发锁存位置 1；</li>
+<li>若返回 <strong>0（未命中）</strong>：该变量 <code>hasData=0</code> —— <strong>曲线不绘制</strong>（数据仍在环里，只是"不可见"）；</li>
+<li>若返回 <strong>2（触发未使能）/ 3（已命中过）</strong>：等同"放行"，<code>hasData=1</code>，且<strong>不</strong>重开记录。</li>
+</ol>
+      <p>绘图端只画 <code>hasData(+0x388) != 0</code> 的变量（<code>chunk_006.c:2450</code>：<code>ShowInGraph(+0x35E) &amp;&amp; hasData(+0x388) &amp;&amp; !disabled(+0x380)</code>）。因此触发使能前图上是空的，命中瞬间 x 轴从 0 重新开始。</p>
+      <p><code>Ghidra</code> 已识别的类：<code>TriggerWidget</code>（RTTI <code>.?AVTriggerWidget@@</code> @ <code>0x140097B68</code>，类名字符串 @ <code>0x140073A20</code>）。</p>
+      <h4>1.2 关键地址速查 <span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>角色</th>
+<th>地址</th>
+<th>说明</th>
+</tr></thead>
+<tbody>
+<tr><td>触发判定</td><td><code>FUN_1400415a0</code></td><td>返回 0/1/2/3，见 §3</td></tr>
+<tr><td>比较器 ×8</td><td><code>0x140041040/10B0/1110/1190/1200/1280/1300/1380</code></td><td>见 §4</td></tr>
+<tr><td>样本解包</td><td><code>FUN_14003fa70</code></td><td><code>UnpackSamples</code>，触发门控在这里</td></tr>
+<tr><td><strong>LIVE 触发状态</strong></td><td><code>0x142865050</code>（24 B）</td><td>唯一权威状态，见 §2</td></tr>
+<tr><td>快照变量（引擎）</td><td><code>0x14285D9E0</code>（24 B）</td><td><code>UnpackSamples</code>/起停时用</td></tr>
+<tr><td>快照变量（UI）</td><td><code>TriggerWidget+0x88</code>（堆 0x18）</td><td>控件编辑用</td></tr>
+<tr><td>工程文件内的偏移</td><td><code>project + 0x5D0</code></td><td>与 LIVE 同一地址（<code>0x142864A80+0x5D0 = 0x142865050</code>）<strong><span class="badge b-der">推导</span></strong></td></tr>
+<tr><td>状态存取器</td><td><code>FUN_14004ea20</code>（save）/ <code>FUN_14004ed00</code>（apply）/ <code>FUN_14004e830</code>（diff）</td><td></td></tr>
+<tr><td>写回守卫</td><td><code>FUN_14004ed70</code> / <code>FUN_14004ea40</code>（<code>DAT_14286506C</code>="已打开工程"）</td><td></td></tr>
+<tr><td>UI</td><td><code>FUN_1400561b0</code>（ctor）等，见 §6</td><td></td></tr>
+<tr><td>XML 读/写</td><td><code>FUN_140045ee0</code> / <code>FUN_140046c50</code></td><td>见 §7</td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <h3>2. 数据结构 <span class="badge b-obs">观测</span></h3>
+      <h4>2.1 触发结构体（0x18 = 24 字节）</h4>
+      <p>由 <code>FUN_1400561b0</code>（分配 0x18 并逐字节初始化）与 <code>FUN_14004ea20/ed00</code>（整块搬运 24 B）共同确定：</p>
+      <div class="code">
+<pre><code>struct Trigger {          // sizeof = 0x18
+  VarRecord *symbol;      // +0x00  触发符号（指向变量记录）；0 = 未选择
+  double     level;       // +0x08  阈值（double）
+  uint8_t    on;          // +0x10  触发使能   ← XML "On"
+  uint8_t    auto_;       // +0x11  引擎从不读取（见 §7.3）  ← XML "Auto"
+  uint8_t    rise;        // +0x12  上升沿     ← XML "Rise"
+  uint8_t    fall;        // +0x13  下降沿     ← XML "Fall"
+  uint8_t    triggered;   // +0x14  命中锁存（latch）
+  uint8_t    pad[3];      // +0x15..0x17
+};</code></pre>
+</div>
+      <p>证据（均为 <span class="badge b-obs">观测</span>）：</p>
+      <ul>
+<li>构造：<code>FUN_1400561b0</code> 中 <code>FUN_140043d10(0x18)</code> 后写 <code>+0x11,+0x14,+0x13,+0x10,+0x12</code>（<code>chunk_007.c:2093-2101</code>）。</li>
+<li>字段语义：比较器读 <code>[rcx+0x12]/[rcx+0x13]</code>（沿选择）、<code>[rcx+8]</code>（阈值），写 <code>[rcx+0x14]=1</code>（<code>0x140041090: c6411401 mov byte ptr [rcx+0x14], 1</code>）。</li>
+<li><code>FUN_1400415a0</code> 读 <code>[rcx+0x10]</code>（使能）与 <code>[rcx+0x14]</code>（锁存）。</li>
+<li>阈值确为 double：<code>movsd xmm1, qword ptr [rcx + 8]</code>（<code>0x14004104E</code>）。</li>
+</ul>
+      <h4>2.2 存放位置（4 份拷贝，同一布局）</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>实例</th>
+<th>地址</th>
+<th>谁用</th>
+</tr></thead>
+<tbody>
+<tr><td><strong>LIVE（权威）</strong></td><td><code>0x142865050</code>（+0x00..+0x17）</td><td>全局唯一真值</td></tr>
+<tr><td>引擎快照</td><td><code>0x14285D9E0</code></td><td><code>UnpackSamples</code> 开头 <code>FUN_14004ea20(&amp;DAT_14285d9e0)</code> 拷入，判定全用这份</td></tr>
+<tr><td>UI 快照</td><td><code>TriggerWidget+0x88</code></td><td>控件读/改这份，再 <code>FUN_14004ed00</code> 写回</td></tr>
+<tr><td>工程结构内</td><td><code>project + 0x5D0</code></td><td>XML 读写目标</td></tr>
+</tbody>
+</table>
+</div>
+      <p><strong><span class="badge b-der">推导</span></strong> LIVE 就在"当前工程设置"大结构里：</p>
+      <ul>
+<li><code>FUN_14004ea20</code> 保存 <code>DAT_142865050/58/60</code> 三个 qword，<code>FUN_14004ed00</code> 恰好写回 <code>0x142865050(+0)</code>, <code>+0x54(+4)</code>, <code>0x142865058(+8)</code>, <code>+0x5C(+0xC)</code>, <code>0x142865060(+0x10, qword)</code> —— 即一整块 <strong>24 字节</strong>（§2.1 布局）。</li>
+<li>XML 读函数被调用为 <code>FUN_140045ee0(triggerNode, param_2 + 0x5d0)</code>（<code>chunk_005.c:6647</code>），而工程结构 <code>DAT_142864A80</code> 长 <code>0x5E8</code>（<code>FUN_14004ecc0</code> memcpy 0x5E8）。<code>0x142864A80 + 0x5D0 = 0x142865050</code>。</li>
+<li>因此<strong>工程加载 = 直接 memcpy 覆盖 LIVE 触发状态</strong>，无需额外"应用"代码（也解释了 §5.2 为何 stop/start 不清它）。</li>
+</ul>
+      <h4>2.3 状态存取器（写回受守卫）</h4>
+      <div class="code">
+<pre><code>void FUN_14004ea20(Trigger *p);   // p = LIVE 的整块 24B 快照
+bool FUN_14004e830(Trigger *p);   // p 与 LIVE 是否不同
+void FUN_14004ed00(Trigger *p) {  // 有差异且"已打开工程"才写回
+  if (FUN_14004e830(p)) {          // 内部: FUN_14004ed70() -&gt; FUN_14004ea40() -&gt; DAT_14286506C
+     LIVE = *p;                   // 0x142865050..0x142865067
+     thunk_FUN_14003f930();       // 0x14004ED90: inc [0x142865068]; jmp FUN_14003f930  (置"工程已修改"+通知UI)
+  }
+}</code></pre>
+</div>
+      <p><code>DAT_14286506C</code> = "是否已打开工程"（<code>FUN_14004eda0</code> 成功时置 1）<strong><span class="badge b-obs">观测</span></strong>。</p>
+      <div class="callout">
+<p><strong>对 OpenScope 的启示</strong>：这是一个非常干净的模式 —— 采集线程只做 <code>save → 改 → apply</code>，不需要锁；代价是 UI 读到的是上一次的快照（1 Hz 刷新，见 §6.6）。</p>
+</div>
+      <h4>2.4 触发所依赖的变量记录字段（既有报告 §9 补充）<span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>偏移</th>
+<th>用途（触发语境）</th>
+</tr></thead>
+<tbody>
+<tr><td><code>+0x004</code></td><td><code>Name</code>（XML <code>Symbol</code> 存写它与匹配它，<strong>不是</strong>全路径名）</td></tr>
+<tr><td><code>+0x108</code></td><td><code>NameWithParents</code>（下拉框显示）</td></tr>
+<tr><td><code>+0x314</code></td><td><code>TypeID</code> —— 决定用哪个比较器</td></tr>
+<tr><td><code>+0x31C</code></td><td><code>Size</code></td></tr>
+<tr><td><code>+0x38C</code></td><td>样本内字节偏移</td></tr>
+<tr><td><code>+0x388</code></td><td><strong><code>hasData</code></strong>：本周期是否可绘制（触发门控的落点）</td></tr>
+<tr><td><code>+0x398/+0x3A0/+0x3A8</code></td><td><code>yMax/yMin/yAvg</code>（仅"放行"的样本参与统计）</td></tr>
+<tr><td><code>+0x3C8</code></td><td><code>curPtr</code>：指向环内<strong>当前/最后放行</strong>样本（<code>Value:</code> 显示与绘图起点都用它）</td></tr>
+<tr><td><code>+0x3D0</code></td><td>每变量 64 MB 数据环基址</td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <h3>3. <code>FUN_1400415a0</code> 返回值语义 <span class="badge b-obs">观测</span></h3>
+      <p><code>uint FUN_1400415a0(Trigger *t /*rcx*/, VarRecord *v /*rdx*/, void *prev /*r8*/, void *cur /*r9*/)</code></p>
+      <p>反汇编（<code>0x1400415A0</code>，关键分支逐条核对）等价于：</p>
+      <div class="code">
+<pre><code>if (prev == NULL || cur == NULL)      return 0;   // [rcx] 之外的兜底
+if (t-&gt;on == 0)                        return 2;   // 0x1400415C1: cmp byte [rcx+0x10],0
+if (t-&gt;triggered == 1)                 return 3;   // 0x1400415D6: cmp byte [rcx+0x14],1
+if (t-&gt;symbol != v)                    return 0;   // 0x1400415EB: cmp qword [rcx],rdx
+switch (v-&gt;TypeID /*+0x314*/) {                    // 0x1400416D4 处的 14 项跳转表
+  case 1:  return FUN_140041040(t,prev,cur);   // float32
+  case 2:  return FUN_1400410b0(t,prev,cur);   // float64
+  case 6:  return FUN_140041380(t,prev,cur);   // uint8
+  case 7:  return FUN_140041280(t,prev,cur);   // uint16
+  case 8:  return FUN_140041300(t,prev,cur);   // uint32
+  case 10: return FUN_140041200(t,prev,cur);   // int8
+  case 11: return FUN_140041110(t,prev,cur);   // int16
+  case 12: return FUN_140041190(t,prev,cur);   // int32
+  default: return 0;                           // 0,3,4,5,9,13 → 永不触发
+}</code></pre>
+</div>
+      <p><strong>语义表</strong></p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>返回值</th>
+<th>含义</th>
+<th>调用方动作（§5）</th>
+</tr></thead>
+<tbody>
+<tr><td><strong>0</strong></td><td>未命中（触发使能了但条件未满足；<strong>或本变量不是触发符号</strong>；或类型不支持；或参数空）</td><td><code>hasData=0</code>（隐藏曲线）；若本变量就是触发符号则仍推进 <code>curPtr</code></td></tr>
+<tr><td><strong>1</strong></td><td><strong>命中（边沿成立）</strong> —— 真正意义上的"触发"</td><td><code>writeIdx=0; wrapped=0</code>（重开记录）+ <code>hasData=1</code> + 统计累加</td></tr>
+<tr><td><strong>2</strong></td><td>触发<strong>未使能</strong>（<code>on==0</code>）—— 对<strong>每个</strong>变量都返回 2</td><td>放行：<code>hasData=1</code> + 统计累加，不重开记录</td></tr>
+<tr><td><strong>3</strong></td><td>之前<strong>已命中</strong>过（<code>triggered==1</code>）—— 对<strong>每个</strong>变量都返回 3</td><td>放行：<code>hasData=1</code> + 统计累加，不重开记录</td></tr>
+</tbody>
+</table>
+</div>
+      <p>要点 <span class="badge b-obs">观测</span>：</p>
+      <ul>
+<li><strong><code>on</code> 检查在符号匹配之前</strong>，<code>triggered</code> 检查也在之前。所以命中后（<code>triggered=1</code>）<strong>所有</strong>变量（含非触发符号）都返回 3 → 全图恢复绘制；</li>
+<li>触发符号以外的变量在等待触发期间恒返回 0，因此"触发前不显示"对全体变量统一生效；</li>
+<li>类型不支持（bool <code>5</code>、int64 <code>13</code>、uint64 <code>9</code>、TypeID 3/4）→ 恒 0 → <strong>选中这类符号做触发会永远不触发</strong>（UI 不做任何提示）<strong>[观测/推断]</strong>。</li>
+</ul>
+      <div class="callout">
+<p><strong>修正既有报告 §6.3</strong>：那里写的是"触发判定 → 0/1/2/3 → 命中则调 FUN_140042ac0"，但 <code>FUN_140042ac0</code> 实际是 <strong>min/max/avg 统计累加器</strong>（不是触发处理），且它接收两个参数 <code>(v, &amp;ring[writeIdx])</code>（Ghidra 的 C 输出漏了第二个实参，反汇编 <code>0x14003FB7D/0x14003FB8B</code> 可见 <code>lea rdx,[rax+rcx*8]; call</code>）。</p>
+</div>
+      <hr>
+      <h3>4. 各类型比较器逐个 <span class="badge b-obs">观测</span></h3>
+      <p>8 个比较器全部同构：<code>rcx = trigger</code>、<code>rdx = &amp;prev</code>、<code>r8 = &amp;cur</code>，命中时</p>
+      <div class="code">
+<p class="cap">asm</p><pre><code>mov byte ptr [rcx+0x14], 1     ; 置锁存
+call FUN_14004ed00             ; 立即写回 LIVE（RCX 仍是 trigger 指针）
+mov eax, 1</code></pre>
+</div>
+      <h4>4.1 统一判定式</h4>
+      <div class="code">
+<pre><code>命中 = (rise &amp;&amp; prev &lt;  level &amp;&amp; cur &gt;= level)      // 上升沿：自下方穿越阈值
+    || (fall &amp;&amp; prev &gt;  level &amp;&amp; cur &lt;= level)      // 下降沿：自上方穿越阈值</code></pre>
+</div>
+      <p>（<code>level</code> 为 <code>double</code>；整数先精确转 double 再比；两侧都取闭区间，即"等于阈值"算命中。）</p>
+      <h4>4.2 逐函数表</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>函数</th>
+<th>地址</th>
+<th>TypeID</th>
+<th>类型</th>
+<th>取样/转换指令</th>
+<th>备注</th>
+</tr></thead>
+<tbody>
+<tr><td><code>FUN_140041040</code></td><td><code>0x140041040</code></td><td>1</td><td>float32</td><td><code>movss</code> + <code>cvtps2pd</code></td><td>阈值/样本都升为 double 比较</td></tr>
+<tr><td><code>FUN_1400410b0</code></td><td><code>0x1400410b0</code></td><td>2</td><td>float64</td><td><code>movsd</code></td><td></td></tr>
+<tr><td><code>FUN_140041380</code></td><td><code>0x140041380</code></td><td>6</td><td>uint8</td><td><code>movzx eax,byte</code> + <code>cvtdq2pd</code></td><td>0..255</td></tr>
+<tr><td><code>FUN_140041280</code></td><td><code>0x140041280</code></td><td>7</td><td>uint16</td><td><code>movzx eax,word</code> + <code>cvtdq2pd</code></td><td>0..65535</td></tr>
+<tr><td><code>FUN_140041300</code></td><td><code>0x140041300</code></td><td>8</td><td>uint32</td><td>零扩展后 <code>cvtsi2sd xmm0, rax</code></td><td>无符号语义正确</td></tr>
+<tr><td><code>FUN_140041200</code></td><td><code>0x140041200</code></td><td>10</td><td>int8</td><td><code>movsx eax,byte</code> + <code>cvtdq2pd</code></td><td>有符号</td></tr>
+<tr><td><code>FUN_140041110</code></td><td><code>0x140041110</code></td><td>11</td><td>int16</td><td><code>movsx eax,word</code> + <code>cvtdq2pd</code></td><td>有符号</td></tr>
+<tr><td><code>FUN_140041190</code></td><td><code>0x140041190</code></td><td>12</td><td>int32</td><td><code>cvtdq2pd</code></td><td>有符号</td></tr>
+</tbody>
+</table>
+</div>
+      <p>跳转表证据（<code>0x1400416D4</code>，14 × int32，基址 <code>0x140000000</code>）<span class="badge b-obs">观测</span>：</p>
+      <div class="code">
+<pre><code>TypeID 0 → 无比较器(ret 0)  TypeID 1 → 0x140041617 (→FUN_140041040)
+TypeID 2 → 0x14004162E (float64)  TypeID 3,4,5 → 无比较器
+TypeID 6 → 0x140041645 (uint8)  TypeID 7 → 0x14004165C (uint16)
+TypeID 8 → 0x140041673 (uint32)  TypeID 9 → 无比较器
+TypeID 10 → 0x14004168A (int8)  TypeID 11 → 0x1400416A1 (int16)
+TypeID 12 → 0x1400416B8 (int32)  TypeID 13 → 无比较器</code></pre>
+</div>
+      <h4>4.3 NaN 处理 [观测/推导]</h4>
+      <p>无任何显式 NaN 分支；全部依赖 <code>comisd</code> 的<strong>无序语义</strong>：</p>
+      <div class="code">
+<p class="cap">asm</p><pre><code>comisd xmm1, xmm0        ; 若任一操作数为 NaN → ZF=PF=CF=1
+jbe    &lt;skip&gt;            ; CF|ZF → 取跳转 → 本方向不成立
+...
+comisd xmm0, xmm1
+jae    &lt;hit&gt;   (rise)    ; CF=0 才命中 → NaN 时 CF=1 → 不命中
+jb     &lt;no-hit&gt;(fall)    ; CF=1 才命中 → NaN 时 CF=1 → 命中路径被跳过</code></pre>
+</div>
+      <p><strong><span class="badge b-der">推导</span> 结论</strong>：<code>prev</code> 或 <code>cur</code> 为 NaN（含 ±inf 与 NaN 混用）时<strong>两个沿都不会命中</strong>，也就是说 NaN 既不会误触发也不会"卡住"某个沿。若 OpenScope 用 C 写 <code>prev &lt; L &amp;&amp; cur &gt;= L</code>，IEEE 语义与之一致，<strong>无需额外 NaN 分支</strong>（前提：编译不加 <code>-ffast-math</code>）。</p>
+      <hr>
+      <h3>5. 门控与状态机</h3>
+      <h4>5.1 <code>UnpackSamples</code>（<code>FUN_14003fa70</code>）逐样本流程 <span class="badge b-obs">观测</span></h4>
+      <p>反汇编逐条核对后的等价伪代码（<code>0x14003FAD0..0x14003FC0E</code>）：</p>
+      <div class="code">
+<pre><code>FUN_14004ea20(&amp;g_trigSnap);            // ① 取 LIVE 触发状态快照到 0x14285D9E0
+numSamples = nBytes / sampleSize;
+for (每个样本 p) {
+  StoreTimestamp(p);                   // tsRing[writeIdx] = ts(µs)
+  curTs = tsRing[writeIdx];
+  if (FUN_14003ef00() != 0) goto ringAdvance;   // DAT_140096dd0 = 停止/中止标志：置位则跳过整段变量处理
+  for (v = 变量链表头; v; v = v-&gt;next) {
+     FUN_14003feb0(v, p);              // ★ 无条件写环: memcpy(v-&gt;ring + writeIdx*8, p + v-&gt;offs, v-&gt;size)
+     base = v-&gt;ring;
+     if (FUN_140041540()) {            // writeIdx==0 &amp;&amp; wrapped==0 &amp;&amp; lastIdx==0（采集首样本）
+        v-&gt;curPtr = base;              //   指向 index 0；hasData 不动
+        continue;
+     }
+     r = FUN_1400415a0(&amp;g_trigSnap, v, base + (writeIdx-1)*8, base + writeIdx*8);
+     writeIdx = g_writeIdx;            //   判定期间可能被比较器改过 → 重读
+     if (r == 0) {                                     // —— 未命中 ——
+        if (v == g_trigSnap.symbol) v-&gt;curPtr = base + writeIdx*8;   // 仅触发符号推进读数
+        v-&gt;hasData = 0;                                // 不绘制
+     } else {
+        if (r == 1) { writeIdx = 0; g_writeIdx = 0; g_wrapped = 0; }  // ★ 从触发点重开记录
+        else if (r != 2 &amp;&amp; r != 3) { v-&gt;hasData = 0; continue; }
+        v-&gt;curPtr  = base + writeIdx*8;
+        FUN_140042ac0(v, base + writeIdx*8);           // min/max/avg 统计（只统计"放行"样本）
+        v-&gt;hasData = 1;
+     }
+  }
+ringAdvance:
+  if (lastIdx &lt; g_wrapped) g_wrapped++;
+  g_writeIdx = lastIdx + 1;
+  if (g_writeIdx &gt; 0x7FFFFF) { g_writeIdx = 0; g_wrapped = 1; }
+  g_lastIdx = lastIdx;
+}</code></pre>
+</div>
+      <h4>5.2 状态存储与复位 <span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>事件</th>
+<th>函数</th>
+<th>对触发状态做了什么</th>
+</tr></thead>
+<tbody>
+<tr><td><strong>开始采集</strong></td><td><code>FUN_14003d5c0</code>（"Read start"）</td><td><code>movups[0x14285D9E0]=0</code> <code>movq[0x14285D9F0]=0</code>（清快照 24B）→ <code>FUN_14004ea20</code> 快照 LIVE → <code>mov byte ptr [0x14285D9F4], 0</code> → <strong>清 <code>triggered</code> 锁存</strong> → <code>FUN_14004ed00</code> 写回。（<code>0x14285D9F4 = 0x14285D9E0+0x14</code>）</td></tr>
+<tr><td><strong>停止采集</strong></td><td><code>FUN_14003d7d0</code>（"Read stop"）</td><td>只清<strong>快照</strong> <code>0x14285D9E0..0x14285D9F7</code>；<strong>LIVE（含锁存）不动</strong> → 停止后保存下来的触发配置与锁存位都不受影响</td></tr>
+<tr><td><strong>新建/初始化工程</strong></td><td><code>FUN_14003cec0</code>（"Init project settings"）</td><td>栈上置 <code>{symbol=0, level=0, flags=0}</code> 后 <code>FUN_14004ed00(&amp;local)</code> → <strong>LIVE 触发被清零</strong></td></tr>
+<tr><td><strong>打开工程</strong></td><td><code>FUN_140047020</code> → <code>FUN_14004ecc0</code></td><td>XML 读入临时 0x5E8 结构 → <code>memcpy</code> 覆盖工程全局（含 <code>+0x5D0</code> 触发）</td></tr>
+<tr><td><strong>清数据环</strong></td><td><code>FUN_140040980</code></td><td>每变量 <code>ring</code> memset 0、<code>curPtr=0</code>、<code>hasData=0</code>，<code>writeIdx/lastIdx/wrapped/curTs=0</code>（<strong>不碰触发状态</strong>）</td></tr>
+<tr><td><strong>原始文件导入</strong></td><td><code>FUN_14003de60</code>（<code>Import Raw</code> → <code>FUN_14004ded0</code>）</td><td>同样经 <code>UnpackSamples</code>，因此<strong>导入数据也会触发/锁存</strong>（会置 <code>triggered</code>）</td></tr>
+</tbody>
+</table>
+</div>
+      <p><strong><span class="badge b-inf">推断</span> 时序</strong>：<code>triggered</code> 由比较器在 <code>UnpackSamples</code> 的样本循环中被置 1（并立即写回 LIVE），在 <code>FUN_14003d5c0</code> 开始下一次采集时被清 0。</p>
+      <h4>5.3 命中瞬间的两处索引不一致 <span class="badge b-der">推导</span>（潜在缺陷，OpenScope 应避免）</h4>
+      <ol>
+<li><code>writeIdx</code> 的归零发生在<strong>同一变量的 for 循环内部</strong>：链表顺序在触发符号<strong>之前</strong>的变量，其本样本已写在旧下标；在它<strong>之后</strong>的变量，因 <code>FUN_14003feb0</code> 读的是 LIVE 的 <code>writeIdx</code>（已为 0），会写进 index 0。→ <strong>同一样本内不同变量落在不同下标</strong>。</li>
+<li>归零后立刻 <code>curPtr = ring + 0</code> 并 <code>FUN_140042ac0(v, ring+0)</code>，但触发符号自己的本样本被写到了<strong>旧下标</strong> → <code>Value:</code> 显示与 min/max/avg 会吃到 index 0 上的<strong>陈旧值</strong>（首次触发时通常为 0）。 时间轴同理：<code>tsRing[0]</code> 是旧值，直到下一帧才正确。</li>
+</ol>
+      <p>这两点不影响"能用"，但会让触发首帧的触发符号读数/统计偏一帧。<strong><span class="badge b-inf">推断</span></strong>（反汇编确定，是否被用户观察到未验证）</p>
+      <hr>
+      <h3>6. UI：<code>TriggerWidget</code></h3>
+      <h4>6.1 类与对象布局 <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_1400561b0</code>（ctor，size 1761，唯一调用者 <code>FUN_14004c6a0</code> = MainWindow ctor）： <code>QWidget</code>（this+0/this+0x10 双 vtable）派生；<code>TriggerWidget::vftable</code> 写入 <code>[this]=vftable</code>、<code>[this+0x10]=vftable</code>。</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>偏移</th>
+<th>类型</th>
+<th>文本/用途</th>
+</tr></thead>
+<tbody>
+<tr><td><code>+0x28</code></td><td><code>QHBoxLayout*</code></td><td>主横向布局（margins 5,5,5,0）</td></tr>
+<tr><td><code>+0x30</code></td><td><code>QLabel*</code></td><td><strong>"Trigger control: "</strong></td></tr>
+<tr><td><code>+0x38</code></td><td><code>QToolBar*</code></td><td>承载下面 3 个 QAction</td></tr>
+<tr><td><code>+0x40</code></td><td><code>QAction*</code></td><td>checkable，tooltip <strong>"Trigger Rising Edge"</strong></td></tr>
+<tr><td><code>+0x48</code></td><td><code>QAction*</code></td><td>checkable，tooltip <strong>"Trigger Falling Edge"</strong></td></tr>
+<tr><td><code>+0x50</code></td><td><code>QAction*</code></td><td>checkable，tooltip <strong>"Trigger Both Edges"</strong></td></tr>
+<tr><td><code>+0x58</code></td><td><code>QLabel*</code></td><td>"Symbol: "</td></tr>
+<tr><td><code>+0x60</code></td><td><code>QComboBox*</code></td><td>触发符号（<code>setMinimumContentsLength(30)</code>）</td></tr>
+<tr><td><code>+0x68</code></td><td><code>QLabel*</code></td><td>"Threshold: "</td></tr>
+<tr><td><code>+0x70</code></td><td><code>QLineEdit*</code></td><td>阈值输入 + <code>QDoubleValidator</code></td></tr>
+<tr><td><code>+0x78</code></td><td><code>QLabel*</code></td><td>"Value: "</td></tr>
+<tr><td><code>+0x80</code></td><td><code>QLineEdit*</code>（初始 <code>setDisabled(true)</code>）</td><td>只读显示：实时值 / <strong>"Triggered"</strong></td></tr>
+<tr><td><code>+0x88</code></td><td><code>Trigger*</code>（堆 0x18）</td><td>本控件持有的触发快照</td></tr>
+<tr><td><code>+0x90</code></td><td>int</td><td>上次变量列表代数（<code>FUN_14003ed50</code>）</td></tr>
+<tr><td><code>+0x94</code></td><td>bool</td><td>"控件已使能"标志（0/1）</td></tr>
+</tbody>
+</table>
+</div>
+      <p>控件加入布局的顺序：<code>Trigger control: → QToolBar → Symbol: → QComboBox → Threshold: → QLineEdit → Value: → 值显示</code>（<code>chunk_007.c:2059-2082</code>）。</p>
+      <h4>6.2 信号连接 <span class="badge b-obs">观测</span>（<code>chunk_007.c:2083-2092</code>）</h4>
+      <div class="code">
+<pre><code>connect(actionRising(+0x40), SIGNAL("2toggled(bool)"), this, SLOT("1_SlotOnActionRising(bool)"));
+connect(actionFalling(+0x48),SIGNAL("2toggled(bool)"), this, SLOT("1_SlotOnActionFalling(bool)"));
+connect(actionBoth(+0x50),   SIGNAL("2toggled(bool)"), this, SLOT("1_SlotOnActionBoth(bool)"));
+connect(combo(+0x60),        SIGNAL("2currentIndexChanged(int)"), this, SLOT("1_SlotOnCurrentIndexChanged(int)"));
+connect(thresholdEdit(+0x70),SIGNAL("2textChanged(const QString&amp;)"), this, SLOT("1_SlotOnTextChanged(const QString&amp;)"));</code></pre>
+</div>
+      <p>槽索引 → 实现（<code>FUN_14003c820</code> = <code>TriggerWidget::qt_metacall</code> → <code>FUN_14003c7a0</code>，按 <code>connect</code> 顺序 0..4）：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>slot</th>
+<th>名字</th>
+<th>实现</th>
+<th>行为（<strong>直接操作触发快照的字节</strong>）</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>_SlotOnActionRising</code></td><td><code>FUN_140057190</code></td><td>勾选时：取消 Falling/Both 的勾选；<code>on=1, rise=1, fall=0</code>；取消勾选：<code>on=0</code>；随后 <code>FUN_140056da0</code> 写回 LIVE</td></tr>
+<tr><td>1</td><td><code>_SlotOnActionFalling</code></td><td><code>FUN_140057120</code></td><td>同上但 <code>rise=0, fall=1</code></td></tr>
+<tr><td>2</td><td><code>_SlotOnActionBoth</code></td><td><code>FUN_1400570b0</code></td><td>同上但 <code>rise=1, fall=1</code>（"Both" = 两个沿都开，不是一个独立枚举值）</td></tr>
+<tr><td>3</td><td><code>_SlotOnCurrentIndexChanged</code></td><td><code>FUN_140057200</code></td><td><code>0x140057200: cmp edx,-1 / jne 0x140056da0</code> —— 索引为 -1 时忽略，否则等同 slot 4</td></tr>
+<tr><td>4</td><td><code>_SlotOnTextChanged</code></td><td><code>FUN_140056da0</code></td><td>见 §6.3</td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p><strong>注意</strong>："启用/禁用触发"没有独立复选框 —— <strong>勾选任一沿 = 开，全部取消 = 关</strong>（<code>on</code> 由沿选择派生）。</p>
+</div>
+      <h4>6.3 写回路径 <code>FUN_140056da0</code> <span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>i = combo-&gt;currentIndex();
+v = 遍历全局变量链表 DAT_14286d3b8 取第 i 项;
+trig-&gt;symbol = (i &gt;= 0) ? v : NULL;                   // **(trig+0x00)**
+trig-&gt;level  = thresholdEdit-&gt;text().toDouble(NULL);  // **(trig+0x08)**，非法文本 → 0.0
+FUN_14004ed00(trig);                                  // 写回 LIVE（有差异且在工程内）</code></pre>
+</div>
+      <ul>
+<li>阈值<strong>输入校验</strong>：ctor 里 <code>new QDoubleValidator(...)</code> + <code>QLineEdit::setValidator(edit+0x70, v)</code>（<code>chunk_007.c:2029-2037</code>）；无效文本由 <code>toDouble(NULL)</code> 静默变 0.0 <span class="badge b-obs">观测</span>。</li>
+<li>符号选择<strong>复用下拉框</strong>（<code>QComboBox</code>），不是 SymbolSelection 变量树 <span class="badge b-obs">观测</span>。</li>
+</ul>
+      <h4>6.4 刷新路径 <code>FUN_140056ad0</code> <span class="badge b-obs">观测</span></h4>
+      <p><code>MainWindow(1 s QTimer, timeout → _SlotOnTimeout)</code> → <code>FUN_14003be00</code>(qt_metacall) → <code>FUN_14003ba80(idx=0x15)</code> → <code>FUN_14004d870</code> → <code>FUN_140056ad0</code>。 （<code>QTimer::setInterval(timer,1000)</code> @ <code>chunk_006.c:3688</code>；<code>FUN_140056ad0</code> 是唯一的 TriggerWidget 刷新入口）</p>
+      <p>分两支：</p>
+      <ul>
+<li><strong>未采集</strong>（<code>FUN_14003ef10()</code>=<code>DAT_14085d181</code>==0）：清空 <code>+0x80</code> → <code>FUN_14004ea20(widget+0x88)</code> 刷新快照 → <code>FUN_140056da0</code>（把快照推回 LIVE；因快照刚取自 LIVE，通常无差异、写回为 no-op）→ 判断是否需要重建下拉框（<code>FUN_140056ef0</code>：变量表代数 <code>DAT_14085D1E8</code> 变化 或 <code>FUN_140056e40</code> 发现 LIVE 与控件快照不同）→ 重建时用 <code>NameWithParents(+0x108)</code> 逐项 <code>insertItem</code>，并按名称 <code>memcmp</code> 选中当前触发符号对应的项 → 依据 <code>on/rise/fall</code> 复原 3 个 QAction 的 checked 状态。</li>
+<li><strong>采集中</strong>：<code>on != 0</code> 且 <code>triggered == 1</code> → <code>setText(+0x80, "Triggered")</code>；否则若触发符号有效 → <code>FUN_140056f60</code> 格式化其当前值（<code>snprintf(buf,16,"%f", *curPtr)</code>，按 TypeID 取值，bool 显示 "True"/"False"）写入 <code>+0x80</code>。</li>
+</ul>
+      <h4>6.5 "Triggered" 出现时机 [观测/推导]</h4>
+      <ul>
+<li>出现位置：<strong>TriggerWidget 的 "Value:" 只读框</strong>（<code>+0x80</code>），<strong>不是</strong>状态栏/日志。全二进制中 "Triggered" 字符串只有 1 处引用（<code>FUN_140056ad0</code>，<code>globals.txt</code> 佐证）。</li>
+<li>条件 <span class="badge b-der">推导</span>：<code>采集进行中（DAT_14085d181!=0）</code> 且 <code>LIVE.on != 0</code> 且 <code>LIVE.triggered == 1</code>。</li>
+<li>时延：由 1 Hz 定时器驱动，最坏 1 s 后才显示；触发命中本身会通过 <code>FUN_14004ed00 → thunk_FUN_14003f930</code> 投递一次 UI 通知事件（<code>FUN_14003f930</code> 末尾 <code>FUN_14004e2c0(DAT_14286d388, msg)</code>），因此实际可能立即刷新 <strong><span class="badge b-inf">推断</span></strong>。</li>
+<li>停止采集后控件<strong>恢复可用</strong>（刷新走 §6.4 的"未采集"分支），<code>+0x80</code> 在该分支开头被 <code>setText("")</code> 清空 → "Triggered" 随之消失；但 LIVE 的锁存位<strong>仍为 1</strong>（见 §5.2），直到下一次开始采集才被清。</li>
+</ul>
+      <h4>6.6 使能/禁用规则 <span class="badge b-obs">观测</span></h4>
+      <ul>
+<li>ctor 末尾 <code>+0x94 = 1; FUN_140056950(this)</code> → 启动即<strong>禁用</strong>3 个 QAction、QComboBox、阈值框（图标换禁用版）。</li>
+<li><code>FUN_140056a00</code>：<code>+0x94==0</code> 时<strong>启用</strong>（图标 0x19/0x17/0x15），<code>+0x94=1</code>。</li>
+<li>禁用时图标索引 0x1A/0x18/0x16（<code>FUN_14002a320(idx)</code> 取图标）。</li>
+<li><code>FUN_14004d870</code> 的判定（<code>chunk_006.c:4320-4328</code>）：<code>工程已打开(FUN_14004ea40!=0) 且 未采集(FUN_14003ef10()==0)</code> → <strong>启用</strong>（<code>FUN_140056a00</code>）；否则（未打开工程 <strong>或</strong> 采集中）→ <strong>禁用</strong>（<code>FUN_140056950</code>）。 → <strong>结论：触发只能在"停止状态"下配置</strong>；一旦开始采集，控件立即变灰（采集期间 LIVE 快照被引擎每批数据取一次，本来就无法从 UI 改）。 这解释了 ctor 里"先禁用"的写法（构造函数执行时还没有工程）。</li>
+</ul>
+      <hr>
+      <h3>7. 持久化（<code>.jscope</code>）</h3>
+      <h4>7.1 精确结构 <span class="badge b-obs">观测</span>（修正既有报告 §10.1 的 <code>&lt;Level/&gt;&lt;Auto/&gt;...</code> 写法）</h4>
+      <p>写：<code>FUN_140046c50</code>（被 <code>FUN_140046110</code> 调用，<code>param_2</code> = 工程结构）；读：<code>FUN_140045ee0</code>（被 <code>FUN_140045370</code> 调用，<code>param_2 + 0x5d0</code>）。属性名逐字节核对（<code>0x140075XXX</code>）：</p>
+      <div class="code">
+<p class="cap">xml</p><pre><code>&lt;Project&gt;
+  &lt;Configuration&gt;
+    ...
+    &lt;Trigger&gt;
+      &lt;Options Level="%.17g" Symbol="&lt;变量 Name 字段(+0x004)&gt;"
+               On="0|1" Auto="0|1" Rise="0|1" Fall="0|1"/&gt;
+    &lt;/Trigger&gt;
+  &lt;/Configuration&gt;
+  ...
+&lt;/Project&gt;</code></pre>
+</div>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>XML 属性</th>
+<th>字符串地址</th>
+<th>触发字段</th>
+<th>写入方式</th>
+</tr></thead>
+<tbody>
+<tr><td><code>Trigger</code> / <code>Options</code></td><td><code>0x140075830</code> / <code>0x1400756D8</code></td><td>元素名</td><td></td></tr>
+<tr><td><code>Level</code></td><td><code>0x1400757CC</code></td><td><code>+0x08</code> (double)</td><td><code>snprintf("%.17g")</code>（<code>FUN_1400397c0</code>）→ 全精度</td></tr>
+<tr><td><code>Symbol</code></td><td><code>0x1400756E0</code></td><td><code>+0x00</code> 所指变量记录的 <code>Name(+0x004)</code></td><td>字符串</td></tr>
+<tr><td><code>On</code></td><td><code>0x1400757D4</code></td><td><code>+0x10</code></td><td>布尔，写成字符串 <code>"0"</code>/<code>"1"</code>（<code>0x140039760</code> 内部 <code>cmovne</code> 选择 <code>0x140070C68="0"</code> / <code>0x1400718FC="1"</code>）</td></tr>
+<tr><td><code>Auto</code></td><td><code>0x1400757D8</code></td><td><code>+0x11</code></td><td>同上</td></tr>
+<tr><td><code>Rise</code></td><td><code>0x1400757E0</code></td><td><code>+0x12</code></td><td>同上</td></tr>
+<tr><td><code>Fall</code></td><td><code>0x1400757E8</code></td><td><code>+0x13</code></td><td>同上</td></tr>
+</tbody>
+</table>
+</div>
+      <p><strong>写入条件</strong> <span class="badge b-obs">观测</span>：<code>FUN_140046110</code> 中 <code>if (*(longlong *)(project + 0x5d0) != 0)</code>（触发符号非空）才写 <code>&lt;Trigger&gt;</code> 节点 → <strong>未选符号时工程文件里没有触发段</strong>。</p>
+      <p><strong>读入</strong> <span class="badge b-obs">观测</span>：<code>FUN_140045ee0</code> 顺序读 <code>Level(double) → Symbol(字符串，落到全局缓冲 0x14285EDC0) → On(+0x10) → Auto(+0x11) → Rise(+0x12) → Fall(+0x13)</code>；随后 <code>FUN_140045a60</code> 用该名称在变量链表中逐个 <code>strcmp</code>（比较对象是 <code>var+4</code> 的 <code>Name</code>），命中则 <code>project+0x5D0 = var</code>，未命中则保持 0（触发等于没配）。 注意：<code>FUN_140045ee0</code> 对每个属性都用 <code>if (ret &lt; 0) return -1</code> 的<strong>强依赖</strong>写法 —— 少一个属性就整段读失败 <span class="badge b-obs">观测</span>。</p>
+      <h4>7.2 落盘后如何生效 [观测/推导]</h4>
+      <p><code>FUN_140047020</code>（打开工程）把 XML 读进<strong>临时</strong> 0x5E8 缓冲 → <code>FUN_14004ecc0</code> 整块 <code>memcpy</code> 到工程全局 <code>DAT_142864A80</code> —— 由于 LIVE 触发状态就位于 <code>0x142864A80+0x5D0</code>，<strong>加载即生效，无任何"应用触发"的代码</strong> <span class="badge b-der">推导</span>。 副作用：<code>Level</code> 只进了 LIVE/工程结构，<strong>控件上的 Threshold 输入框不会同步显示文件里的值</strong>（全代码中没有对 <code>+0x70</code> 的 <code>setText</code> 调用；只有 <code>+0x80</code> 会被刷新）<span class="badge b-obs">观测</span>。下一次 <code>FUN_140056ad0</code> 会用 LIVE 值刷新控件快照，因此不点输入框时行为仍与文件一致；一旦用户改阈值文本，<code>textChanged</code> 会用输入框内容覆盖 <span class="badge b-obs">观测</span>。</p>
+      <h4>7.3 <code>Auto</code> 在二进制里到底是什么？</h4>
+      <p><strong>结论：在本版（9.66）中没有任何代码读取 <code>trigger+0x11</code>。</strong> <span class="badge b-obs">观测</span></p>
+      <p>证据（穷举）：</p>
+      <ul>
+<li>LIVE 状态 <code>0x142865050..0x142865067</code> 只被 <code>FUN_14004ea20</code>（save）、<code>FUN_14004ed00</code>（apply）、<code>FUN_14004e830</code>（diff）触碰（<code>globals.txt</code> 仅列这三个函数）；</li>
+<li><code>FUN_14004ea20</code> 的全部 5 个调用点：<code>FUN_14003d5c0</code>、<code>FUN_14003fa30</code>、<code>FUN_14003fa70</code>(UnpackSamples)、<code>FUN_140056ad0</code>、<code>FUN_140056e40</code>；</li>
+<li>其中真正按字段读的只有：<code>FUN_1400415a0</code>（读 <code>+0x10</code>、<code>+0x14</code>）、8 个比较器（读 <code>+0x08/+0x12/+0x13</code>，写 <code>+0x14</code>）、<code>FUN_140056ad0</code>（读 <code>+0x10/+0x12/+0x13/+0x14</code>）、<code>FUN_140056e40</code>（<strong>比较</strong> <code>+0x10/+0x11/+0x12/+0x13</code> 用于变更检测）；</li>
+<li>没有任何代码 <code>if (trigger-&gt;auto_) ...</code> 式的分支。</li>
+</ul>
+      <p><strong><span class="badge b-inf">推断</span></strong> <code>Auto</code> 是历史遗留/保留字段（旧版本可能是"自动触发/自动停止"开关；也可能是"自动重新武装"），9.66 只做<strong>读写往返 + 变更检测</strong>，不产生行为差异。GUI 中也没有任何入口能改它（三个 QAction 只碰 <code>on/rise/fall</code>），所以它<strong>只能来自外部编辑的 .jscope 文件</strong>。 <strong><span class="badge b-unk">未知</span></strong> 其原始语义（老版本 J-Scope 或 UM08028 手册中的定义）本次未能证实。</p>
+      <h4>7.4 与既有报告的差异汇总</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>既有报告</th>
+<th>本文（有指令级证据）</th>
+</tr></thead>
+<tbody>
+<tr><td><code>&lt;Trigger&gt;&lt;Level/&gt;&lt;Auto/&gt;&lt;Rise/&gt;&lt;Fall/&gt;&lt;/Trigger&gt;</code></td><td><code>&lt;Trigger&gt;&lt;Options Level= Symbol= On= Auto= Rise= Fall=/&gt;&lt;/Trigger&gt;</code>，值均写作属性，布尔为 <code>"0"/"1"</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td><code>+0x3C8</code> = "数据环写指针"</td><td>实为 <strong><code>curPtr</code></strong>（指向环内当前可用样本，用于取值显示/绘图起点）；真正写指针是全局 <code>DAT_14285DA80</code> <span class="badge b-obs">观测</span></td></tr>
+<tr><td>触发命中调 <code>FUN_140042ac0</code> 处理触发</td><td><code>FUN_140042ac0</code> 是 min/max/avg 累加器，仅在"放行"样本上调用 <span class="badge b-obs">观测</span></td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <h3>8. 未知点 / 存疑</h3>
+      <ol>
+<li><strong><span class="badge b-unk">未知</span> <code>Auto</code> 的原始语义</strong>（§7.3）。需要老版本 .jscope 样本或 SEGGER 手册/发行说明比对。</li>
+<li><strong><span class="badge b-unk">未知</span></strong> 触发命中是否有<strong>日志</strong>输出：全字符串表中除 UI 文本外无任何 trigger 相关日志串，且 <code>FUN_14003f830</code>（AddLog）的调用点里没有触发路径 → <strong><span class="badge b-inf">推断</span> 无日志</strong>，但未穷举所有日志调用点。</li>
+<li><strong><span class="badge b-inf">推断</span></strong> 触发首次命中时 index 0 的样本/时间戳陈旧（§5.3）；未用真机验证是否会看到一帧跳变。</li>
+<li><strong><span class="badge b-unk">未知</span></strong> <code>FUN_140056ad0</code> 的 1 Hz 刷新与"命中立即刷新"两者中，实际用户看到 "Triggered" 的延迟（取决于 <code>FUN_14004e2c0</code> 投递的事件是否立即被 Qt 处理）。</li>
+<li><strong><span class="badge b-unk">未知</span></strong> <code>0x142865044</code> 与触发同族的 qword 哨兵（<code>FUN_14003cec0</code> 写 <code>0x00F4240000000101</code>，只有 <code>FUN_14004e8a0</code> 比较、无人读值）语义；与触发<strong>无关</strong>但与"工程已修改"判定相邻，值得后续单独看。</li>
+<li><strong><span class="badge b-inf">推断</span></strong> HSS 侧无硬件触发：<code>JLINK_HSS_Start(变量表, n, period, 1)</code> 的参数里没有任何触发表；全部触发判定都在主机侧逐样本做 → 触发<strong>不减少 USB/探针流量</strong>。</li>
+</ol>
+      <hr>
+      <h3>9. 对 OpenScope 的启示（具体、可执行）</h3>
+      <ol>
+<li><strong>触发状态直接放进"当前工程设置"结构体里，就能白拿持久化与加载即生效。</strong> J-Scope 把 <code>Trigger</code> 放在工程块 <code>+0x5D0</code>（= LIVE 状态本体），于是"存盘 = 写 XML"、"读盘 = memcpy"，全程没有一句"apply trigger"的代码。OpenScope 若已有一个 <code>Settings/Project</code> 单例，建议把 trigger 作为其成员（而不是另立全局），并让 XML 读写与内存布局一一对应。</li>
+</ol>
+      <ol>
+<li><strong>采集线程用"快照 → 改 → 守卫写回"代替锁。</strong> <code>save(FUN_14004ea20)</code> / <code>apply(FUN_14004ed00：仅当有差异且工程已打开)</code> 这一对是并发下最省事的做法：采集线程每批数据开头取一次快照（J-Scope 是 10 ms 一取），UI 线程随时改自己的副本再写回。代价是一个读批次（约 10 ms）的陈旧窗口 —— 对触发这种低频配置完全够用。注意 J-Scope 的 apply 内部还有 <code>inc [0x142865068]</code>（置"工程已修改"），OpenScope 可同样用它来驱动"未保存修改"提示。</li>
+</ol>
+      <ol>
+<li><strong>"命中即重开记录"可以用极低成本实现，但要在样本循环</strong>外<strong>归零索引。</strong> 骨架：<code>if (r==1) { writeIdx=0; wrapped=0; }</code> + 每变量一个 <code>hasData</code> 标志位控制绘制。J-Scope 把归零放在变量循环内部，导致同一样本内不同变量下标不一致、触发符号首帧取到陈旧值（§5.3）。OpenScope 应在<strong>处理完整个样本（所有变量）之后</strong>再归零，并把该样本显式写到 index 0，可顺手修掉这两个瑕疵。</li>
+</ol>
+      <ol>
+<li><strong>比较器用"类型 → 函数表"分派，并明确列出不支持触发的类型。</strong> TypeID→比较器跳转表（§4.2）比每样本 switch 更好维护。同时注意：J-Scope 对 <strong>bool、int64、uint64</strong>（以及它的 float16/float128）<strong>没有</strong>比较器，用户选中会"永远不触发"且无提示 —— OpenScope 要么补齐（int64/uint64 用整数比较，注意 <code>(double)</code> 转换在 &gt;2^53 时丢精度），要么在符号下拉框里禁用这些类型。</li>
+</ol>
+      <ol>
+<li><strong>整数阈值比较务必先升为 double 再比（与 J-Scope 对齐），浮点 NaN 不需要特判。</strong> 全部 8 个比较器都是"载入 → 转 double → <code>comisd</code>"，NaN 因无序标志自然两个沿都不命中（§4.3）。OpenScope 若写成 <code>prev &lt; L &amp;&amp; cur &gt;= L</code> / <code>prev &gt; L &amp;&amp; cur &lt;= L</code> 且不开 <code>-ffast-math</code>，行为与 J-Scope 完全一致 —— 便于将来做波形/触发结果互校。</li>
+</ol>
+      <ol>
+<li><strong>UI 抄这个最小集合即可，并把"启用"合并进"沿选择"。</strong> 实测 J-Scope 的触发栏只有：<code>Trigger control:</code> 标签 + 3 个互斥 checkable 动作（Rising/Falling/Both；全不选 = 关）+ 1 个符号下拉（复用已选变量列表）+ 1 个带 <code>QDoubleValidator</code> 的阈值框 + 1 个只读值框（显示 <code>%f</code> 实时值或 "Triggered"，只在采集中才有内容），且整套控件<strong>只在"已打开工程 且 未采集"时可编辑</strong>（采集中变灰，§6.6）。另外，如果 OpenScope 不需要 "Auto"，就在数据结构里删掉该字段，别像 J-Scope 一样留下一个"能存能读但没人用"的死字段（§7.3）。</li>
+</ol>
+      <hr>
+      <h3>10. 需要补充反编译</h3>
+      <p>本次分析所用函数<strong>全部</strong>存在于 <code>dumps/alldecomp/</code>，未发现缺失。两处 Ghidra 未单独展开的跳转 thunk 已用 capstone 直接核对，结论如下（无需补充 Ghidra 作业）：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>地址</th>
+<th>名字</th>
+<th>内容</th>
+</tr></thead>
+<tbody>
+<tr><td><code>0x140057210</code></td><td><code>thunk_FUN_140056da0</code></td><td><code>jmp 0x140056DA0</code>（TriggerWidget slot 4）</td></tr>
+<tr><td><code>0x14004ED90</code></td><td><code>thunk_FUN_14003f930</code></td><td><code>inc dword ptr [0x142865068]</code>（工程已修改计数）; <code>jmp 0x14003F930</code>（投递 UI 通知）</td></tr>
+</tbody>
+</table>
+</div>
+      <p>可选后续（若要把本文的 <span class="badge b-unk">未知</span> 项清零）：</p>
+      <ul>
+<li><code>0x14003f930</code> 的完整反编译（确认通知事件的具体 ID 与是否立即重绘）—— dump 中已有该函数（<code>chunk_005.c:1876</code>），但 <code>FUN_14004e2c0</code> 的事件语义未展开；</li>
+<li>老版本 J-Scope（9.5x 之前）的 <code>.jscope</code> 样本或手册，用来确认 <code>Auto</code> 的原始语义。</li>
+</ul>
+      <hr>
+      <p><em>本文所有地址均为镜像基址 <code>0x140000000</code> 下的 VA。除只读访问 exe 字节与既有 dump 外，未运行 J-Scope、未运行 Ghidra、未连接探针。</em></p>
+    </section>

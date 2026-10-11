@@ -1,0 +1,25 @@
+<section id="s1">
+      <h2><span class="sec-n">01</span>二进制基本面</h2>
+      <div class="tw">
+        <table>
+          <tbody>
+            <tr><td>格式</td><td class="m">PE32+ x86-64</td></tr>
+            <tr><td>链接器</td><td class="m">MSVC 14.29（VS2019 工具链）</td></tr>
+            <tr><td>编译时间戳</td><td class="m">2026-08-05 10:18:02 UTC</td></tr>
+            <tr><td>体积</td><td class="m">679,920 B（.text 371,712）</td></tr>
+            <tr><td>GUI 框架</td><td><strong>Qt4</strong> — QtCore4.dll 141 导入 / QtGui4.dll 1034 导入</td></tr>
+            <tr><td>调试器后端</td><td><strong>动态加载</strong> <code>JLink_x64.dll</code>，<strong>无静态导入</strong></td></tr>
+            <tr><td>ELF 解析</td><td>静态链接 <strong>libdwarf</strong></td></tr>
+            <tr><td>版本资源</td><td class="m">ProductVersion = 9.66；FileVersion 字段损坏（内容为 <code>\tB</code>）</td></tr>
+            <tr><td>PDB 路径残留</td><td class="m">D:\Work\JLink\Output\Release\x64\JScope.pdb</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key">
+        <p><strong>关键结构发现 ——</strong> <code>.data</code> 段虚拟大小 <strong>41,776,096 字节（≈39.8 MB）</strong>，远超常规。
+        原因是其中静态驻留了一个 <strong>32 MB 时间戳环</strong>（见 <a href="#s6">§06</a>）。这是理解 J-Scope 内存策略的入口。</p>
+      </div>
+    </section>
+
+    <!-- ══ 02 ══ -->
+    

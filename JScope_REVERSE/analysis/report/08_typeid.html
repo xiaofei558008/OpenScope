@@ -1,0 +1,42 @@
+    <!-- ══ 08 ══ -->
+    <section id="s8">
+      <h2><span class="sec-n">08</span>类型系统（TypeID）</h2>
+      <p class="lead">
+        TypeID 存于符号记录 <code>+0x314</code>，是"这个变量怎么解释字节"的唯一开关：
+        采样统计、触发比较、CSV 导出、树中是否可勾选，全部按它分派。
+        <strong>全程序只有三处产出 TypeID</strong>（ELF/DWARF 分类器、RTT VarFormat 解析器、位域分支），完整证据见 §14.3。
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:70px">TypeID</th><th style="width:190px">类型</th><th style="width:90px">树中可选</th><th>判定依据（FUN_140040050，除非另注）</th></tr></thead>
+          <tbody>
+            <tr><td class="m">0</td><td>不支持 / 未知</td><td class="no">✘</td><td>其余全部情况（含 <code>+0x3D8</code> 已置位、类型名不匹配、宽度非法）</td></tr>
+            <tr><td class="m">1</td><td>float32</td><td class="ok">✔</td><td><code>size==4 &amp;&amp; type=="float"</code>；MaxValue = FLT_MAX</td></tr>
+            <tr><td class="m">2</td><td>float64</td><td class="ok">✔</td><td><code>size==8 &amp;&amp; type=="double"</code>；MaxValue = DBL_MAX</td></tr>
+            <tr><td class="m">3</td><td class="m">—（保留/未使用）—</td><td class="no">✘</td><td><strong>无任何代码产出该值</strong>；树中一旦出现即禁用</td></tr>
+            <tr><td class="m">4</td><td class="m">—（保留/未使用）—</td><td class="no">✘</td><td>同上</td></tr>
+            <tr><td class="m">5</td><td>bool</td><td class="ok">✔</td><td><code>size==1 &amp;&amp; (type=="bool" || type=="_Bool")</code>；MaxValue = 1.0</td></tr>
+            <tr><td class="m">6</td><td>uint8</td><td class="ok">✔</td><td>无符号 + size 1；MaxValue = 255</td></tr>
+            <tr><td class="m">7</td><td>uint16</td><td class="ok">✔</td><td>无符号 + size 2；MaxValue = 65535</td></tr>
+            <tr><td class="m">8</td><td>uint32</td><td class="ok">✔</td><td>无符号 + size 4；MaxValue = 4294967295</td></tr>
+            <tr><td class="m">9</td><td>uint64</td><td class="no">✘</td><td>无符号 + size 8；<strong>可分类但树中被禁用</strong>（"Symbol type is not supported"）</td></tr>
+            <tr><td class="m">10</td><td>int8</td><td class="ok">✔</td><td>有符号 + size 1；MaxValue = 127</td></tr>
+            <tr><td class="m">11</td><td>int16</td><td class="ok">✔</td><td>有符号 + size 2；MaxValue = 32767</td></tr>
+            <tr><td class="m">12</td><td>int32</td><td class="ok">✔</td><td>有符号 + size 4；MaxValue = 2147483647</td></tr>
+            <tr><td class="m">13</td><td>int64</td><td class="no">✘</td><td>有符号 + size 8；同样被禁用</td></tr>
+            <tr><td class="m">14 (0xE)</td><td><strong>位域</strong></td><td class="ok">✔</td><td>DWARF <code>DW_AT_bit_size</code> 存在时（<code>FUN_1400404c0</code>）；位宽/位偏移存 <code>+0x338 / +0x33C</code>，取样时 <code>(raw &gt;&gt; shift) &amp; ((1&lt;&lt;width)-1)</code>（<code>FUN_14003eaa0</code>）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key">
+        <p><strong>本轮修正的两处旧结论：</strong></p>
+        <p>① <strong>TypeID 14 = 位域</strong>（不是"另一个被禁类型"）——这是上一轮完全没发现的类型，
+        而且它<strong>可以在树中被选中并采样</strong>（对寄存器位域极有用）。</p>
+        <p>② <strong>TypeID 3/4 没有任何产出点</strong>：上一版报告推测的 "long double/float128" 与 "half" 在本版本代码里
+        找不到任何支撑——它们只是枚举里保留的槽位（历史遗留），手工改 .jscope 才会出现，且一律禁用。</p>
+      </div>
+      <p>
+        <strong>可观测类型 = 1,2,5,6,7,8,10,11,12,14</strong>；<strong>不可观测 = 0,3,4,9,13</strong>
+        —— 也就是说 <strong>J-Scope 9.66 无法观测任何 64 位整型变量</strong>（uint64/int64 只能在 ELF 里被分类，但树上不给勾选框）。
+      </p>
+    </section>

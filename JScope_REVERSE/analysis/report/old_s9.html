@@ -1,0 +1,54 @@
+<section id="s9">
+      <h2><span class="sec-n">09</span>变量记录布局 <span class="badge b-der">推导</span></h2>
+      <p class="lead">由 <code>.jscope</code> 写出函数 <code>FUN_1400468c0</code> 的字段访问顺序还原。</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:90px">偏移</th><th style="width:130px">类型</th><th style="width:180px">XML 属性</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x004</td><td class="m">char[]</td><td class="m">Name</td><td>叶名</td></tr>
+            <tr><td class="m">+0x108</td><td class="m">char[]</td><td class="m">NameWithParents</td><td>全路径名</td></tr>
+            <tr><td class="m">+0x110</td><td class="m">char[]</td><td class="m">Type</td><td>类型名</td></tr>
+            <tr><td class="m">+0x210</td><td class="m">char[]</td><td class="m">File</td><td>来源文件</td></tr>
+            <tr><td class="m">+0x314</td><td class="m">int</td><td class="m">TypeID</td><td>见 §08</td></tr>
+            <tr><td class="m">+0x318</td><td class="m">uint32</td><td class="m">Address</td><td>绝对地址</td></tr>
+            <tr><td class="m">+0x31C</td><td class="m">int</td><td class="m">Size</td><td>字节数</td></tr>
+            <tr><td class="m">+0x348</td><td class="m">int</td><td class="m">DrawStyle</td><td>Line / Points / Line&amp;Points / Rectangle</td></tr>
+            <tr><td class="m">+0x350</td><td class="m">double</td><td class="m">YOffset</td><td></td></tr>
+            <tr><td class="m">+0x358</td><td class="m">int</td><td class="m">YResolution</td><td></td></tr>
+            <tr><td class="m">+0x35D</td><td class="m">bool</td><td class="m">IsAutoConfig</td><td></td></tr>
+            <tr><td class="m">+0x35E</td><td class="m">bool</td><td class="m">ShowInGraph</td><td></td></tr>
+            <tr><td class="m">+0x35F</td><td class="m">bool</td><td class="m">—</td><td>树中是否显示勾选框</td></tr>
+            <tr><td class="m">+0x378</td><td class="m">QColor*</td><td class="m">GraphColorRed/Green/Blue</td><td>曲线颜色</td></tr>
+            <tr><td class="m">+0x388</td><td class="m">bool</td><td class="m">—</td><td>本周期是否有数据</td></tr>
+            <tr><td class="m">+0x38C</td><td class="m">uint32</td><td class="m">Offset</td><td><strong>样本内字节偏移</strong></td></tr>
+            <tr><td class="m">+0x398</td><td class="m">double</td><td class="m">YMaxSampled</td><td>初值 -DBL_MAX</td></tr>
+            <tr><td class="m">+0x3A0</td><td class="m">double</td><td class="m">YMinSampled</td><td>初值 +DBL_MAX</td></tr>
+            <tr><td class="m">+0x3A8</td><td class="m">double</td><td class="m">YAvgSampled</td><td></td></tr>
+            <tr><td class="m">+0x3B0</td><td class="m">double</td><td class="m">MaxValue</td><td></td></tr>
+            <tr><td class="m">+0x3C8</td><td class="m">long long</td><td class="m">—</td><td>数据环写指针</td></tr>
+            <tr><td class="m">+0x3D0</td><td class="m">void*</td><td class="m">—</td><td>64 MB 数据环基址</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>配置结构（0x5BC 字节）关键字段</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:100px">偏移</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x38C</td><td class="m">ScriptFile</td></tr>
+            <tr><td class="m">+0x59C</td><td class="m">TargetInterface　<span class="badge b-inf">推断</span> 0=JTAG, 1=SWD, 7=?</td></tr>
+            <tr><td class="m">+0x5A0</td><td class="m">InterfaceSpeed (kHz)</td></tr>
+            <tr><td class="m">+0x5A4</td><td class="m">模式：0 = HSS，1 = RTT</td></tr>
+            <tr><td class="m">+0x5A5</td><td class="m">IsRTTWithTimeStamp</td></tr>
+            <tr><td class="m">+0x5A6</td><td class="m">RTT 子模式（Data / Plus）</td></tr>
+            <tr><td class="m">+0x5A8</td><td class="m">SamplingPeriod (µs)</td></tr>
+            <tr><td class="m">+0x5B0 / +0x5B4</td><td class="m">JTAG_IRPre / JTAG 配置值</td></tr>
+            <tr><td class="m">+0x5B8</td><td class="m">停止时是否跳过 HSS_Stop</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ 10 ══ -->
+    

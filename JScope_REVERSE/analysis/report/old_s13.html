@@ -1,0 +1,36 @@
+<section id="s13">
+      <h2><span class="sec-n">13</span>产出物与复现</h2>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:300px">路径</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td class="m">JSCOPE_ANALYSIS.md</td><td>完整报告（本页的 Markdown 源）</td></tr>
+            <tr><td class="m">tools/ghidra_scripts/*.java</td><td>5 个 Ghidra 脚本：概览导出 / 字符串交叉引用反编译 / 调用者反编译 / 按字符串自动重命名 / 引用查询</td></tr>
+            <tr><td class="m">tools/run_*.bat</td><td>Ghidra headless 调用封装</td></tr>
+            <tr><td class="m">dumps/decomp_hss.txt</td><td>HSS 全路径反编译</td></tr>
+            <tr><td class="m">dumps/decomp_rtt.txt</td><td>RTT 全路径反编译（含 VarFormat 解析器）</td></tr>
+            <tr><td class="m">dumps/datapath.txt</td><td>样本存储 / 时间戳逻辑</td></tr>
+            <tr><td class="m">dumps/xml_fmt.txt</td><td>工程文件读写</td></tr>
+            <tr><td class="m">dumps/elf_syms.txt</td><td>ELF 符号树与类型判定</td></tr>
+            <tr><td class="m">dumps/functions.txt</td><td>2,712 个函数清单</td></tr>
+            <tr><td class="m">ghidra_proj/</td><td>Ghidra 工程（可直接打开继续分析）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code">
+        <p class="cap">复现方法</p>
+<pre><code>tools\run_ghidra.bat                  <span class="c"># 导入 + 全量分析（约 65 s）</span>
+tools\run_script.bat DumpOverview.java
+tools\run_hss.bat                     <span class="c"># 或 run_rtt.bat / run_b.bat ...</span></code></pre>
+      </div>
+
+      <h3>外部佐证</h3>
+      <ul class="body">
+        <li><a href="https://kb.segger.com/J-Link_High-Speed_Sampling">SEGGER KB — J-Link High-Speed Sampling</a> —— 确认 HSS 属 J-Link SDK，J-Scope / Ozone / Embedded Studio 使用；无 API 细节</li>
+        <li><a href="https://www.segger.cn/products/debug-probes/j-link/tools/j-link-sdk/">SEGGER J-Link SDK</a> —— HSS 函数签名与结构体的权威出处为 SDK 内 <code>UM08002_JLinkDLL.pdf</code></li>
+        <li><a href="https://github.com/Marus/cortex-debug/issues/1004">cortex-debug issue #1004</a> —— 确认 <code>JLINK_HSS_*</code> 由 libjlinkarm 导出，GDB Server 不暴露该能力</li>
+        <li><a href="https://github.com/klonyyy/STMViewer/commit/c190a25a69a6c1849387093d75ff91d9b2c60775">STMViewer HSS 实现提交</a> —— 开源 HSS 集成实践</li>
+      </ul>
+    </section>
+
+  

@@ -1,0 +1,57 @@
+<section id="s10">
+      <h2><span class="sec-n">10</span>文件格式</h2>
+
+      <h3>10.1 工程文件 .jscope（XML）</h3>
+      <p class="lead">
+        由 <code>FUN_140047020</code>（读）/ <code>FUN_1400471d0</code>（写）确认的层次与属性名。
+      </p>
+      <div class="code">
+<pre><code>&lt;<span class="k">JScopeProject</span>&gt;
+  &lt;<span class="k">FileVersion</span> major=<span class="n">".."</span> minor=<span class="n">".."</span>/&gt;
+  &lt;<span class="k">Project</span>&gt;
+    &lt;<span class="k">Configuration</span>&gt;
+      &lt;<span class="k">Connection</span>&gt;
+        &lt;TargetInterface/&gt; &lt;InterfaceSpeed/&gt;
+        &lt;SerialNo/&gt; &lt;Nickname/&gt;
+        &lt;JTAG_IRPre/&gt; &lt;JTAG_DRPre/&gt; &lt;ScriptFile/&gt;
+      &lt;/Connection&gt;
+      &lt;TimeResolutionUs/&gt;  &lt;SamplingPeriod/&gt;
+      &lt;IsRTTSession/&gt;  &lt;IsRTTWithTimeStamp/&gt;  &lt;IsRTTPlus/&gt;
+      &lt;ElfFile/&gt;  &lt;JLink/&gt;  &lt;Scope/&gt;  &lt;Trigger&gt;
+        &lt;Level/&gt; &lt;Auto/&gt; &lt;Rise/&gt; &lt;Fall/&gt;
+      &lt;/Trigger&gt;
+    &lt;/Configuration&gt;
+    &lt;<span class="k">SelectedSymbols</span>&gt;
+      &lt;<span class="k">Symbol</span>&gt;
+        &lt;<span class="k">Options</span> Name=<span class="n">".."</span> Type=<span class="n">".."</span> Size=<span class="n">".."</span> Address=<span class="n">".."</span> TypeID=<span class="n">".."</span>
+                 GraphColorRed=<span class="n">".."</span> GraphColorGreen=<span class="n">".."</span> GraphColorBlue=<span class="n">".."</span>
+                 YMinSampled=<span class="n">".."</span> YMaxSampled=<span class="n">".."</span> YAvgSampled=<span class="n">".."</span>
+                 Offset=<span class="n">".."</span> ShowInGraph=<span class="n">".."</span> YOffset=<span class="n">".."</span> IsAutoConfig=<span class="n">".."</span>
+                 YResolution=<span class="n">".."</span> MaxValue=<span class="n">".."</span> File=<span class="n">".."</span> DrawStyle=<span class="n">".."</span>
+                 NameWithParents=<span class="n">".."</span>/&gt;
+      &lt;/Symbol&gt;
+    &lt;/SelectedSymbols&gt;
+    &lt;DataFile/&gt;  &lt;RawFile/&gt;  &lt;Timestamp/&gt;
+  &lt;/Project&gt;
+&lt;/JScopeProject&gt;</code></pre>
+      </div>
+      <div class="callout">
+        <p>读入时<strong>强依赖层次</strong>：
+        <code>JScopeProject → FileVersion → Project → Configuration/SelectedSymbols</code>，缺失任一层即失败。</p>
+      </div>
+
+      <h3>10.2 设置文件</h3>
+      <p><code>JScopeSettings.ini</code> 段落：<code>DataFiles</code> / <code>ProjectFiles</code> / <code>ELFFiles</code> /
+      <code>LogLevel</code> / <code>Current</code> / <code>PROJECT</code>，键 <code>PATH</code>；
+      MRU 列表格式 <code>%sRecent File List %d\</code>、条目 <code>[%d]: %s</code>。</p>
+      <p>注册表：<code>Software\SEGGER\%s\</code>（<code>%s</code> = "J-Scope"）。
+      解析错误串：<code>Error while parsing subkey "%s" in settings file. Syntax error.</code></p>
+
+      <h3>10.3 数据导出</h3>
+      <p>支持 <code>.raw</code>（<code>Binary file (*.raw)</code>，另有 <code>Import Raw</code> 反向导入）、
+      <code>.elf</code>、<code>DataFile</code>。
+      文件大小上限检查：<code>File too large - maximum file size (%d bytes) exceeded!</code></p>
+    </section>
+
+    <!-- ══ 11 ══ -->
+    

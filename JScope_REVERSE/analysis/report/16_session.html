@@ -1,0 +1,1046 @@
+    <!-- ══ 16 ══ -->
+    <section id="s16">
+      <h2><span class="sec-n">16</span>会话、UI 与生命周期</h2>
+      <p><strong>分析对象</strong>：<code>C:\Program Files\SEGGER\JLink_V966\JScope.exe</code>（PE32+ x64，镜像基址 <code>0x140000000</code>，Qt4 GUI） <strong>方法</strong>：纯静态（Ghidra 已有全量反编译产物 + 直读 PE 字节解析 .rdata/.data 常量表），<strong>未运行程序、未连接探针</strong> <strong>证据分级</strong>：<span class="badge b-obs">观测</span> 直接来自反编译/PE 字节；<span class="badge b-der">推导</span> 由观测确定性推理；<span class="badge b-inf">推断</span> 合理未证实；<span class="badge b-unk">未知</span> 未解决 <strong>证据位置</strong>：<code>dumps/alldecomp/chunk_XXX.c:&lt;行号&gt;</code>（函数头给出 VA/size/调用关系）；常量表地址已用 PE 字节直接读出 <strong>分工边界</strong>：触发（TriggerWidget 内部逻辑）、绘图、导出/导入 raw、ELF 解析、RTT 协议细节由其他专题负责，本文只写"外围"</p>
+      <div class="callout">
+<p>与 <code>JSCOPE_ANALYSIS.md</code> 的差异：该报告 §4/§5/§6/§7/§10.1/§11 与本专题有少量重叠，本文对<strong>重叠处只做校正与补全，不重复展开</strong>；新增内容为：完整启动序列、选项表精确掩码语义、DLL 三级查找精确实现、JScopeSettings.ini 完整段落/键与读改写算法、菜单/工具栏/快捷键全表与槽函数地址、状态栏字段与刷新链、生命周期清理、单实例结论。</p>
+</div>
+      <hr>
+      <h3>1. 启动序列</h3>
+      <h4>1.1 入口链（全部 <span class="badge b-obs">观测</span>）</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>阶段</th>
+<th>函数</th>
+<th>位置</th>
+<th>说明</th>
+</tr></thead>
+<tbody>
+<tr><td>PE EntryPoint</td><td><code>entry</code> @ <code>0x1400595c8</code></td><td><code>chunk_007.c:3789</code></td><td><code>__security_init_cookie()</code> → <code>FUN_140059454()</code></td></tr>
+<tr><td>CRT 初始化</td><td><code>FUN_140059454</code> @ <code>0x140059454</code></td><td><code>chunk_007.c:3743</code></td><td><code>__scrt_initialize_crt(1)</code> → <code>_initterm_e</code>/<code>_initterm</code>（跑 .CRT 静态初始化器）→ <code>FUN_14004c670</code></td></tr>
+<tr><td>包装</td><td><code>FUN_14004c670</code> @ <code>0x14004c670</code></td><td><code>chunk_006.c:3491</code></td><td><code>__p___argv()</code> / <code>__p___argc()</code> → <code>FUN_14004c520(argc, argv)</code></td></tr>
+<tr><td><strong>main</strong></td><td><code>FUN_14004c520</code> @ <code>0x14004c520</code></td><td><code>chunk_006.c:3442</code></td><td>见 1.2</td></tr>
+<tr><td>主窗口</td><td><code>FUN_14004c6a0</code> @ <code>0x14004c6a0</code></td><td><code>chunk_006.c:3510</code></td><td><code>MainWindow</code> 构造（1864 B，41 callee）</td></tr>
+<tr><td>异步 Init Job</td><td><code>FUN_14003e2e0</code> @ <code>0x14003e2e0</code></td><td><code>chunk_005.c:376</code></td><td>投递 <code>"APP: &lt;Init&gt; Job"</code>，job body = <code>FUN_14003cc50</code>，完成回调 = <code>LAB_14004db30</code></td></tr>
+<tr><td>Init Job 体</td><td><code>FUN_14003cc50</code> @ <code>0x14003cc50</code></td><td><code>chunk_004.c:6900</code></td><td>工作线程执行：设置 → 命令行 → DLL 版本 → 启动对话框决策</td></tr>
+</tbody>
+</table>
+</div>
+      <h4>1.2 <code>FUN_14004c520</code> = main <span class="badge b-obs">观测</span>（<code>chunk_006.c:3442</code>）</h4>
+      <div class="code">
+<pre><code>setvbuf(stdout, NULL, 4 /*_IONBF*/, 0);            // 日志走 stdout，无缓冲
+this = operator new(0x10);
+QApplication::QApplication(this, &amp;argc, argv, 0x1040807);  // Qt4；this 与 vftable 手工赋值
+FUN_140036d80();                                    // 早期全局初始化
+DAT_14286d3b8 = 0; DAT_14286d3b0 = 0; ... DAT_14286d388 = 0;   // 全局符号表/主窗口指针清零
+lVar1 = operator new(0x348);
+if (lVar1) pQVar2 = FUN_14004c6a0(lVar1, argc, argv);   // MainWindow
+QApplication::exec();
+// 退出后 delete MainWindow、delete QApplication（vtable+0x18）</code></pre>
+</div>
+      <p>要点：</p>
+      <ul>
+<li><code>QApplication</code> 构造第 4 参 <code>0x1040807</code> = Qt4 <code>ApplicationFlags</code>（含 <code>Qt::WindowSystemMenuHint</code> 等），<span class="badge b-obs">观测</span>字面量。</li>
+<li><strong>Qt 主事件循环 <code>QApplication::exec()</code> 在 main 里，所有对话框（Welcome/NewProject/About/设备选择）都用 <code>QDialog::exec()</code> 模态阻塞，而不是信号驱动的异步窗口</strong> <span class="badge b-obs">观测</span>。</li>
+</ul>
+      <h4>1.3 <code>MainWindow</code> 构造顺序 <span class="badge b-obs">观测</span>（<code>chunk_006.c:3510</code>）</h4>
+      <div class="code">
+<pre><code>QMainWindow::QMainWindow(this, 0, 0)
+vftable = MainWindow::vftable (+0x10 二次基类)
+DAT_14286d388 = this                       // 全局唯一 MainWindow 指针（62 处引用）
+setWindowTitle(FUN_14003ea80())            // → &amp;DAT_14285dab0 = "SEGGER J-Scope V9.66"
+setMinimumSize(800, 800); setGeometry(...)
+FUN_14002a340()                            // 载入 0x48 = 72 个 PNG → QIcon（见 §8.4）
+MenuBar   = FUN_140029ad0()          → this+0x2e0   // §8.1
+ToolBar   = FUN_140054790()          → this+0x2e8   // §8.2
+TriggerWidget = FUN_1400561b0()      → this+0x2f0   // 触发专题
+QSplitter                    → this+0x2d8
+GraphContainer = FUN_1400479a0()     → this+0x2f8   // 绘图专题
+TableWidget    = FUN_140051790()     → this+0x300   // 数值窗口专题
+StatusBar = FUN_14004fbe0()          → this+0x320   // §7
+QTimer(1000 ms) → this+0x328；connect "2timeout()" → "1_SlotOnTimeout()" ；start()
+show()
+// 17 个 connect（信号→槽），全部 AutoConnection
+*(this+0x338) = argc;  *(this+0x330) = argv;        // 命令行上下文直接挂在窗口对象上
+FUN_14003e2e0(this, this+0x330, &amp;LAB_14004db30);    // 投递 APP: &lt;Init&gt; Job</code></pre>
+</div>
+      <p><code>&lt;Init&gt;</code> Job 的参数就是 <code>MainWindow+0x330</code>，即 <code>{+0x00 argv, +0x08 argc, +0x10 startAction(2B), +0x12 flags}</code> <span class="badge b-der">推导</span>。<code>FUN_14003cc50</code> 直接读写这几个字节（<code>*(undefined1*)(plVar2+0x12)</code>、<code>*(undefined2*)(plVar2+2)</code>）。</p>
+      <h4>1.4 <code>FUN_14003cc50</code>（Init Job 体）<span class="badge b-obs">观测</span>（<code>chunk_004.c:6900</code>）</h4>
+      <div class="code">
+<pre><code>DAT_14285da18 = argc;  *(plVar2+0x12) = 0;                 // 清 "项目已由命令行打开" 标志
+iVar4 = FUN_14004f940();                                   // ① 载入 JScopeSettings.ini（§5）
+FUN_14003f930();                                           // 刷新窗口标题
+build "Software\\SEGGER\\%s\\"  (app="J-Scope")             // ②
+FUN_14004e4b0(1, 该路径, 10);                               // 读 10 条 MRU（§5.2）
+FUN_14004e150(DAT_14286d388);                              // 应用设置到主窗口
+iVar5 = FUN_140041cd0(argc, argv, 2);                      // ③ 命令行 阶段2（只认 -openprj）
+if (0 &lt; iVar5) { *(plVar2+0x12)=1; goto 结束; }
+FUN_14003f830(); FUN_140041780(); FUN_14003e990();         // ④ 日志/DLL版本串/作用域
+if (argc &gt; 1)                                             // ⑤ 逐条回显参数
+    for (i=1;i&lt;argc;i++) FUN_14003f1e0("[%d]: %s", i, argv[i]);
+if (argc &lt; 2) { ... FUN_140040e20() ... }                  // ⑥ 启动对话框决策（§1.5）
+if (iVar4 &lt; 0) FUN_14003f120("Failed to initialize %s", app);
+else {
+    iVar4 = FUN_140041cd0(argc, argv, 1);                  // ⑦ 命令行 阶段1（全部选项）
+    if (0 &lt; iVar4) *(plVar2+0x12)=1;
+    if (DAT_14285da1d != 0) FUN_14004dca0(DAT_14286d388);  // 立即退出
+}
+(*pcVar3)(uVar1);                                          // ⑧ 完成回调 LAB_14004db30</code></pre>
+</div>
+      <p>字符串 <code>"Application log started"</code>、<code>"Optional command line parameters found"</code> 的引用者也是本函数 [观测，<code>dumps/globals.txt:2558-2559</code>]，但被内联进 <code>FUN_14003e990</code>/<code>FUN_14003f830</code> 一侧，反编译文本中不可见。</p>
+      <h4>1.5 WelcomeDialog / NewProjectDialog 出现条件 [观测 + 推断]</h4>
+      <p>决策函数 <code>FUN_140040e20</code> @ <code>0x140040e20</code>（<code>chunk_005.c:2909</code>）：</p>
+      <div class="code">
+<pre><code>local_res8[0] = 0; local_res10[0] = 4;                 // REG_DWORD，默认 0
+hKey = RegCreateKeyA(HKEY_CURRENT_USER /*0x80000001*/, "Software\\SEGGER\\J-Scope\\");
+RegQueryValueExA(hKey, "DontShowAgainStartJScope", ..., &amp;value, &amp;size);
+return value;                                          // 0 / 1 / 2</code></pre>
+</div>
+      <p>调用侧（<code>FUN_14003cc50</code>）与消费者（<code>FUN_14004d380</code> @ <code>0x14004d380</code>，= 槽 <code>_SlotOnFinAsyncAppInit</code>）：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>条件</th>
+<th>行为</th>
+</tr></thead>
+<tbody>
+<tr><td><code>argc ≥ 2</code> 且扫描到 <code>-openprj</code>/<code>.jscope</code> 路径 <span class="badge b-inf">推断</span></td><td><code>MainWindow+0x342=1</code> → <code>FUN_14004d380</code> 立即 <code>QWidget::close()</code>（启动即退出，属"命令行开工程"语义）</td></tr>
+<tr><td><code>argc &lt; 2</code> 且注册表值 = <strong>0 / 不存在</strong></td><td><code>MainWindow+0x341=1</code> → <strong>WelcomeDialog</strong>（<code>FUN_140057220</code>，<code>chunk_007.c:2599</code>），并把 <code>MainWindow+0x230</code>（10 条 MRU）传入</td></tr>
+<tr><td><code>argc &lt; 2</code> 且注册表值 = <strong>2</strong></td><td><code>MainWindow+0x340=1</code> → 直接弹 <strong>NewProjectDialog</strong>（<code>FUN_14002a410</code>，标题 <code>"Create new project"</code>）</td></tr>
+<tr><td><code>argc &lt; 2</code> 且注册表值 = <strong>1</strong></td><td>不弹任何对话框，直接空主窗口（但仍会尝试用 <code>FUN_14004f7f0</code> 读出的上次工程路径）</td></tr>
+</tbody>
+</table>
+</div>
+      <p><code>FUN_14004d380</code> 主体 <span class="badge b-obs">观测</span>：</p>
+      <div class="code">
+<pre><code>if (param_1[0x342]) { QWidget::close(param_1); return; }        // 命令行已开工程 → 退
+if (param_1[0x341])      this = FUN_140057220(.., param_1+0x230, 10);   // WelcomeDialog（10 条 MRU）
+else if (param_1[0x340]) this = FUN_14002a410(.., param_1, 0);          // New Project
+QDialog::exec(this);
+*(int*)(param_1 + 0x33c) = 返回值;   // WelcomeDialog 结果
+FUN_14004d160(param_1);              // 刷新菜单使能（FUN_140029da0）</code></pre>
+</div>
+      <p>写入方 <code>FUN_140042750</code> @ <code>0x140042750</code>（<code>chunk_005.c:4124</code>）—— WelcomeDialog 的"Do not show this message again."勾选框：</p>
+      <div class="code">
+<pre><code>RegCreateKeyA(HKCU, "Software\\SEGGER\\J-Scope\\");
+RegSetValueExA(hKey, "DontShowAgainStartJScope", 0, 4 /*REG_DWORD*/, &amp;value, 4);</code></pre>
+</div>
+      <p>WelcomeDialog（<code>FUN_140057220</code>）控件与文案 <span class="badge b-obs">观测</span>：</p>
+      <ul>
+<li>标题 <code>"Welcome to %s"</code>（%s = <code>"J-Scope"</code>）</li>
+<li><code>"Please select one of the following start options:"</code></li>
+<li><code>"Open recent project:"</code> 下拉（<code>CustComboBox</code>），逐条填 <code>MRU 路径</code>；<code>"Other..."</code>、<code>"Create new project"</code>、<code>"Do not show this message again."</code>、默认按钮 <code>"Start J-Scope"</code></li>
+<li><code>setModal(true)</code>、<code>setFixedSize(sizeHint())</code>、去掉 <code>WindowContextHelpButtonHint</code></li>
+</ul>
+      <hr>
+      <h3>2. 命令行接口</h3>
+      <h4>2.1 选项表（PE 常量，直读 .data）<span class="badge b-obs">观测</span></h4>
+      <p>选项表位于 <code>0x140074040</code> 起，<strong>每条 4 个 qword（32 B）</strong>，共 4 条；由 <code>FUN_140041cd0</code> 以 <code>ppuVar3 += 4</code> 遍历：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>#</th>
+<th>结构体 VA</th>
+<th>选项串</th>
+<th>掩码</th>
+<th>处理函数</th>
+<th>帮助串</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>0x140074040</code></td><td><code>-openprj</code> (<code>0x140074260</code>)</td><td><strong><code>0x3</code></strong></td><td><code>FUN_14003dc80</code> (<code>0x140074050</code>)</td><td><code>0x140074270</code> " Opens an existing project\n Syntax:  -openprj &lt;FILENAME&gt;"</td></tr>
+<tr><td>1</td><td><code>0x140074060</code></td><td><code>-USB</code> (<code>0x1400742b0</code>)</td><td><strong><code>0x1</code></strong></td><td><code>FUN_14003dcb0</code> (<code>0x140074070</code>)</td><td><code>0x1400742b8</code></td></tr>
+<tr><td>2</td><td><code>0x140074080</code></td><td><code>-IP</code> (<code>0x1400742f8</code>)</td><td><strong><code>0x1</code></strong></td><td><code>FUN_14003dd90</code> (<code>0x140074090</code>)</td><td><code>0x140074300</code></td></tr>
+<tr><td>3</td><td><code>0x1400740a0</code></td><td><code>-RTTSearchRanges</code> (<code>0x140074348</code>)</td><td><strong><code>0x1</code></strong></td><td><code>FUN_14003de20</code> (<code>0x1400740b0</code>)</td><td><code>0x140074360</code></td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p>4 条掩码与处理函数指针均<strong>已用 PE 字节逐个读出</strong>（<code>0x140074048=3</code>、<code>0x140074068=1</code>、<code>0x140074088=1</code>、<code>0x1400740a8=1</code>）<span class="badge b-obs">观测</span>。</p>
+<p><code>-openprj</code> 掩码 <code>0x3</code> 使它在两个阶段都被接受；其余 3 条只在阶段 1 生效。</p>
+</div>
+      <h4>2.2 两阶段解析 <code>FUN_140041cd0(argc, argv, phase)</code> <span class="badge b-obs">观测</span>（<code>chunk_005.c:3595</code>）</h4>
+      <div class="code">
+<pre><code>DAT_14285da1f = 1;
+JLINKARM_ExecCommand("SuppressGUI = 1", 0, 0);          // 抑制 DLL 自己弹 GUI
+for (uVar4 = 1; uVar4 &lt; argc; ) {
+    pcVar6 = argv[uVar4];
+    for (each of 4 table entries) {
+        if (pcVar6[0] != '-' &amp;&amp; pcVar6[0] != '/') {     // 不是选项
+            if (strstr(path, ".jscope") == NULL) break;
+            iVar9 = FUN_14003dc80(pcVar6, 0, phase);    // 裸 .jscope 路径也当 -openprj
+            ...
+        }
+        if ((entry.mask &amp; phase) == 0) { uVar5++; iVar9 = 0; }   // 阶段不匹配 → 静默跳过
+        else {
+            iVar1 = strlen(entry.name);
+            if (strncmp(pcVar6, entry.name, iVar1) == 0) {
+                pcVar7 = argv[uVar5];                   // 下一个 argv 若不是选项则作为值
+                if (!pcVar7 || pcVar7[0]=='-'||pcVar7[0]=='/') pcVar7 = pcVar6 + iVar1;
+                else uVar5++;
+                iVar1 = entry.handler(pcVar7, iVar1, phase);   // (值串, 选项名长度, 阶段)
+                if (iVar1 == 0) goto next_arg;
+                if (iVar1 &lt; 0 || DAT_14285da1c) { DAT_14285da1f=0; goto fail; }
+                if (iVar1 == 1) return 1;
+                break;
+            }
+        }
+        ...
+    }
+    if (iVar9 == 1) {   // 表内无匹配
+        sprintf(buf, "CMDLINE: Unknown command line option \"%s\" detected!", pcVar6);
+        FUN_14003f1a0(buf); FUN_14003f640(buf); DAT_14285da1c = 1; ret = -1;
+    }
+fail:
+    sprintf(buf, "CMDLINE: Failed to execute command line option \"%s\"!", pcVar6);
+    FUN_14003f1a0(buf); FUN_14003f640(buf); DAT_14285da1c = 1; return -1;
+next_arg:
+    uVar4 = uVar5;
+}
+JLINKARM_ExecCommand("SuppressGUI = 0", 0, 0);
+DAT_14285da1f = 0;
+return ret;</code></pre>
+</div>
+      <p>要点：</p>
+      <ul>
+<li><strong>阶段 2</strong> 只匹配 <code>-openprj</code>（掩码 3）：<code>FUN_14003dc80</code> 在阶段 2 只做 <code>DAT_14285da1e = 1</code>（"曾出现 -openprj"）并返回 0，用于在真正打开之前先探明；</li>
+<li><strong>阶段 1</strong> 才真正执行 <code>FUN_14004ea70()</code>（打开工程）。</li>
+<li><strong>未知选项</strong>：报 <code>"CMDLINE: Unknown command line option \"%s\" detected!"</code>（<code>0x140074498</code>），Error 对话框 + Warning 对话框各一次，并置 <code>DAT_14285da1c</code>。</li>
+<li>选项名匹配是 <strong>前缀比较</strong>（<code>strncmp(arg, name, strlen(name))</code>），因此 <code>-openprjX</code> 也会命中 <code>-openprj</code> <span class="badge b-der">推导</span>。</li>
+</ul>
+      <h4>2.3 各选项处理函数 <span class="badge b-obs">观测</span></h4>
+      <p><strong><code>-openprj &lt;FILENAME&gt;</code> → <code>FUN_14003dc80</code></strong>（<code>chunk_005.c:2</code>）</p>
+      <div class="code">
+<pre><code>if (phase != 1) { if (phase == 2) DAT_14285da1e = 1; return 0; }
+return FUN_14004ea70();      // 真正打开</code></pre>
+</div>
+      <p><code>FUN_14004ea70</code>（<code>chunk_006.c:5344</code>）：若给了路径 → <code>FUN_14004eda0(path, 0)</code>；否则弹出 <code>"Open project"</code> 文件对话框（filter <code>"All files (*.*);;J-Scope project files (*.jscope)"</code>，默认 <code>"J-Scope project files (*.jscope)"</code>，初始目录取 ini <code>[PATH] ProjectFiles</code>），成功后把路径写回 ini。</p>
+      <p><strong><code>-USB &lt;SN/nickname&gt;</code> → <code>FUN_14003dcb0</code></strong>（<code>chunk_005.c:21</code>）</p>
+      <div class="code">
+<pre><code>if (DAT_14285da1e == 0) {                 // 即阶段2 没见到 -openprj
+    FUN_14003f430("-USB should only be used in combination with -openprj.");   // 0x1400743e0
+    return -1;
+}
+FUN_14004e9c0(&amp;cfg);                      // 取当前（已从工程加载的）连接配置
+if (is_decimal(sn)) cfg.SerialNo = dec(sn);
+else { strcpy(cfg.Nickname, sn, 0x80); cfg.SerialNo = 0; }
+cfg.ConnectionKind = 1;                   // USB
+FUN_14004ec40(&amp;cfg);                      // 回写全局配置</code></pre>
+</div>
+      <p>非法 SN → <code>"Error while parsing USB S/N"</code>（<code>0x140074418</code>）。</p>
+      <p><strong><code>-IP &lt;hostname/SN/nickname&gt;</code> → <code>FUN_14003dd90</code></strong>（<code>chunk_005.c:67</code>）</p>
+      <div class="code">
+<pre><code>if (DAT_14285da1e == 0) { FUN_14003f430("-IP should only be used in combination with -openprj."); return -1; }
+FUN_14004e9c0(&amp;cfg); strcpy(cfg.IP, value, 0x80); cfg.ConnectionKind = 2; FUN_14004ec40(&amp;cfg);</code></pre>
+</div>
+      <p>两个"仅可与 -openprj 同用"的强制校验<strong>分别在两个各自的处理函数里</strong>，判据是全局 <code>DAT_14285da1e</code>（由 <code>-openprj</code> 的阶段 2 探针置位）；不存在一个统一的校验点。</p>
+      <p><strong><code>-RTTSearchRanges &lt;A&gt;,&lt;S&gt;[,&lt;A1&gt;,&lt;S1&gt;,...]</code> → <code>FUN_14003de20</code></strong>（<code>chunk_005.c:98</code>）</p>
+      <div class="code">
+<pre><code>FUN_1400276b0(value, 0x2c /*','*/, 0x20 /*' '*/);        // 逗号换成空格（就地改写 argv）
+sprintf(&amp;DAT_14285d210, "SetRTTSearchRanges %s", value); // 存到全局 512 B 缓冲
+return 0;</code></pre>
+</div>
+      <p>该全局在连接序列 <code>FUN_1400419f0</code> 里被 <code>JLINK_ExecCommand</code> 下发；失败报 <code>"Wrong syntax for \"-RTTSearchRange\".\n"</code>（注意原文少了个 s）[观测，<code>chunk_005.c:3564</code>]。</p>
+      <h4>2.4 无独立 <code>-h/--help</code> 选项</h4>
+      <p>表中的帮助串（<code>0x140074270/2b8/300/360</code>）是<strong>给未知选项报错路径准备的 printable 列表</strong>（<span class="badge b-inf">推断</span>：格式化错误消息时可拼接），未发现任何 <code>printf</code>/<code>usage()</code> 调用点引用它们 [观测，<code>globals.txt</code> 中这 4 条的 refs 指向选项表自身的第 4 个 qword]。</p>
+      <hr>
+      <h3>3. JLink DLL 加载</h3>
+      <h4>3.1 惰性加载入口</h4>
+      <p>所有 29 个 <code>JLINK*</code> API 都是<strong>同名 thunk</strong>，形态统一（<code>chunk_003.c:70</code> 起，共 29 个）：</p>
+      <div class="code">
+<pre><code>void JLINKARM_Close(void) {
+    if (DAT_14085b3f8 == NULL)
+        DAT_14085b3f8 = (code *)FUN_1400293b0("JLINKARM_Close");   // 按名解析并缓存
+    if (DAT_14085b3f8 == NULL) return;
+    DAT_14085b3f8(...);
+}</code></pre>
+</div>
+      <p><code>FUN_1400293b0</code> @ <code>0x1400293b0</code>（<code>chunk_003.c:69</code>）：</p>
+      <div class="code">
+<pre><code>if (FUN_140029490(1) &lt; 0) return NULL;      // 确保 DLL 已加载
+pFVar4 = GetProcAddress(DAT_14085b3a8, param_1);
+if (pFVar4 == NULL) {
+    sprintf(buf, "DLL function %s(...) not found !", param_1);
+    MessageBoxA(NULL, buf, "J-Link Error", 0x42030);          // MB_ICONERROR|MB_SETFOREGROUND...
+}
+return pFVar4;</code></pre>
+</div>
+      <h4>3.2 精确查找顺序 <code>FUN_140029490</code> @ <code>0x140029490</code>（<code>chunk_003.c:105</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>若 DAT_14085b3a8 != NULL → 返回 0（已加载）
+
+① VirtualQuery(&amp;LAB_140028ee0) → .AllocationBase → GetModuleFileNameA  // 本 exe 自身路径
+   把文件名替换为 "JLink_x64.dll"      （FUN_140029930 = _splitpath_s, FUN_1400297e0 = 拼路径）
+   LoadLibraryA(...)                    → 成功返回 1
+
+② GetModuleFileNameA(DAT_14085b3a0)    // 另一个模块基址（[推断]：宿主/进程主模块）
+   同上换 "JLink_x64.dll" 再 LoadLibraryA  → 成功返回 2
+
+③ FUN_1400296f0(0xffffffff80000001 /*HKEY_CURRENT_USER*/)
+        FUN_1400292f0 读 HKxx\Software\SEGGER\J-Link\InstallPath
+                     （失败则 HKxx\Software\SEGGER\Flasher\InstallPath）
+        失败则再试 "&lt;InstallPath&gt;\bin_x64\JLink_x64.dll"
+   → 成功返回 3
+④ FUN_1400296f0(0xffffffff80000002 /*HKEY_LOCAL_MACHINE*/) → 成功返回 4
+⑤ 若 param_1 != 0:
+        sprintf(buf, "Target DLL %s not found !", &lt;最后一次尝试的完整路径&gt;);
+        MessageBoxA(NULL, buf, "J-Link Error", 0x42030);
+        exit(1);                        // 直接退出进程
+   否则返回 0xff</code></pre>
+</div>
+      <p>关键事实：</p>
+      <ul>
+<li><strong>没有</strong>"裸 <code>JLink_x64.dll</code> 交给 LoadLibrary 搜索路径"这一步 —— 第一次尝试就是 <strong>exe 同目录</strong>的绝对路径 [观测，与 <code>JSCOPE_ANALYSIS.md</code> §2 的表述不同，此处以代码为准]。</li>
+<li><code>bin_x64\</code> 子目录只在<strong>注册表 InstallPath 分支</strong>里出现（<code>0x140064358</code> = <code>bin_x64\JLink_x64.dll</code>）。</li>
+<li>注册表键：<code>Software\SEGGER\J-Link</code> 优先，失败回退 <code>Software\SEGGER\Flasher</code>；值名 <code>InstallPath</code>（<code>0x140064338</code>）；HKCU 先于 HKLM。</li>
+<li>失败提示串：<code>"Target DLL "</code> + 路径 + <code>" not found !"</code>，标题 <code>"J-Link Error"</code>；缺函数串 <code>"DLL function "</code> + 名 + <code>"(...) not found !"</code> [观测，<code>0x140064370/140064380/140064390/1400643a0/1400643b0</code>]。</li>
+</ul>
+      <h4>3.3 DLL 版本串与门槛</h4>
+      <p><code>FUN_140041780</code> @ <code>0x140041780</code>（<code>chunk_005.c:3341</code>，只被 Init Job 调用一次）<span class="badge b-obs">观测</span>：</p>
+      <div class="code">
+<pre><code>build "&lt;app&gt; - [" ...                        // 日志前缀
+uVar1 = JLINKARM_GetDLLVersion();            // 返回按位打包的 version
+FUN_1400271f0(local_a8, uVar1);              // 解包
+local_b8 = JLINKARM_GetCompileDateTime();    // → %s
+FUN_140028380(local_98, 0x80, "JLinkARM.dll V%d.%.2d%s (DLL compiled %s)",
+              local_a4 /*major*/, ... /*minor*/, ... /*suffix 如 "a"*/, local_b8);
+输出到日志（经 MainWindow）;</code></pre>
+</div>
+      <p>即 DLL 版本<strong>不是显示在某个 UI 控件里，而是作为一条日志文本输出</strong>（走 <code>FUN_14003e9a0</code>/主窗口日志通道）<span class="badge b-obs">观测</span>。</p>
+      <p>版本门槛（<code>FUN_1400419f0</code>，已由 <code>JSCOPE_ANALYSIS.md</code> §4 记录，此处补精确常量）<span class="badge b-obs">观测</span>：</p>
+      <div class="code">
+<pre><code>if (JLINKARM_EMU_HasCapEx(0x35)) {          // 0x35 = HSS 能力位
+    if (0xc79b &lt; JLINKARM_GetDLLVersion()) { // 32283 —— 版本门限
+        JLINK_HSS_GetCaps(&amp;caps);
+        _DAT_14285da90 = 1000000 / caps.field_at_4;
+    } else { period = 10; FUN_14003f400(10); }
+} else { period = 20000; FUN_14003f400(20000); }</code></pre>
+</div>
+      <p><code>0xc79b = 32283</code> = <code>V4.96a</code> 一类的打包版本号 <span class="badge b-inf">推断</span>；实际含义需实测确认（沿用 <code>JSCOPE_ANALYSIS.md</code> §4 的未知点）。</p>
+      <hr>
+      <h3>4. 连接 / 配置对话框</h3>
+      <h4>4.1 类清单与构造地址 <span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>类</th>
+<th>构造函数</th>
+<th>位置</th>
+<th>职责</th>
+</tr></thead>
+<tbody>
+<tr><td><code>NewProjectDialog</code></td><td><code>FUN_14002a410</code> (4584 B)</td><td><code>chunk_003.c:898</code></td><td><strong>连接 + 采样 + ELF 的唯一配置对话框</strong>；既当"新建工程"（<code>param_3=0</code>，标题 <code>"Create new project"</code>）也当"工程设置"（<code>param_3=1</code>，标题 <code>"Project settings"</code>）</td></tr>
+<tr><td><code>WelcomeDialog</code></td><td><code>FUN_140057220</code></td><td><code>chunk_007.c:2599</code></td><td>启动向导：最近工程下拉 + 其他 + 新建 + 不再提示</td></tr>
+<tr><td><code>AboutDialog</code></td><td><code>FUN_14002ce80</code></td><td><code>chunk_003.c:2598</code></td><td>见 §9.1</td></tr>
+<tr><td><code>CDeviceSelectionDialog</code></td><td><code>FUN_14002d5c0</code></td><td><code>chunk_003.c:2846</code></td><td><strong>J-Scope 自带的器件选择表</strong>（不是 DLL 的）</td></tr>
+<tr><td><code>CTableView</code> / <code>CDeviceDataProxyModel</code></td><td><code>FUN_14002d6c0</code> 等</td><td><code>chunk_003.c:2900</code> 起</td><td>上者的表格视图 + 过滤代理</td></tr>
+<tr><td><code>TIFSpeedComboBox</code></td><td><code>FUN_1400373a0</code></td><td><code>chunk_004.c:1638</code></td><td>目标接口速率下拉（可编辑 + 校验）</td></tr>
+<tr><td><code>CustComboBox</code></td><td><code>FUN_140032f90</code></td><td><code>chunk_003.c:7414</code></td><td>带自定义绘制的下拉</td></tr>
+<tr><td><code>CustLineEdit</code></td><td><code>FUN_140037210</code></td><td><code>chunk_004.c:1540</code></td><td>带高亮/主题适配的输入框</td></tr>
+</tbody>
+</table>
+</div>
+      <h4>4.2 <code>TIFSpeedComboBox</code> <span class="badge b-obs">观测</span>（<code>chunk_004.c:1638</code> / 填充逻辑 <code>chunk_004.c:1892</code>）</h4>
+      <div class="code">
+<pre><code>QComboBox::QComboBox(this, parent);
+vftable = TIFSpeedComboBox::vftable;
+setEditable(true);
+this+0x28 = &amp;DAT_140070ed0;   // 速率值数组（按接口切换）
+this+0x38 = 0x21;             // 条目数 33（默认 JTAG 表）
+this+0x40 = new QRegExpValidator(this);
+connect(lineEdit, "2editingFinished(void)",        this, "1_SlotOnCustSpeedEntered(void)");
+connect(this,     "2currentIndexChanged(int)",     this, "2SignalSpeedChanged(void)");
+if (parent &amp;&amp; slotName) connect(this, "2SignalSpeedChanged(void)", parent, slotName);
+FUN_1400377e0(this);          // 填充</code></pre>
+</div>
+      <p><code>FUN_1400377e0</code>（填充）：</p>
+      <ul>
+<li>清空后在 <code>+0x3c</code> 非 0 时插入一条 <code>"%d"</code>（=自定义值，取数组最大值）；</li>
+<li>逐个插入 <code>FUN_140037700(表[i])</code> 格式化的条目；</li>
+<li>算出最大值 <code>uVar9</code> → 建正则 <strong><code>"[0-9]{0,%d}"</code></strong>（<code>0x140071138</code>）→ <code>setValidator</code>。 即：<strong>速率输入框只允许 0~最大值的十进制数字</strong>（与新建工程对话框的采样率 <code>"^[0-9]*$"</code> 不同，后者不限制位数）。</li>
+</ul>
+      <h4>4.3 <code>NewProjectDialog</code>（<code>FUN_14002a410</code>）完整控件与语义 <span class="badge b-obs">观测</span></h4>
+      <p><strong>连接组 <code>"Connection to J-Link"</code></strong></p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>字段偏移</th>
+<th>控件</th>
+<th>串</th>
+</tr></thead>
+<tbody>
+<tr><td>+0x68</td><td>RadioButton</td><td><code>"USB"</code> (<code>0x14006c788</code>)，默认选中</td></tr>
+<tr><td>+0x90</td><td>RadioButton</td><td><code>"TCP/IP"</code></td></tr>
+<tr><td>+0xa0</td><td>RadioButton</td><td><code>"Existing Session"</code>（构造后 <code>hide()</code>）</td></tr>
+<tr><td>+0x70</td><td>CheckBox</td><td><code>"SN / Nickname"</code> → <code>_SlotOnToggleCheckUSB(int)</code></td></tr>
+<tr><td>+0x78</td><td>LineEdit</td><td>SN（USB 时）</td></tr>
+<tr><td>+0x98</td><td>LineEdit</td><td>TCP/IP 目标（hostname/SN/nickname）</td></tr>
+<tr><td>+0xa8/+0xb0</td><td>LineEdit + 按钮</td><td><code>"Specify Target Device"</code> → <code>_SlotOnReleaseBtnTarget()</code></td></tr>
+<tr><td>+0xb8/+0xc0</td><td>LineEdit + 按钮</td><td><code>"Script file (optional)"</code> → <code>_SlotOnReleaseBtnScript()</code></td></tr>
+</tbody>
+</table>
+</div>
+      <p><strong>接口与速率 <code>"Target Interface &amp; Speed"</code></strong></p>
+      <ul>
+<li>+0xc8 = 接口下拉（4 项，表 <code>PTR_DAT_140096af0</code>）→ <code>_SlotOnChangedCmbBxInterface(int)</code> → 写 <code>cfg+0x5a4</code></li>
+<li>+0xd0 = <code>TIFSpeedComboBox</code> → <code>_SlotOnChangedCmbBxSpeed()</code> → 写 <code>cfg+0x5a8</code> （注意：<strong>配置结构里 <code>+0x5a8</code> 既当采样周期、又被此处置为速率</strong> [观测有冲突]；<code>FUN_1400419f0</code> 里 <code>JLINKARM_SetSpeed(cfg+0x5a0)</code>、<code>JLINK_HSS_Start(.., cfg+0x5a8, ..)</code>，故 <code>+0x5a8</code> 同时承担"接口速率 kHz"与"采样周期 µs"两种语义 —— 这是反编译的字段重叠，<strong>真值需实测</strong>，见 §10）</li>
+<li>+0xd8 = 只读标签，构造时 <code>&amp;DAT_14006c650</code></li>
+</ul>
+      <p><strong>采样源 <code>"Sampling Source"</code></strong>（QButtonGroup，exclusive，id 0/1/2）<span class="badge b-obs">观测</span></p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>偏移</th>
+<th>文本</th>
+<th>id</th>
+<th>点击效果（<code>FUN_14002b7d0</code>）</th>
+<th>连线</th>
+</tr></thead>
+<tbody>
+<tr><td>+0xe8</td><td><strong><code>"HSS (asynchronous)"</code></strong></td><td>0（默认 <code>setChecked(1)</code>）</td><td><code>cfg+0x5ac=0, cfg+0x5ae=0</code>；<strong>显示</strong> ELF 组(+0x58) 与采样率组(+0x50)</td><td>—</td></tr>
+<tr><td>+0xf0</td><td><strong><code>"RTT (synchronus)"</code></strong></td><td>1</td><td><code>cfg+0x5ac=1, cfg+0x5ae=0</code>；<strong>隐藏</strong> ELF 组与采样率组</td><td>—</td></tr>
+<tr><td>+0xf8</td><td><strong><code>"RTT-Plus (synchronus)"</code></strong></td><td>2</td><td><code>cfg+0x5ac=1, cfg+0x5ae=1</code>；<strong>显示</strong> ELF 组，<strong>隐藏</strong>采样率组</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+      <p>每组后跟 <code>?</code> 超链接标签指向 <code>https://kb.segger.com/UM08028_J-Scope#...</code>。注意拼写是 SEGGER 原文的 <strong><code>synchronus</code></strong>（少一个 o）。</p>
+      <p><strong>采样率 <code>"Sampling Rate"</code></strong></p>
+      <ul>
+<li><code>"Sample every "</code> + LineEdit(+0x100) + 标签(+0x108) 初始 <code>"us, sampling rate: 10 kHz"</code></li>
+<li>提示 <code>"Set 0 to sample as fast as possible. &lt;a href=\"...\"&gt;?&lt;/a&gt;"</code></li>
+<li>LineEdit 的 validator = <code>QRegExp("^[0-9]*$")</code>（<code>0x14006c6f8</code>）；<code>textChanged</code> → <code>_SlotOnTextChangedLineSampRate(QString)</code>（<code>FUN_14002be90</code>），把 µs 换算成 kHz 显示（<code>use/1000</code>）<span class="badge b-der">推导</span></li>
+</ul>
+      <p><strong>ELF <code>"ELF File"</code></strong></p>
+      <ul>
+<li>LineEdit(+0x110) + 按钮(+0x118) → <code>_SlotOnReleaseBtnElfFile()</code>（<code>FUN_14002b940</code>）</li>
+<li>文件对话框：标题 <code>"Open output file"</code>，filter <strong><code>"Output files (*.elf *.out *.obj *.axf);;All files (*.*)"</code></strong>（<code>0x14006c658</code>）</li>
+<li>选定后把路径同时写入 UI 与 <code>cfg+0x88</code></li>
+</ul>
+      <p><strong>按钮</strong>：<code>"OK"</code>（<code>0x14006cc0c</code>）→ <code>_SlotOnReleaseBtnOK()</code>，<code>"Cancel"</code>。</p>
+      <p><strong>初始化（编辑已有工程时）</strong>：对话框构造末尾按 <code>cfg</code> 回填所有控件（器件名 <code>cfg+0x8</code>、ELF <code>cfg+0x88</code>、TCP 目标 <code>cfg+0x498</code>、脚本 <code>cfg+0x394</code>、速率 <code>cfg+0x59c</code>、连接型 <code>cfg+0x518</code>、采样模式 <code>cfg+0x5ac/0x5ae</code>、周期 <code>cfg+0x5b0</code>）<span class="badge b-obs">观测</span>。</p>
+      <h4>4.4 OK 校验 <code>FUN_14002ba50</code> @ <code>0x14002ba50</code>（<code>chunk_003.c:1592</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>if (isChecked(btn RTT(+0xf0))) {                 // RTT 模式
+    if (targetDeviceLineEdit(+0xa8) 文本为空)
+        { FUN_14003f640("In RTT mode specifying the target device is mandatory."); return; }
+} else {                                          // HSS 与 RTT-Plus
+    if (elfLineEdit(+0x110) 文本为空)
+        { FUN_14003f640("No ELF file selected."); return; }
+}
+FUN_14002c250(...);                               // 汇总 UI → cfg（含速率数字解析）
+if (新建)      { FUN_14003e110(0); FUN_14003e380(cfg); }   // 投递 APP: &lt;InitProjSettings&gt;
+else           { FUN_14003e800(cfg); }                      // 投递 APP: &lt;UpdateProjSettings&gt;
+QDialog::accept();   // vtable+0x198</code></pre>
+</div>
+      <p><strong>注意</strong>："RTT 必须有器件名"这条校验只看是否勾了 RTT 单选，<strong>不区分 RTT / RTT-Plus</strong>；RTT-Plus 因为会显示 ELF 组，所以走 ELF 必填分支 —— 与 RTT-Plus 的语义（需要 ELF）一致 <span class="badge b-der">推导</span>。</p>
+      <p>采样率数字本身<strong>没有范围校验</strong>，只靠 <code>^[0-9]*$</code> 挡非数字；<code>"Set 0 to sample as fast as possible"</code> 说明 0 是合法值 <span class="badge b-obs">观测</span>。</p>
+      <h4>4.5 <code>JLINKARM_DEVICE_SelectDialog</code> 何时弹</h4>
+      <p>两个<strong>互不相同</strong>的器件选择机制 <span class="badge b-obs">观测</span>：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>机制</th>
+<th>触发点</th>
+<th>说明</th>
+</tr></thead>
+<tbody>
+<tr><td>J-Scope <strong>自带</strong> <code>CDeviceSelectionDialog</code></td><td>用户点对话框里的 <code>"Specify Target Device"</code> 按钮 → <code>FUN_14002bc30</code> (<code>chunk_003.c:1672</code>)</td><td>先 <code>JLINKARM_DEVICE_GetInfo(0xffffffff)</code> 取器件总数 N，按 <code>每个器件 0x218 字节</code> 分配缓冲，逐条 <code>JLINKARM_DEVICE_GetInfo(i, &amp;info_0x978)</code>，构表 → <code>new CDeviceSelectionDialog</code> → <code>exec()</code>；确认后把器件名（≤0x80 B）写入 <code>cfg+0x8</code> 与 LineEdit</td></tr>
+<tr><td>DLL 的 <code>JLINKARM_DEVICE_SelectDialog</code></td><td>连接序列 <code>FUN_1400419f0</code> 内，<strong>当工程/命令行未指定器件名或该名字在 DLL 中查不到</strong>时</td><td>由 <code>JLINKARM_DEVICE_SelectDialog(parent, 0, 0)</code> 弹出 DLL 自带选择框，再用 <code>GetInfo(idx, &amp;info)</code> 取回</td></tr>
+</tbody>
+</table>
+</div>
+      <p>即：<strong>用户在对话框里选过器件 → 走自带表格；没选过就直接连 → DLL 兜底弹窗</strong>。<code>JSCOPE_ANALYSIS.md</code> §12.2 "不要抄弹窗选芯片"的结论对<strong>第二条</strong>成立；第一条是 J-Scope 自己的 UI，可自行决定是否复刻。</p>
+      <hr>
+      <h3>5. 设置持久化</h3>
+      <h4>5.1 配置文件 <code>JScopeSettings.ini</code></h4>
+      <p><strong>路径</strong> = <strong>exe 所在目录</strong> + <code>JScopeSettings.ini</code> <span class="badge b-obs">观测</span>： <code>FUN_14004f940</code> (<code>chunk_006.c:6165</code>) → <code>FUN_14004ef00("JScopeSettings.ini")</code> (<code>chunk_006.c:5637</code>)：</p>
+      <div class="code">
+<pre><code>DAT_14286c7c0 = FUN_140043110(0);              // 建临界区当锁
+FUN_14004f6a0();                               // 加锁
+uVar3 = malloc(0x104); memset(uVar3, 0, 0x104);
+FUN_1400440e0(uVar3, "JScopeSettings.ini", &amp;DAT_142865180, 0x104);  // 见下
+free(uVar3);
+if (file_exists(&amp;DAT_142865180)) FUN_14004f590();  // 读进内存 30000 B
+DAT_142865288 = 1;  FUN_14004f7e0();               // 解锁</code></pre>
+</div>
+      <p><code>FUN_1400440e0</code> (<code>chunk_005.c:5452</code>) = 把"含 <code>:</code> 或 UNC 开头的串当绝对路径，否则与传入的目录拼接"；配合 <code>FUN_140043430</code> = <code>GetModuleFileNameA</code> 包装 —— 即 <strong>ini 与 exe 同目录</strong>（不是 <code>%APPDATA%</code>）<span class="badge b-der">推导</span>。</p>
+      <p><strong>内存模型</strong>：整个文件读入<strong>固定 30000 字节缓冲</strong> <code>DAT_142865290</code>，长度存 <code>DAT_142865284</code>；任何写操作都是<strong>全文件重写</strong>（<code>FUN_14004f510</code> 做 memmove 插入 + <code>FUN_14004f6c0</code> 用 <code>CreateFileA(GENERIC_WRITE)</code> 整块写回）。 文件 &gt;30000 B 时报：</p>
+      <div class="code">
+<pre><code>Could not open file [%s]
+File too large - maximum file size (%d bytes) exceeded!     // %d 恒为 30000</code></pre>
+</div>
+      <p>读失败报：<code>Could not open file [%s]\nFailed to read data!</code>；写失败报 <code>Could not save file [%s]\nFailed to write data!</code> <span class="badge b-obs">观测</span>。</p>
+      <h4>5.2 段落 / 键</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>段落</th>
+<th>键</th>
+<th>读</th>
+<th>写</th>
+<th>语义</th>
+</tr></thead>
+<tbody>
+<tr><td><code>PROJECT</code></td><td><code>Current</code></td><td><code>FUN_14004f7f0</code> (<code>chunk_006.c:6075</code>)</td><td><code>FUN_14004f950</code> (<code>chunk_006.c:6177</code>)</td><td>上次打开的 <code>.jscope</code> 全路径；写成功后还会 <code>FUN_14004e310(1,path)</code> 更新 MRU</td></tr>
+<tr><td><code>PATH</code></td><td><code>DataFiles</code></td><td><code>FUN_14004f820</code> (<code>chunk_006.c:6090</code>)</td><td><code>FUN_14004f9b0</code> (<code>chunk_006.c:6199</code>)</td><td>导出 Data(csv) 上次目录</td></tr>
+<tr><td><code>PATH</code></td><td><code>ELFFiles</code></td><td><code>FUN_14004f890</code> (<code>chunk_006.c:6111</code>)</td><td><code>FUN_14004fa30</code> (<code>chunk_006.c:6223</code>)</td><td>ELF 选择上次目录</td></tr>
+<tr><td><code>PATH</code></td><td><code>ProjectFiles</code></td><td><code>FUN_14004f910</code> (<code>chunk_006.c:6150</code>)</td><td><code>FUN_14004fab0</code> (<code>chunk_006.c:6247</code>)</td><td>工程文件上次目录</td></tr>
+<tr><td><code>LOG</code></td><td><code>LogLevel</code></td><td><code>FUN_14004f8c0</code> (<code>chunk_006.c:6126</code>)</td><td>—（无写入点）</td><td>日志级别 1..9，默认 3</td></tr>
+</tbody>
+</table>
+</div>
+      <p>段落常量：<code>PATH</code>=<code>0x1400773fc</code>，<code>PROJECT</code>=<code>0x140077440</code>，<code>LOG</code>=<code>0x140077434</code> [观测，PE 字节]。 行格式：<strong><code>key="value"\r\n</code></strong>（<code>FUN_14004f1e0</code>：<code>sprintf(buf, "%s=\"%s\"\r\n", key, value)</code>），段落头 <strong><code>[section]\r\n</code></strong>（<code>FUN_14004f2a0</code>：<code>"[%s]\r\n"</code>）。 查找是<strong>纯文本扫描</strong>：先找 <code>[section]</code> 行，再在该段内找 <code>key</code> 后跟空格或 <code>=</code> 的行 <span class="badge b-obs">观测</span>。</p>
+      <p>错误串（<code>FUN_14004f0c0</code>，<code>chunk_006.c:5715</code>）：</p>
+      <div class="code">
+<pre><code>"Error while parsing settings file. Syntax error."                       // 0x140077390（key 为 NULL 时）
+"Error while parsing subkey \"%s\" in settings file. Syntax error."      // 0x140077350（带 key 名）</code></pre>
+</div>
+      <p>另两条通用文件错误串在 <code>FUN_14004f590</code>/<code>FUN_14004f6c0</code>（见 §5.1）。</p>
+      <h4>5.3 MRU（最近文件列表）</h4>
+      <p><code>FUN_14004e4b0(i, regPath, count)</code> @ <code>chunk_006.c:4973</code> —— <strong>MRU 存在注册表，不在 ini</strong>：</p>
+      <div class="code">
+<pre><code>sprintf(&amp;DAT_14285ef40 + i*500, "%sRecent File List %d\\", regPath /*"Software\SEGGER\J-Scope\"*/, i);
+hKey = RegCreateKeyA(HKEY_CURRENT_USER /*0x80000001*/, 该子键);
+DAT_14285f908[i*4] = count;                      // 期望条数
+for (j = 1; j &lt;= count; j++) {
+    sprintf(name, "File%i", j);                  // 1-based！
+    size = 0x104;
+    RegQueryValueExA(hKey, name, &amp;type, buf_272, &amp;size);
+    存入 DAT_14285f920 + (i==1 ? idx*0x104 : ...) + i*0x1044;
+}</code></pre>
+</div>
+      <p>写入方 <code>FUN_14004e610(i)</code> (<code>chunk_006.c:5036</code>)：<code>RegSetValueExA(hKey, "File%i", 0, 2 /*REG_EXPAND_SZ*/, path)</code>。</p>
+      <p>调用：<code>FUN_14004e4b0(1, "Software\\SEGGER\\J-Scope\\", 10)</code>（启动时读 10 条）；WelcomeDialog 只显示这 10 条（<code>FUN_140057220(.., MainWindow+0x230, 10)</code>）。 <code>"[%d]: %s"</code>（<code>0x140074618</code>）是参数回显格式，与 MRU 无关 [观测，反例纠正]。</p>
+      <h4>5.4 注册表 <code>Software\SEGGER\%s\</code></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>子键</th>
+<th>值名</th>
+<th>类型</th>
+<th>用途</th>
+<th>读 / 写</th>
+</tr></thead>
+<tbody>
+<tr><td><code>Software\SEGGER\J-Scope\</code></td><td><code>DontShowAgainStartJScope</code></td><td>REG_DWORD</td><td>0=显示欢迎向导（默认）、1=不显示、2=直接进新建工程</td><td><code>FUN_140040e20</code> / <code>FUN_140042750</code></td></tr>
+<tr><td><code>Software\SEGGER\J-Scope\Recent File List 1\</code></td><td><code>File1..File10</code></td><td>REG_EXPAND_SZ</td><td>MRU</td><td><code>FUN_14004e4b0</code> / <code>FUN_14004e610</code></td></tr>
+<tr><td><code>Software\SEGGER\J-Link\</code> 或 <code>...\Flasher\</code></td><td><code>InstallPath</code></td><td>REG_SZ</td><td>JLink DLL 根目录</td><td><code>FUN_1400292f0</code></td></tr>
+</tbody>
+</table>
+</div>
+      <p><code>%s</code> = <code>"J-Scope"</code>（<code>FUN_14003ea60</code> @ <code>chunk_005.c:819</code> 返回字面量 <code>"J-Scope"</code>）；完整应用名 <code>"SEGGER %s %s%s"</code> → <code>"SEGGER J-Scope V9.66"</code>（<code>DAT_14285dab0</code>，窗口标题），<code>"J-Scope V9.66"</code>（<code>DAT_14285daf0</code>）。版本串由 <code>FUN_140041470</code> 生成：<code>sprintf(buf, "V%d.%.2d", 9, 0x42)</code> = <strong><code>V9.66</code></strong> <span class="badge b-obs">观测</span>（<code>chunk_005.c:3209</code>）。</p>
+      <h4>5.5 <code>LogLevel</code> 取值与生效点</h4>
+      <ul>
+<li><strong>取值</strong>：<code>FUN_14004f8c0</code> (<code>chunk_006.c:6126</code>)：读 <code>[LOG] LogLevel</code>；<strong>读失败/键不存在 → 返回 3</strong>；值 &lt;1 → 1；值 &gt;9 → 9。即<strong>有效域 1..9，默认 3</strong>。</li>
+<li><strong>生效</strong>：唯一消费者 <code>FUN_140041570(level)</code> @ <code>chunk_005.c:3244</code>： ``<code>c iVar1 = FUN_14004f8c0(); return (level &lt;= iVar1) || (iVar1 == 9);      // 9 == 全开 </code>``</li>
+<li><strong>调用点</strong>（5 处，均为"是否输出这条消息"的门闸）：</li>
+<li><code>FUN_14003f830</code>（作用域进入 / 进度开始）：门槛 <code>depth*2</code></li>
+<li><code>FUN_14003e9a0</code>（作用域退出 / 状态）：门槛 <code>depth*2 - 1</code></li>
+<li><code>FUN_14003f1a0</code>（命令行错误）：门槛 <code>depth*2</code></li>
+<li><code>FUN_14003f1e0</code>（<code>"[%d]: %s"</code> 参数回显）：门槛 <code>depth*2</code></li>
+<li><code>FUN_1400423e0</code>（<code>"ERROR: %s"</code> 且归集到 <code>DAT_14285db80</code> 累积串）：门槛 <code>depth*2 - 1</code>，<strong>但这是唯一"即使不满足门槛也强制累积到缓冲"的路径</strong>（末尾按 <code>[%s]</code> + 弹框）</li>
+<li>从 <code>depth</code>（<code>DAT_14285eb8c</code>）参与门槛可见：<strong>LogLevel 语义 = 缩进深度阈值</strong>，即"最多打印到第几层嵌套"，而不是传统的"严重性等级" <span class="badge b-der">推导</span>。</li>
+<li>输出目的地：<code>FUN_14003f1e0</code>/<code>FUN_14003f830</code>/<code>FUN_14003e9a0</code> 都经 <code>_guard_check_icall(DAT_14286d388, text)</code>（<code>DAT_14286d388</code> = 唯一 MainWindow 实例）送达主窗口日志通道；<code>FUN_14003f430</code>(Error)/<code>FUN_14003f640</code>(Warning) 则经 <code>FUN_14003f580</code> → <code>FUN_14004df50</code> 弹 <code>DIALOG_CustMsgBox</code>（标题 <code>"Error"</code> / <code>"Warning"</code>，格式 <code>"%s %s"</code>）[观测/推断]。</li>
+<li>main 里 <code>setvbuf(stdout, NULL, _IONBF, 0)</code> 说明还有一条 stdout 输出路径 <span class="badge b-obs">观测</span>。</li>
+</ul>
+      <hr>
+      <h3>6. 工程文件会话流</h3>
+      <div class="callout">
+<p>元素层次与已分析过的 <code>FUN_140047020</code>（读）/ <code>FUN_1400471d0</code>（写）见 <code>JSCOPE_ANALYSIS.md</code> §10.1。本节只补<strong>保存时机 / 版本号 / 错误串 / 两个未写全的元素</strong>。</p>
+</div>
+      <h4>6.1 文件版本号 <span class="badge b-obs">观测</span>（<code>chunk_005.c:7317</code>）</h4>
+      <div class="code">
+<pre><code>FUN_140046320(root):  &lt;FileVersion major="1" minor="1"/&gt;</code></pre>
+</div>
+      <p>写入常量直接是 <strong><code>major = 1</code>, <code>minor = 1</code></strong>（<code>FUN_1400398d0(doc, FileVersion, "major", 1)</code> / <code>"minor", 1</code>）。</p>
+      <p>读取与兼容判据 <code>FUN_1400455e0</code> @ <code>chunk_005.c:6706</code>：</p>
+      <div class="code">
+<pre><code>读不到 major → "Project file major version can not be determined!\nIt might not be compatible with this version of J-Scope."
+读不到 minor → "Project file minor version can not be determined!\nIt might not be compatible with this version of J-Scope."
+if (major &gt; 1 || (major == 1 &amp;&amp; minor &gt; 1))
+    Warning("The project has a newer file version and might not be compatible with this version of J-Scope.");</code></pre>
+</div>
+      <p>即：<strong>当前版本 1.1，只警告不拒绝</strong>（继续用当前结构解析）。</p>
+      <h4>6.2 <code>&lt;JLink/&gt;</code> / <code>&lt;Scope/&gt;</code> 元素内容 <span class="badge b-obs">观测</span></h4>
+      <p><code>&lt;Project&gt;&lt;Configuration&gt;</code> 的子元素由 <code>FUN_140046110</code> 依次调用：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>元素</th>
+<th>函数</th>
+<th>位置</th>
+<th>属性</th>
+</tr></thead>
+<tbody>
+<tr><td><code>&lt;JLink&gt;&lt;Options .../&gt;&lt;/JLink&gt;</code></td><td><code>FUN_1400463b0</code></td><td><code>chunk_005.c:7343</code></td><td><code>Connection</code>（默认 4，否则 <code>cfg+0x5ac</code> 非 0 时用 <code>cfg+0x5ac</code>… 见下）、<code>IsRTTSession</code>(+0x5a4)、<code>IsRTTWithTimeStamp</code>(+0x5a5)、<code>IsRTTPlus</code>(+0x5a6)、<code>SamplingPeriod</code>(+0x5a8)、<code>SerialNo</code>(+0x594)、<code>JTAG_IRPre</code>(+0x5b4)、<code>JTAG_DRPre</code>(+0x5b0)、<code>IP</code>(+0x490)、<code>TargetDevice</code>(+0x0)、<code>Nickname</code>(+0x510)、<code>InterfaceSpeed</code>(+0x5a0)、<code>TargetInterface</code>（枚举→串：<code>0→"JTAG"</code>、<code>1→"SWD"</code>、<code>3→"FINE"</code>、<code>7→"cJTAG"</code>，其它→<code>"SWD"</code>）</td></tr>
+<tr><td><code>&lt;Scope&gt;&lt;Options TimeResolutionUs=".."/&gt;&lt;/Scope&gt;</code></td><td><code>FUN_140046750</code></td><td><code>chunk_005.c:7498</code></td><td>只有一个属性 <code>TimeResolutionUs</code>，写在 <code>&lt;Scope&gt;&lt;Options&gt;</code> 上</td></tr>
+<tr><td><code>&lt;ScriptFile Name=".."/&gt;</code></td><td><code>FUN_1400467d0</code></td><td>—</td><td>仅当 <code>cfg+0x394</code> 非空才写</td></tr>
+<tr><td><code>&lt;DataFile Name=".."/&gt;</code></td><td><code>FUN_140046240</code></td><td>—</td><td>仅当 <code>cfg+0x18c</code> 非空</td></tr>
+<tr><td><code>&lt;RawFile Name=".."/&gt;</code></td><td><code>FUN_1400466e0</code></td><td>—</td><td>仅当 <code>cfg+0x290</code> 非空</td></tr>
+</tbody>
+</table>
+</div>
+      <p><code>Connection</code> 属性的取值来源在反编译中呈现为 <code>uVar3 = 4; if (cfg+0x5b8 == 0) uVar3 = cfg+0x5ac;</code> —— <strong><code>cfg+0x5ac</code> 同时被 NewProjectDialog 当"是否 RTT"写入、被这里当 <code>Connection</code> 写出</strong>，属字段重叠，记入 §10 未决。</p>
+      <h4>6.3 保存时机 <span class="badge b-obs">观测</span></h4>
+      <p><strong>没有任何自动保存 / 退出时自动写回</strong>。全部是显式动作：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>事件</th>
+<th>路径</th>
+</tr></thead>
+<tbody>
+<tr><td>文件→保存 / Ctrl+S</td><td>MenuBar 槽 4 → <code>thunk_FUN_14003e6e0</code> → <code>FUN_14004eb40</code> (<code>chunk_006.c:5382</code>)：<code>FUN_1400471d0(路径)</code> 写盘 → 成功 <code>FUN_14003e9a0("Project saved successfully")</code>、<code>FUN_14004f950(path)</code> 更新 ini <code>[PROJECT]Current</code>、置 <code>DAT_14286506d=1</code>、<code>FUN_14004eef0(0)</code> <strong>清脏标志</strong>；失败 <code>FUN_14003e9a0("Failed to save project file")</code></td></tr>
+<tr><td>文件→另存为 / Ctrl+Shift+S</td><td>槽 5 → <code>thunk_FUN_14003e740</code> → <code>FUN_14004ebc0</code> (<code>chunk_006.c:5410</code>)：先弹 <code>"Save project as"</code> 文件框（filter <code>"J-Scope project files (*.jscope)"</code>）再走 <code>FUN_14004eb40</code></td></tr>
+<tr><td>关闭工程 / 打开另一工程 / 退出</td><td><code>FUN_14004e8f0</code> (<code>chunk_006.c:5181</code>)：<strong>若脏标志 <code>DAT_142865068 &gt; 0</code></strong> → <code>FUN_14004e720</code> (<code>chunk_006.c:5084</code>) 弹出提示：&lt;br&gt;文本 <code>"The J-Scope project has been modified.\nDo you want to save your changes?"</code>，按钮 <code>"Yes"</code>(<code>0x140074740</code>) / <code>"No"</code>(<code>0x14007473c</code>)&lt;br&gt;返回 0(Yes) → 有路径走 <code>FUN_14004eb40</code>，无路径走 <code>FUN_14004ebc0</code>(Save As)；返回 2 表示取消并<strong>中止退出</strong></td></tr>
+</tbody>
+</table>
+</div>
+      <p>脏标志：<code>DAT_142865068</code>，由 <code>FUN_14004eef0(n)</code> (<code>chunk_006.c:5624</code>) 写并顺带刷新标题；标题由 <code>FUN_14003f930</code> 拼：<code>"&lt;应用名&gt; - [&lt;工程路径&gt;]"</code>，脏时追加 <code>" *"</code>（<code>0x140075054</code> = <code>" - ["</code>，<code>0x14007505c</code> = <code>" *"</code>，<code>0x14005f580</code> = <code>"]"</code>）<span class="badge b-obs">观测</span>。</p>
+      <h4>6.4 读取/写入失败的用户可见错误串 <span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>串</th>
+<th>出处</th>
+</tr></thead>
+<tbody>
+<tr><td><code>"Failed to open project file %s."</code></td><td><code>FUN_140047020</code>（打开 XML 失败）</td></tr>
+<tr><td><code>"Failed to close project file."</code></td><td><code>FUN_140047020</code> / <code>FUN_1400471d0</code></td></tr>
+<tr><td><code>"Failed to save project file"</code></td><td><code>FUN_14004eb40</code></td></tr>
+<tr><td><code>"Project saved successfully"</code> / <code>"Project opened successfully"</code> / <code>"New project created successfully"</code> / <code>"Failed"</code></td><td><code>FUN_14004eb40</code> / <code>FUN_14004eda0</code></td></tr>
+<tr><td><code>"Opening project file [%s] ..."</code> / <code>"Creating new project ..."</code></td><td><code>FUN_14004eda0</code>（<code>"%s project file [%s] ..."</code>）</td></tr>
+<tr><td><code>"Close project"</code></td><td><code>FUN_14004e8f0</code></td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <h3>7. 状态栏</h3>
+      <h4>7.1 <code>StatusBar</code>（<code>FUN_14004fbe0</code> @ <code>chunk_006.c:6306</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>QStatusBar::QStatusBar(this, parent);
+vftable = StatusBar::vftable;
++0x28 = +0x30 = +0x38 = NULL;
++0x30 = FUN_140035ff0(this, "");     // QLabel
++0x28 = FUN_140035ff0(this, "");     // QLabel
++0x38 = FUN_140035ff0(this, "");     // QLabel
+addPermanentWidget(+0x38); addPermanentWidget(+0x30); addPermanentWidget(+0x28);
+setSizeGripEnabled(true);</code></pre>
+</div>
+      <p>即<strong>右侧三个永久标签，从右到左依次是 +0x38 / +0x30 / +0x28</strong>。</p>
+      <h4>7.2 三个字段与刷新函数 <span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>偏移</th>
+<th>刷新函数</th>
+<th>内容模板</th>
+<th>数据来源</th>
+</tr></thead>
+<tbody>
+<tr><td><strong>+0x38</strong>（最右）</td><td><code>FUN_140050030</code> (<code>chunk_006.c:6486</code>)</td><td><code>"%d "</code> + (<code>"Samples/s"</code> 或 <code>"kSamples/s"</code>)</td><td><code>FUN_14003eb00</code> = <code>DAT_14285d1f8</code>（每秒样本数）；≥1000 时除以 1000 并切单位</td></tr>
+<tr><td><strong>+0x30</strong></td><td><code>FUN_14004fd40</code> (<code>chunk_006.c:6392</code>)</td><td><code>"Buffer: "</code> + <code>"%d "</code> + (<code>"Byte"</code>/<code>"KB"</code>/<code>"MB"</code>) + <code>" ("</code> + <code>"%d"</code> + <code>" samples), "</code> + <code>"%d"</code> + <code>" %"</code></td><td>① <code>FUN_14003ed50()</code> = 已用样本数 <code>DAT_14085d1e8</code>，乘 <code>0x4000000</code>（=64MB/变量）得字节数；阈值 0x401 切 Byte/KB/MB；② 固定容量 <code>0x800000</code> = 8 388 608 样本；③ <code>FUN_14003ead0()</code> = 环形缓冲填充百分比（<code>writeIdx * 100 * 2^-23</code>，未绕回时恒 100.0）&lt;br&gt;最终形如 <strong><code>Buffer: 512 KB (8388608 samples), 42 %</code></strong></td></tr>
+<tr><td><strong>+0x28</strong>（最左）</td><td><code>FUN_14004ff40</code> (<code>chunk_006.c:6451</code>)</td><td><code>"FPS: "</code> + 数字 + <code>"  "</code></td><td><code>min(FUN_14003ed60()=DAT_140096dd8, FUN_14003eb10()=DAT_14285daa8)</code>，即<strong>取"目标 FPS"与"实际 FPS"的较小者</strong></td></tr>
+</tbody>
+</table>
+</div>
+      <p>对应 PE 字符串：<code>"FPS: "</code>(0x140077620)、<code>"Buffer: "</code>(0x140077628)、<code>"Byte"</code>(0x140077634)、<code>"KB"</code>(0x14007763c)、<code>"MB"</code>(0x140077640)、<code>"%d "</code>(0x140077644)、<code>" samples), "</code>(0x140077648)、<code>" %"</code>(0x140077654)、<code>"kSamples/s"</code>(0x140077658)、<code>"Samples/s"</code>(0x140077668)，<code>"  "</code>(0x1400718b4) [观测，PE 直读]。</p>
+      <p><strong>没有</strong>"连接状态"和"通道"字段 —— 状态栏只有这 3 个数字标签 [观测，反例纠正]。</p>
+      <h4>7.3 更新触发与周期</h4>
+      <p>调用链 <span class="badge b-obs">观测</span>：</p>
+      <div class="code">
+<pre><code>FUN_14004d870  = _SlotOnUpdateGUI（MainWindow metacall 索引 0x15）
+  └─ FUN_14004fd10(StatusBar)                    // chunk_006.c:6378
+       ├─ FUN_14004ff40(...)   → +0x28 FPS
+       ├─ FUN_14004fd40(...)   → +0x30 Buffer
+       └─ FUN_140050030(...)   → +0x38 Samples/s</code></pre>
+</div>
+      <ul>
+<li><code>_SlotOnUpdateGUI</code> 由信号 <code>2_SignalUpdateGUI()</code> 触发（<code>AutoConnection</code>），发送方是各工作函数用的 <code>FUN_14004d150</code>（解锁后发信号）——即<strong>状态栏跟随工作线程的事件刷新，不是独立定时器</strong> <span class="badge b-der">推导</span>。</li>
+<li><strong>唯一的定时器</strong>：<code>MainWindow+0x328</code>，<code>QTimer::setInterval(1000)</code>（<strong>1 秒</strong>），<code>2timeout()</code> → <code>1_SlotOnTimeout()</code> = <code>FUN_14004d7e0</code> (<code>chunk_006.c</code>)。其作用是<strong>每秒投递一次 <code>"APP: &lt;CheckELFModifications&gt; Job"</code>（<code>FUN_14003e0b0</code>）</strong>，与状态栏刷新无直接关系 <span class="badge b-obs">观测</span>。</li>
+<li>工具栏另有 FPS 下拉（<code>_OnFPSCurrentIndexChanged</code>）→ 写目标 FPS（<code>FUN_14003f420(0x1e)</code> 为默认 30）<span class="badge b-obs">观测</span>。</li>
+</ul>
+      <hr>
+      <h3>8. 菜单 / 工具栏 / 快捷键全表</h3>
+      <h4>8.1 数据结构与注册机制 <span class="badge b-obs">观测</span></h4>
+      <p><code>.data</code> 中的<strong>静态动作描述符表</strong>，每个描述符 <strong>40 字节（0x28）</strong>：</p>
+      <div class="code">
+<pre><code>struct ActionDesc {          // 40 B
+    const char*  text;       // +0x00  QAction 文本（含 &amp; 助记符）
+    QKeySequence shortcut;   // +0x08  由 .CRT 静态初始化器填入（QKeySequence ctor）
+    const char*  slotName;   // +0x10  moc 槽名（"1_SlotOnAction...()"）
+    const char*  statusTip;  // +0x18  状态提示
+    QAction*     action;     // +0x20  运行时创建后回填
+};</code></pre>
+</div>
+      <p>菜单表（<code>0x1400963c8</code>，4 条，每条 32 B）：</p>
+      <div class="code">
+<pre><code>struct MenuDesc {            // 32 B
+    const char* title;       // -0x18
+    ActionDesc* actions;     // -0x10
+    int         count;       // -0x08（int，落在上一字段高 4 字节）
+    QMenu*      menu;        // +0x00 运行时
+};</code></pre>
+</div>
+      <p><code>FUN_140029ad0</code>（MenuBar ctor，<code>chunk_003.c:411</code>）：</p>
+      <div class="code">
+<pre><code>for (i = 0; i &lt; 4; i++) {
+    menu = FUN_140029f00(menubar, table[i].title);     // new QMenu + setTitle
+    for (j = 0; j &lt; table[i].count; j++)
+        FUN_140029fa0(menubar, menu, &amp;table[i].actions[j]);
+}
+setCheckable(DAT_140096300, true); setChecked(DAT_140096300, true);   // Symbol Watch
+setCheckable(DAT_140096328, true); setChecked(DAT_140096328, true);   // Graph window</code></pre>
+</div>
+      <p><code>FUN_140029fa0</code>（单个动作）：</p>
+      <div class="code">
+<pre><code>act = new QAction(menubar);
+desc-&gt;action = act;
+act-&gt;setText(desc-&gt;text);
+if (QKeySequence::operator int(desc-&gt;shortcut) != 0) act-&gt;setShortcut(desc-&gt;shortcut);
+if (desc-&gt;slotName) connect(act, "2triggered(void)", menubar, desc-&gt;slotName, 0);
+menu-&gt;addAction(act);
+act-&gt;setStatusTip(desc-&gt;statusTip);</code></pre>
+</div>
+      <p>即 <strong>快捷键与槽连接全部由这张静态表驱动</strong>；<code>setShortcut</code> 只在键序列非空时调用。</p>
+      <h4>8.2 File 菜单（8 项，<code>0x1400961a0</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>#</th>
+<th>文本</th>
+<th>快捷键（Qt4 原始值）</th>
+<th>槽名</th>
+<th>状态提示</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>&amp;New Project</code></td><td><code>0x0400004e</code> = <strong>Ctrl+N</strong></td><td><code>1_SlotOnActionNewProjectDialog (void)</code></td><td>Create a new Project</td></tr>
+<tr><td>1</td><td><code>&amp;Open Project</code></td><td><code>0x0400004f</code> = <strong>Ctrl+O</strong></td><td><code>1_SlotOnActionOpenProjectDialog(void)</code></td><td>Open an existing Project</td></tr>
+<tr><td>2</td><td><code>&amp;Save Project</code></td><td><code>0x04000053</code> = <strong>Ctrl+S</strong></td><td><code>1_SlotOnActionSaveProject (void)</code></td><td>Save the current Project</td></tr>
+<tr><td>3</td><td><code>Save Project &amp;as ...</code></td><td><code>0x06000053</code> = <strong>Ctrl+Shift+S</strong></td><td><code>1_SlotOnActionSaveProjectAs (void)</code></td><td>Save the current Project as ...</td></tr>
+<tr><td>4</td><td><code>Export &amp;Data ...</code></td><td><code>0x04000044</code> = <strong>Ctrl+D</strong></td><td><code>1_SlotOnActionExportData (void)</code></td><td>Save data to csv</td></tr>
+<tr><td>5</td><td><code>Export &amp;Raw ...</code></td><td><code>0x04000052</code> = <strong>Ctrl+R</strong></td><td><code>1_SlotOnActionExportRaw (void)</code></td><td>Save raw data to file</td></tr>
+<tr><td>6</td><td><code>Impor&amp;t Raw</code></td><td><code>0x04000054</code> = <strong>Ctrl+T</strong></td><td><code>1_SlotOnActionImportRaw (void)</code></td><td>Load data from file</td></tr>
+<tr><td>7</td><td><code>E&amp;xit</code></td><td><code>0x08000058</code> = <strong>Alt+X</strong></td><td><code>1_SlotOnActionExit (void)</code></td><td>Quit this app</td></tr>
+</tbody>
+</table>
+</div>
+      <p>QAction 对象地址（由 <code>FUN_140029da0</code> 的使能刷新交叉验证）：<code>0x1400961c0/1e8/210/238/260/288/2b0/2d8</code>。</p>
+      <h4>8.3 View / Tools / Help 菜单 <span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>菜单</th>
+<th><code>0x1400963b0</code>=<code>&amp;File</code> (8) · <code>0x1400963d0</code>=<code>&amp;View</code> (2) · <code>0x1400963f0</code>=<code>&amp;Tools</code> (1) · <code>0x140096410</code>=<code>&amp;Help</code> (2)</th>
+</tr></thead>
+<tbody>
+</tbody>
+</table>
+</div>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>菜单</th>
+<th>#</th>
+<th>文本</th>
+<th>快捷键</th>
+<th>槽名</th>
+<th>提示</th>
+</tr></thead>
+<tbody>
+<tr><td>&amp;View</td><td>0</td><td><code>Symbol Watch</code></td><td>无</td><td><code>1_SlotOnActionWatchWindow (void)</code></td><td>Show watch window</td></tr>
+<tr><td>&amp;View</td><td>1</td><td><code>Graph window</code></td><td>无</td><td><code>1_SlotOnActionGraphWindow (void)</code></td><td>Show Graph window</td></tr>
+<tr><td>&amp;Tools</td><td>0</td><td><code>Project Settings</code></td><td><code>0x0400002c</code> = <strong>Ctrl+,</strong></td><td><code>1_SlotOnActionProjectSettings(void)</code></td><td>Show Project Settings</td></tr>
+<tr><td>&amp;Help</td><td>0</td><td><code>User Guide</code></td><td><code>0x01000030</code> = <strong>F1</strong></td><td><code>1_SlotOnActionUserGuide (void)</code></td><td>Open the manual</td></tr>
+<tr><td>&amp;Help</td><td>1</td><td><code>&amp;About</code></td><td><code>0x0100003b</code> = <strong>F12</strong></td><td><code>1_SlotOnActionAbout (void)</code></td><td>Show about dialog</td></tr>
+</tbody>
+</table>
+</div>
+      <div class="callout">
+<p>View 的两项在 ctor 里被置为 <strong>checkable + checked</strong>（<code>DAT_140096300</code> = View[0] = <code>Symbol Watch</code> 的 QAction，<code>DAT_140096328</code> = View[1] = <code>Graph window</code> 的 QAction；由 40 字节描述符布局 <code>+0x20 = QAction*</code> 交叉验证：<code>0x1400962e0+0x20 = 0x140096300</code>、<code>0x140096308+0x20 = 0x140096328</code>）。</p>
+<p>点击行为：<code>FUN_14002a260</code>（槽 0xc = <code>_SlotOnActionWatchWindow</code>）读 <code>DAT_140096300</code> 的勾选态 → <code>FUN_14004d140</code>（转发到 <code>MainWindow+0x300</code> 的 vtable+0x58）；<code>FUN_14002a160</code>（槽 0xb = <code>_SlotOnActionGraphWindow</code>）读 <code>DAT_140096328</code> → <code>FUN_14004cf50</code>。两者<strong>各自读各自的 action，无交叉</strong> <span class="badge b-obs">观测</span>。</p>
+</div>
+      <p>菜单表四项已用 PE 字节逐个确认：<code>&amp;File</code>(8)、<code>&amp;View</code>(2)、<code>&amp;Tools</code>(1)、<code>&amp;Help</code>(2)；标题串 <code>0x140064a44/4c/54/5c</code>，动作表基址 <code>0x1400961a0/2e0/330/360</code>（<code>count</code> 字段位于 <code>0x1400963c0/3e0/400/420</code>）。</p>
+      <h4>8.4 MenuBar 槽派发表（<code>FUN_14003beb0</code>，<code>chunk_004.c:5812</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>index</th>
+<th>槽名</th>
+<th>实现函数</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>_SlotOnActionUserGuide()</code></td><td><code>FUN_14002a1f0</code> — <code>FUN_140036e60("https://kb.segger.com/UM08028_J-Scope")</code>（ShellExecute 类），失败报 <code>"Failed to open User Guide at:\n\"%s\""</code></td></tr>
+<tr><td>1</td><td><code>_SlotOnActionAbout()</code></td><td><code>FUN_14002a0c0</code> → <code>FUN_14002ce80</code>（AboutDialog），<code>QDialog::exec</code></td></tr>
+<tr><td>2</td><td><code>_SlotOnActionExit()</code></td><td><code>FUN_14002a130</code> → <code>FUN_14004dca0(MainWindow)</code></td></tr>
+<tr><td>3</td><td><code>_SlotOnActionNewProjectDialog()</code></td><td><code>FUN_14002a1a0</code> → <code>FUN_14004de70(MainWindow)</code>（发 <code>_SignalNewProjectDialog</code>）</td></tr>
+<tr><td>4</td><td><code>_SlotOnActionSaveProject()</code></td><td><code>thunk_FUN_14003e6e0</code></td></tr>
+<tr><td>5</td><td><code>_SlotOnActionSaveProjectAs()</code></td><td><code>thunk_FUN_14003e740</code></td></tr>
+<tr><td>6</td><td><code>_SlotOnActionOpenProjectDialog()</code></td><td><code>FUN_14002a1b0</code> → <code>FUN_14003e420</code>（投递 <code>"APP: &lt;OpenProjFile&gt; Job"</code>）</td></tr>
+<tr><td>7</td><td><code>_SlotOnActionProjectSettings()</code></td><td><code>FUN_14002a1c0</code> → <code>FUN_14004dea0</code>（发 <code>_SignalOptionsDialog</code>）</td></tr>
+<tr><td>8</td><td><code>_SlotOnActionExportData()</code></td><td><code>thunk_FUN_140047390</code></td></tr>
+<tr><td>9</td><td><code>_SlotOnActionExportRaw()</code></td><td><code>thunk_FUN_1400476d0</code></td></tr>
+<tr><td>10</td><td><code>_SlotOnActionImportRaw()</code></td><td><code>FUN_14002a190</code> → <code>FUN_14004cf60</code></td></tr>
+<tr><td>11</td><td><code>_SlotOnActionGraphWindow()</code></td><td><code>FUN_14002a160</code></td></tr>
+<tr><td>12</td><td><code>_SlotOnActionWatchWindow()</code></td><td><code>FUN_14002a260</code></td></tr>
+</tbody>
+</table>
+</div>
+      <h4>8.5 ToolBar（<code>FUN_140054790</code>，<code>chunk_007.c:830</code>）<span class="badge b-obs">观测</span></h4>
+      <p><strong>布局（从左到右）</strong>：<code>Sampling:</code> 标签 → 分裂按钮（默认动作=Start Sampling，菜单里含 Attach to Debugger / Start Sampling）→ <code>Stop Sampling (F9)</code> → 分隔 → <code>Target:</code> 标签 → <code>Start Target</code> → <code>Reset Target</code> → F5 动作 → 弹性空格 → 缩放下拉 → Zoom In → Zoom Out → 分隔 → <code>Target FPS: </code> 标签 → FPS 下拉 → 分隔 → <code>Autoscroll</code> 复选框。</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>偏移</th>
+<th>控件/动作</th>
+<th>文本 / 提示</th>
+<th>快捷键</th>
+<th>槽名</th>
+</tr></thead>
+<tbody>
+<tr><td>+0x30</td><td>QAction（仅标签）</td><td><code>Sampling:</code></td><td>—</td><td>—</td></tr>
+<tr><td>+0x38</td><td>QAction</td><td>（无文本）</td><td><strong><code>0x01000034</code> = F5</strong></td><td><code>1_OnActionStartSamplingShortcut(void)</code></td></tr>
+<tr><td>+0x40</td><td>QAction</td><td><code>Attach to Debugger</code></td><td>—</td><td><code>1_OnActionStartSamplingNoReset(void)</code></td></tr>
+<tr><td>+0x48</td><td>QAction</td><td><code>Start Sampling</code></td><td>—</td><td><code>1_OnActionStartSamplingNormal(void)</code></td></tr>
+<tr><td>+0x50</td><td>QAction</td><td>提示 <code>Stop Sampling (F9)</code></td><td><strong><code>0x01000038</code> = F9</strong></td><td><code>1_OnActionStopSampling(void)</code></td></tr>
+<tr><td>+0x58</td><td>QAction</td><td>提示 <code>Zoom In</code></td><td><strong><code>0x01000013</code> = ↑ (Key_Up)</strong></td><td><code>1_OnActionZoomIn(void)</code></td></tr>
+<tr><td>+0x60</td><td>QAction</td><td>提示 <code>Zoom Out</code></td><td><strong><code>0x01000015</code> = ↓ (Key_Down)</strong></td><td><code>1_OnActionZoomOut(void)</code></td></tr>
+<tr><td>+0x68</td><td>QAction（仅标签）</td><td><code>Target:</code></td><td>—</td><td>—</td></tr>
+<tr><td>+0x70</td><td>QAction</td><td>提示 <code>Start Target</code></td><td>—</td><td><code>1_OnActionStartStopTarget(void)</code></td></tr>
+<tr><td>+0x78</td><td>QAction</td><td>提示 <code>Reset Target</code></td><td>—</td><td><code>1_OnActionResetTarget(void)</code></td></tr>
+<tr><td>+0x80</td><td>QComboBox（缩放）</td><td>27 项（见下），默认 <code>setCurrentIndex(0x12)</code> = 第 19 项</td><td>—</td><td><code>1_OnZoomCurrentIndexChanged(int)</code></td></tr>
+<tr><td>+0x88</td><td>QLabel</td><td><code>Target FPS: </code></td><td>—</td><td>—</td></tr>
+<tr><td>+0x90</td><td>QComboBox（FPS）</td><td>11 项（见下），默认 index 7 = 30</td><td>—</td><td><code>1_OnFPSCurrentIndexChanged(int)</code></td></tr>
+<tr><td>+0xa0</td><td>QToolButton</td><td><code>setPopupMode(1)</code>（MenuButtonPopup）+ <code>setDefaultAction(+0x48)</code></td><td>—</td><td>—</td></tr>
+<tr><td>+0xa8</td><td>QMenu</td><td>含 +0x40 / +0x48</td><td>—</td><td>—</td></tr>
+<tr><td>+0x98</td><td>QCheckBox</td><td><code>Autoscroll</code></td><td>—</td><td><code>1_OnCheckedAutoscroll(int)</code></td></tr>
+<tr><td>+0xb0</td><td>int</td><td>状态机当前态（<code>FUN_140055480/55d0/5730/5800/...</code> 按态换图标/使能）</td><td>—</td><td>—</td></tr>
+</tbody>
+</table>
+</div>
+      <p><strong>缩放下拉 27 项</strong>（<code>0x140096f40</code>，单位自动后缀 <code>" us/Div"</code> / <code>" ms/Div"</code> / <code>" s/Div"</code>，数值 = µs/格）[观测，PE 直读]：</p>
+      <div class="code">
+<pre><code>1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000,
+100000, 200000, 500000, 1000000, 2000000, 5000000, 10000000, 20000000,
+50000000, 100000000, 200000000, 500000000</code></pre>
+</div>
+      <p>默认选中第 19 项（index 0x12）= <strong>200000 µs = 200 ms/Div</strong>。</p>
+      <p><strong>FPS 下拉 11 项</strong>（<code>0x140096fb0</code>）[观测，PE 直读]：<code>1, 2, 5, 10, 15, 20, 25, 30, 40, 50, 60</code>，默认 index 7 = <strong>30</strong>（并由 <code>FUN_14003f420(0x1e)</code> 落进全局）。</p>
+      <p><strong>ToolBar 槽派发表（<code>FUN_14003c630</code>，<code>chunk_004.c:6424</code>）</strong></p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>index</th>
+<th>槽名</th>
+<th>实现</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>_OnActionStartSamplingNoReset</code></td><td><code>FUN_140055e50</code></td></tr>
+<tr><td>1</td><td><code>_OnActionStartSamplingNormal</code></td><td><code>FUN_140055e90</code></td></tr>
+<tr><td>2</td><td><code>_OnActionStartSamplingShortcut</code></td><td><code>thunk_FUN_140056130</code></td></tr>
+<tr><td>3</td><td><code>_OnActionStopSampling</code></td><td><code>FUN_140055f90</code></td></tr>
+<tr><td>4</td><td><code>_OnActionZoomIn</code></td><td><code>FUN_140055fc0</code></td></tr>
+<tr><td>5</td><td><code>_OnActionZoomOut</code></td><td><code>FUN_140056000</code></td></tr>
+<tr><td>6</td><td><code>_OnActionStartStopTarget</code></td><td><code>FUN_140055ed0</code></td></tr>
+<tr><td>7</td><td><code>_OnActionResetTarget</code></td><td><code>FUN_140055dc0</code></td></tr>
+<tr><td>8</td><td><code>_OnZoomCurrentIndexChanged(int)</code></td><td><code>FUN_1400560d0</code></td></tr>
+<tr><td>9</td><td><code>_OnFPSCurrentIndexChanged(int)</code></td><td><code>FUN_140056070</code></td></tr>
+<tr><td>10</td><td><code>_OnCheckedAutoscroll(int)</code></td><td><code>FUN_140056050</code></td></tr>
+</tbody>
+</table>
+</div>
+      <h4>8.6 其它 QShortcut（局部，非菜单）[观测，仅登记]</h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>宿主</th>
+<th>键</th>
+<th>槽</th>
+</tr></thead>
+<tbody>
+<tr><td><code>GraphWidget</code>（<code>chunk_006.c:1180</code> 区）</td><td>→ (Right <code>0x01000014</code>)</td><td><code>_OnTriggeredMoveGraphToRight(void)</code></td></tr>
+<tr><td></td><td>← (Left <code>0x01000012</code>)</td><td><code>_OnTriggeredMoveGraphToLeft(void)</code></td></tr>
+<tr><td></td><td>Home (<code>0x01000010</code>)</td><td><code>_OnTriggeredMoveGraphToStart(void)</code></td></tr>
+<tr><td></td><td>End (<code>0x01000011</code>)</td><td><code>_OnTriggeredMoveGraphToEnd(void)</code></td></tr>
+<tr><td></td><td>Ctrl+1 (<code>0x04000031</code>) / Ctrl+2 (<code>0x04000032</code>)</td><td><code>_SlotOnShowX1(void)</code> / <code>_SlotOnShowX2(void)</code></td></tr>
+<tr><td><code>CustTextView</code>（日志/文本视图）</td><td>Ctrl+C / Ctrl+A / Ctrl+F / Shift+F3 / Ctrl+G / Shift+Ctrl+G / Escape</td><td><code>_OnCopy</code> / <code>_OnSelectAll</code> / <code>_SlotOnActFind</code> / <code>_SlotOnActFindPrev</code> / <code>_SlotOnActFindNext</code> / <code>_SlotOnEscape</code></td></tr>
+</tbody>
+</table>
+</div>
+      <p>（<code>GraphWidget</code>/<code>TableWidget</code> 内部细节属绘图/数值窗口专题。）</p>
+      <h4>8.7 NewProjectDialog 槽派发表（<code>FUN_14003c020</code>，<code>chunk_004.c:5932</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>index</th>
+<th>槽名</th>
+<th>实现</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td><code>_SlotOnToggleRadioUSB(bool)</code></td><td><code>FUN_14002c1b0</code></td></tr>
+<tr><td>1</td><td><code>_SlotOnToggleCheckUSB(int)</code></td><td><code>FUN_14002c030</code></td></tr>
+<tr><td>2</td><td><code>_SlotOnToggleRadioTCPIP(bool)</code></td><td><code>FUN_14002c150</code></td></tr>
+<tr><td>3</td><td><code>_SlotOnToggleRadioExSes(bool)</code></td><td><code>FUN_14002c090</code></td></tr>
+<tr><td>4</td><td><code>_SlotOnReleaseBtnTarget()</code></td><td><code>FUN_14002bc30</code>（器件表对话框）</td></tr>
+<tr><td>5</td><td><code>_SlotOnReleaseBtnScript()</code></td><td><code>FUN_14002bb30</code></td></tr>
+<tr><td>6</td><td><code>_SlotOnChangedCmbBxInterface(int)</code></td><td><code>FUN_14002b8d0</code></td></tr>
+<tr><td>7</td><td><code>_SlotOnChangedCmbBxSpeed()</code></td><td><code>FUN_14002b900</code></td></tr>
+<tr><td>8</td><td><code>_SlotOnBtnGroupSamplingModeClicked(int)</code></td><td><code>FUN_14002b7d0</code></td></tr>
+<tr><td>9</td><td><code>_SlotOnTextChangedLineSampRate(QString)</code></td><td><code>FUN_14002be90</code></td></tr>
+<tr><td>10</td><td><code>_SlotOnReleaseBtnElfFile()</code></td><td><code>FUN_14002b940</code></td></tr>
+<tr><td>11</td><td><code>_SlotOnReleaseBtnOK()</code></td><td><code>FUN_14002ba50</code></td></tr>
+<tr><td>12</td><td><code>_SlotOnReleaseBtnCancel()</code></td><td><code>FUN_14002b930</code></td></tr>
+</tbody>
+</table>
+</div>
+      <h4>8.8 MainWindow 槽派发表（<code>FUN_14003ba80</code>，<code>chunk_004.c:5424</code>）<span class="badge b-obs">观测</span></h4>
+      <p>信号 0..15：<code>_SignalFinAsyncAppInit, _SignalUpdateGUI, _SignalUpdateData, _SignalUpdateGraph, _SignalUpdateTable, _SignalNewProjectDialog, _SignalOptionsDialog, _SignalShowSymbolSelection, _SignalShowCustMsgBox, _SignalUpdateProgBar, _SignalGetSaveFileName, _SignalAssignColors, _SignalReset, _SignalClose, _SignalShowFileDialogOpen, _SignalShowFileDialogSave</code></p>
+      <p>槽 16..32：</p>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>index</th>
+<th>槽名</th>
+<th>实现</th>
+</tr></thead>
+<tbody>
+<tr><td>0x10</td><td><code>_SlotOnNewProjectDialog</code></td><td><code>FUN_14004d4e0</code>（NewProjectDialog, <code>param_3=0</code>）</td></tr>
+<tr><td>0x11</td><td><code>_SlotOptionsDialog</code></td><td><code>FUN_14004d9c0</code>（NewProjectDialog, <code>param_3=1</code> = Project settings；确认后比对 ELF 路径，变了就发"重新解析 ELF"流程）</td></tr>
+<tr><td>0x12</td><td><code>_SlotOnShowSymbolSelection</code></td><td><code>FUN_14004d6c0</code></td></tr>
+<tr><td>0x13</td><td><code>_SlotOnShowCustMsgBox</code></td><td><code>FUN_14004d5a0</code></td></tr>
+<tr><td>0x14</td><td><code>_SlotOnUpdateProgBar</code></td><td><code>FUN_14004d930</code></td></tr>
+<tr><td>0x15</td><td><code>_SlotOnUpdateGUI</code></td><td><code>FUN_14004d870</code> → 状态栏刷新（§7.3）</td></tr>
+<tr><td>0x16</td><td><code>_SlotOnUpdateData</code></td><td><code>FUN_14004d830</code></td></tr>
+<tr><td>0x17</td><td><code>_SlotOnUpdateGraph</code></td><td><code>FUN_14004d900</code></td></tr>
+<tr><td>0x18</td><td><code>_SlotOnUpdateTable</code></td><td><code>FUN_14004d990</code></td></tr>
+<tr><td>0x19</td><td><code>_SlotOnGetSaveFileName</code></td><td><code>FUN_14004d460</code></td></tr>
+<tr><td>0x1a</td><td><code>_SlotOnAssignColors</code></td><td><code>FUN_14004d290</code></td></tr>
+<tr><td>0x1b</td><td><code>_SlotOnTimeout</code></td><td><code>FUN_14004d7e0</code>（1 s 定时器 → 投递 ELF 变更检查 Job）</td></tr>
+<tr><td>0x1c</td><td><code>_SlotOnReset</code></td><td><code>FUN_14004d540</code></td></tr>
+<tr><td>0x1d</td><td><code>_SlotOnClose</code></td><td><code>QWidget::close</code></td></tr>
+<tr><td>0x1e</td><td><code>_SlotOnFinAsyncAppInit</code></td><td><code>FUN_14004d380</code>（§1.5 对话框决策）</td></tr>
+<tr><td>0x1f</td><td><code>_SlotOnShowFileDialogOpen</code></td><td><code>FUN_14004d5e0</code></td></tr>
+<tr><td>0x20</td><td><code>_SlotOnShowFileDialogSave</code></td><td><code>FUN_14004d650</code></td></tr>
+</tbody>
+</table>
+</div>
+      <h4>8.9 图标资源 <span class="badge b-obs">观测</span></h4>
+      <p><code>FUN_14002a340</code>（<code>chunk_003.c:860</code>）：循环 <strong><code>0x48 = 72</code></strong> 次，每项 <code>{const uchar* data; int size; QIcon* icon;}</code>（24 B），<code>QPixmap::loadFromData</code> + <code>new QIcon</code>，表基址 <code>0x140096430</code>。取用接口 <code>FUN_14002a320(i)</code> 返回 <code>(&amp;DAT_140096438)[i*3]</code>。工具栏按状态机（+0xb0）用不同索引换图标。</p>
+      <hr>
+      <h3>9. About / 退出 / 单实例</h3>
+      <h4>9.1 AboutDialog（<code>FUN_14002ce80</code>，<code>chunk_003.c:2598</code>）<span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>QDialog ctor; vftable = AboutDialog::vftable; setModal(true);
+setWindowTitle("About");                              // 0x14006d268
+第一段文本 = sprintf("%s\nCompiled: %s %s\nhttps://www.segger.com", 版本串);
+    版本串 = FUN_14003ea60() = "J-Scope"（[观测]：此处实际传入的是应用名字面量）
+第二段文本 = "Copyright (C) %s 1998 - %s\n\nThe GUI of this software uses Qt4 which is under LGPLv21\n"
+             "Add. 3rd party licensing and source code of Qt4:\nhttps://www.segger.com/qt-usage/"   // 0x14006d2b0
+            （%s/%s 由 FUN_1400271c0/FUN_1400271b0 提供 = 编译日期/时间 [推断]）
+第三段 = QLabel + QPixmap::loadFromData(&amp;PNG_14006cca0, 0x3a2 /*930 B*/, "PNG")   // 0x14006d358
+按钮 = "OK"；connect("2_Sig_CloseDlg(void)" → "1_Slot_OnBtnOK(void)")
+setWindowFlags(... 清 0xfffe3fff ...); 再 |0x800; 再 |0x40000
+setFixedSize(minimumSize()); show();</code></pre>
+</div>
+      <p><code>"12:17:58"</code>(<code>0x14006d270</code>) 疑为编译时间常量 <span class="badge b-inf">推断</span>。</p>
+      <h4>9.2 退出路径与清理 <span class="badge b-obs">观测</span></h4>
+      <div class="code">
+<pre><code>菜单 File→Exit / Alt+X
+  MenuBar 槽 2 = FUN_14002a130  →  FUN_14004dca0(MainWindow)   // chunk_006.c
+      → FUN_14003bc00()                                         // MainWindow 的一个槽/方法
+（Init Job 结束时若 DAT_14285da1d != 0 也直接调 FUN_14004dca0）</code></pre>
+</div>
+      <p>工程关闭 / 采样停止 / 链路关闭：</p>
+      <div class="code">
+<pre><code>FUN_14004e8f0  (关闭工程; chunk_006.c:5181)
+  ├─ FUN_14003ef10()  → FUN_14003f090()          // 若"正在采样"
+  ├─ FUN_14003eef0()  → FUN_14003ef20()          // 若已连接 → JLINKARM_Close()
+  ├─ if (脏) FUN_14004e720()                     // 保存询问（§6.3）
+  ├─ FUN_14003ea40(); FUN_14003f830("Close project"); FUN_14004eef0(0); FUN_14003f330(); FUN_14003f320()
+  └─ 之后由上层 FUN_14003ce50 决定是否重新投递 job
+
+FUN_14003d7d0  (停止采样 + 断开; chunk_004.c:7535)
+  ├─ 释放 HSS 变量表缓冲 DAT_14285da70
+  ├─ if (mode == RTT)  JLINK_RTTERMINAL_Control(1)          // 关闭 RTT 通道
+  ├─ else if (!skipStop &amp;&amp; DAT_14085d180)  JLINK_HSS_Stop()  // 停 HSS（cfg+0x5b8 可跳过）
+  ├─ memset(&amp;DAT_14285d420, 0, 0x5bc)                        // 清连接配置
+  └─ FUN_14003ef20()  →  if (DAT_14285da8c) { if (!DAT_14285d9d8) JLINKARM_Close(); ... }</code></pre>
+</div>
+      <p><code>JLINKARM_Close</code>、<code>JLINK_HSS_Stop</code>、<code>JLINK_RTTERMINAL_Control</code> 全部经由按名解析的 thunk（§3.1）<span class="badge b-obs">观测</span>。<strong>工程文件的写回只在显式保存时发生，退出时不会自动写 <code>.jscope</code></strong>（只会弹保存询问）。</p>
+      <h4>9.3 单实例：<strong>没有</strong> <span class="badge b-obs">观测</span></h4>
+      <ul>
+<li>全程序 <code>CreateMutexA</code> <strong>只有一个调用点</strong>：<code>FUN_140043110</code> @ <code>0x140043110</code>（<code>chunk_005.c:4594</code>）： ``<code>c if (param_1 != NULL) { HANDLE h = CreateMutexA(NULL, 0, param_1); ...; } else { InitializeCriticalSectionAndSpinCount(...); } </code>``</li>
+<li>三个调用者全部传 <strong><code>0</code></strong>：<code>FUN_140039400</code>（<code>chunk_004.c:3223</code>，job 队列锁）、<code>FUN_14004c6a0</code>（MainWindow，存 <code>MainWindow+0x318</code>）、<code>FUN_14004ef00</code>（ini 锁）。→ <strong><code>CreateMutexA</code> 分支是死代码</strong>。</li>
+<li>未发现 <code>OpenMutexA</code> / <code>QLocalServer</code> / <code>QLocalSocket</code> / <code>FindWindow</code> / <code>CreateSemaphore</code> 的任何使用 <span class="badge b-obs">观测</span>。</li>
+<li><strong>结论：J-Scope 9.66 无单实例限制</strong>，可以同时开多个进程（两个进程会共享同一个 <code>JScopeSettings.ini</code>，且都以 30000 B 整块重写 —— 存在写覆盖风险）<span class="badge b-der">推导</span>。</li>
+</ul>
+      <hr>
+      <h3>10. 未知点 / 需实测确认</h3>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>#</th>
+<th>问题</th>
+<th>现状</th>
+</tr></thead>
+<tbody>
+<tr><td>U1</td><td>配置结构 <code>+0x5a8</code> 的语义</td><td>新建工程对话框把 <code>TIFSpeedComboBox</code> 的值写进 <code>cfg+0x5a8</code>（当"接口速率"），而 <code>JLINKARM_SetSpeed</code> 用的是 <code>cfg+0x5a0</code>；HSS 启动用 <code>cfg+0x5a8</code> 当采样周期。反编译里存在<strong>字段重叠/别名</strong>，需实测某一工程文件里 <code>InterfaceSpeed</code> 与 <code>SamplingPeriod</code> 两个 XML 属性是否同源 [观测有矛盾]</td></tr>
+<tr><td>U2</td><td><code>Connection</code> 属性（<code>&lt;JLink&gt;&lt;Options Connection=".."&gt;</code>）</td><td>反编译显示 <code>uVar3 = 4; if (cfg+0x5b8 == 0) uVar3 = cfg+0x5ac;</code>，与"连接类型"语义不吻合，疑为 Ghidra 字段错配</td></tr>
+<tr><td>U3</td><td><code>MainWindow+0x33C</code> 的语义</td><td><code>FUN_14003cc50</code> 写 0 或 2；<code>FUN_14004d380</code> 写 WelcomeDialog 的 <code>exec()</code> 返回值。两项用途冲突，未决</td></tr>
+<tr><td>U4</td><td>WelcomeDialog 的 <code>exec()</code> 返回值语义</td><td>只知 <code>FUN_14004d380</code> 把结果存 <code>+0x33c</code>，未见消费点</td></tr>
+<tr><td>U5</td><td><code>MainWindow+0x340/0x341</code> 的精确枚举</td><td>仅由 <code>FUN_140040e20</code> 的 0/1/2 分支推出三个状态；<code>-openprj</code> 与 <code>.jscope</code> 裸路径参数下 <code>FUN_140041cd0</code> 的返回值为 0，因此 <code>+0x342=1</code> 的触发条件未能确证 <span class="badge b-inf">推断</span></td></tr>
+<tr><td>U6</td><td><code>_guard_check_icall(DAT_14286d388, str)</code> 的真实形态</td><td><code>DAT_14286d388</code> 是 MainWindow 指针却被当函数指针调用；疑为 Ghidra 对 <code>QMetaObject::invokeMethod</code>/虚调用的建模失真。日志实际落到哪个控件（<code>CustTextView</code>? 状态栏?）未确证</td></tr>
+<tr><td>~~U7 选项表第 2/3 条的掩码~~</td><td>—</td><td>✅ 已用 PE 直读确认：<code>-IP</code>/<code>-RTTSearchRanges</code> 掩码均为 <code>0x1</code>（见 §2.1）</td></tr>
+<tr><td>U8</td><td><code>0x1040807</code> / <code>0x42030</code> / <code>0x200</code> / <code>0x300</code> 等 Qt/Win32 标志常量</td><td>未逐位解码（不影响重实现）</td></tr>
+<tr><td>U9</td><td>采样率输入框是否有隐含上限</td><td>只有 <code>^[0-9]*$</code>；<code>FUN_14002c250</code> 汇总时是否 clamp 未查</td></tr>
+<tr><td>U10</td><td><code>StatusBar</code> 的 "FPS" 取值</td><td><code>min(DAT_140096dd8, DAT_14285daa8)</code> 中两者分别是"目标/实际 FPS"还是反过来，未确证</td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <h3>11. 需要补充反编译（当前 dump 不足）</h3>
+      <div class="tw">
+<table>
+<thead><tr>
+<th>函数/对象</th>
+<th>位置</th>
+<th>需要什么</th>
+</tr></thead>
+<tbody>
+<tr><td><code>FUN_14003f1e0</code> 的<strong>调用者上下文</strong></td><td><code>chunk_005.c:1767</code></td><td><code>"[%d]: %s"</code> 回显被内联，需汇编级确认 <code>"Application log started"</code> / <code>"Optional command line parameters found"</code> 两条串的插入点</td></tr>
+<tr><td><code>FUN_14004ef00</code> 的<strong>实参链</strong></td><td><code>chunk_006.c:5637</code></td><td><code>FUN_1400440e0</code> 的寄存器传参被 Ghidra 丢了，ini 绝对路径（<code>&lt;exedir&gt;\JScopeSettings.ini</code>）需汇编确认</td></tr>
+<tr><td><code>FUN_14004bfc0</code> 附近（<code>FUN_14004bc30</code>..<code>FUN_14004c020</code>）</td><td><code>chunk_006.c</code></td><td><code>DAT_142865068</code>（脏标志）的全部写点，确认是否存在除保存/新建之外的清点</td></tr>
+<tr><td><code>FUN_14002c250</code>（NewProjectDialog 汇总）</td><td><code>chunk_003.c</code></td><td>UI → cfg 的完整字段映射（含采样率数字解析与 clamp）</td></tr>
+<tr><td><code>FUN_14004dca0</code> / <code>FUN_14003bc00</code></td><td><code>chunk_006.c</code> / <code>chunk_004.c</code></td><td>退出时真正调用的方法（vtable 偏移未定）</td></tr>
+<tr><td><code>FUN_14003bd60</code> / <code>FUN_14003bda0</code>（<code>thunk_FUN_14003bd60</code>）</td><td><code>chunk_004.c</code></td><td><code>FUN_14004e150</code>/<code>FUN_14004e1f0</code> 尾部调用的虚函数</td></tr>
+<tr><td>~~<code>0x1400963c0</code> / <code>0x140096400</code> / <code>0x140096420</code> 三个 count 字~~</td><td>—</td><td>✅ 已用 PE 直读确认：<code>&amp;File=8</code>、<code>&amp;View=2</code>、<code>&amp;Tools=1</code>、<code>&amp;Help=2</code>（见 §8.3）</td></tr>
+<tr><td><code>FUN_140034630</code>（<code>DIALOG_CustMsgBox</code> ctor）</td><td><code>chunk_003.c</code></td><td>消息框按钮/图标标志（<code>0x200</code>/<code>0x300</code>）的解码</td></tr>
+</tbody>
+</table>
+</div>
+      <hr>
+      <h3>12. 对 OpenScope 的启示</h3>
+      <ol>
+<li><strong>命令行只做"薄壳"，两阶段解析值得抄。</strong> J-Scope 把 <code>-openprj</code> 单独放在阶段 2 先"探明"，再在阶段 1 才真正执行；<code>-USB</code>/<code>-IP</code> 的"必须与 <code>-openprj</code> 同用"就靠阶段 2 留下的一个布尔标志实现，<strong>没有额外的校验框架</strong>。 OpenScope 若要加网络/多探针参数，照这个模式只需一张 <code>{串, 掩码, 处理函数}</code> 表 + 一个 <code>for</code> 循环（<code>FUN_140041cd0</code> 全文不到 100 行 C）。注意 J-Scope 用的是<strong>前缀匹配</strong>（<code>strncmp(arg, name, strlen(name))</code>），这会让 <code>-openprjX</code> 也命中，重实现时建议改成整串匹配。</li>
+</ol>
+      <ol>
+<li><strong>后端 DLL 的三级查找 + 按名解析是可直接复用的模板，但要修正一处认知。</strong> 实际顺序是 <strong>exe 同目录 → 另一模块目录 → 注册表 <code>SEGGER\J-Link\InstallPath</code>（再 <code>bin_x64\</code>）→ 注册表 <code>SEGGER\Flasher</code></strong>，而不是"先交给系统搜索路径"。HKCU 先于 HKLM。 29 个 API 全部惰性解析 + 失败给 <code>MessageBox</code> + <code>exit(1)</code>，语义干净。OpenScope 若同时支持 J-Link/ST-Link，建议照此抽象，但<strong>把 <code>exit(1)</code> 换成可恢复错误</strong>（J-Scope 一旦找不到 DLL 就直接杀进程）。</li>
+</ol>
+      <ol>
+<li><strong>设置持久化：J-Scope 的实现有明确缺陷，别照抄。</strong> ① <code>JScopeSettings.ini</code> 与 exe 同目录（<code>Program Files</code> 下通常无写权限，且多进程会互相覆盖）；② 整个文件用一个 <strong>30000 字节定长缓冲</strong>读改写，<strong>超过就拒绝启动读取</strong>；③ 每次改一个键都<strong>整文件重写</strong>。 OpenScope 应改为 <code>%APPDATA%</code> 下的 <code>QSettings</code>/JSON，并做"读-改-写+文件锁"，MRU 也放一起而不是拆到注册表（J-Scope 的 MRU 在 <code>HKCU\Software\SEGGER\J-Scope\Recent File List 1\</code>，键名 <code>File1..File10</code>，<strong>1 基</strong>）。</li>
+</ol>
+      <ol>
+<li><strong><code>LogLevel</code> 其实不是"严重性等级"，而是"缩进深度阈值"。</strong> <code>FUN_140041570(level)</code> 就是 <code>level &lt;= LogLevel || LogLevel == 9</code>，而调用方传的 <code>level</code> 全部形如 <code>depth*2±1</code>。值域 1..9、默认 3。 OpenScope 若要分级日志，建议<strong>分开两个概念</strong>：严重性（Error/Warn/Info/Debug）+ 深度阈值，别学 J-Scope 把两者压进一个整数。</li>
+</ol>
+      <ol>
+<li><strong>UI 侧最有复用价值的三个设计</strong>：</li>
+<li><strong>静态动作描述符表驱动菜单/快捷键</strong>（§8.1）：<code>{文本, QKeySequence, 槽名, 状态提示}</code> 40 字节一条，<code>setShortcut</code> 与 <code>connect</code> 全自动。OpenScope 加菜单只需加一行数据。</li>
+<li><strong>"Welcome 向导三态"</strong>：注册表一个 DWORD 控制"显示向导 / 不显示 / 直接进新建工程"，比自己发明状态机省事（<code>FUN_140040e20</code>）。</li>
+<li><strong>状态栏三字段</strong>（FPS / Buffer / Samples/s）与 buffer 百分比的自解释格式 <code>Buffer: 512 KB (8388608 samples), 42 %</code> —— 这种"绝对量+占位率"的写法对调试采样很友好，OpenScope 可直接借鉴（OpenScope 还应加<strong>连接状态</strong>，J-Scope 这里是没有的）。</li>
+</ol>
+      <ol>
+<li><strong>不要复刻的两点</strong>：</li>
+<li><strong>无单实例</strong>且 <code>JScopeSettings.ini</code> 无锁整写 → 多开会互相踩。OpenScope 有网络多实例需求，务必加命名互斥或至少给设置文件加锁。</li>
+<li><strong><code>-USB</code>/<code>-IP</code> 与 <code>-openprj</code> 强绑定</strong>：J-Scope 这么做是因为连接参数只存在工程文件里。OpenScope 的连接参数已经独立于工程，应该允许 <code>--connect</code> 单独使用，把"两阶段解析"当作<strong>机制</strong>而不是<strong>限制</strong>来继承。</li>
+</ol>
+    </section>

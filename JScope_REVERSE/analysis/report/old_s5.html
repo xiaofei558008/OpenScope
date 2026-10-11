@@ -1,0 +1,110 @@
+<section id="s5">
+      <h2><span class="sec-n">05</span>HSS 高速采样协议（异步）</h2>
+
+      <h3>5.1 变量描述符数组</h3>
+      <p class="lead"><code>FUN_140041f30</code> 构造并下发给探针。</p>
+      <div class="code">
+<pre><code><span class="c">// 每个变量 16 字节；末尾追加一个 {addr=0,size=0} 终止项</span>
+<span class="k">struct</span> HssVar {          <span class="c">// 16 bytes</span>
+    <span class="k">uint32_t</span> addr;       <span class="c">// +0x00  变量绝对地址</span>
+    <span class="k">uint32_t</span> size;       <span class="c">// +0x04  字节数</span>
+    <span class="k">uint32_t</span> reserved0;  <span class="c">// +0x08  = 0</span>
+    <span class="k">uint32_t</span> reserved1;  <span class="c">// +0x0C  = 0</span>
+};
+
+<span class="k">uint32_t</span> n = 0;
+HssVar *list = malloc((n + <span class="n">1</span>) * <span class="n">16</span>);   <span class="c">// +1 给终止项</span>
+memset(list, <span class="n">0</span>, (n+<span class="n">1</span>) * <span class="n">16</span>);
+
+<span class="k">uint32_t</span> off = <span class="n">4</span>;                    <span class="c">// ★ 从 4 开始：前 4 字节是时间戳</span>
+<span class="k">for</span> (每个被选中的变量 v) {
+    v-&gt;sampleOffset = off;           <span class="c">// 记在 v+0x38C</span>
+    off += v-&gt;size;                  <span class="c">// v+0x31C</span>
+    list[i].addr = v-&gt;addr;          <span class="c">// v+0x318</span>
+    list[i].size = v-&gt;size;
+    <span class="c">/* 同时复位统计量：</span>
+<span class="c">       v-&gt;yMaxSampled(+0x398) = -DBL_MAX   (0xFFEFFFFFFFFFFFFF)</span>
+<span class="c">       v-&gt;yMinSampled(+0x3A0) = +DBL_MAX   (0x7FEFFFFFFFFFFFFF)</span>
+<span class="c">       v-&gt;writePtr(+0x3C8) = v-&gt;dataBuf(+0x3D0) = 0   */</span>
+}
+list[n].size = <span class="n">0</span>;                    <span class="c">// 终止项</span>
+
+rc = JLINK_HSS_Start(list, n, samplingPeriod_us <span class="c">/*config+0x5A8*/</span>, <span class="n">1</span> <span class="c">/*flags*/</span>);</code></pre>
+      </div>
+
+      <h4>返回码（错误串逐字来自二进制）</h4>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:80px">rc</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">-2</td><td class="m">Failed to allocate memory on debug probe</td></tr>
+            <tr><td class="m">-3</td><td class="m">Too many variables specified</td></tr>
+            <tr><td class="m">-4</td><td class="m">Target hardware does not support HSS</td></tr>
+            <tr><td class="m">其它 &lt;0</td><td class="m">Failed to inititalize HSS. <span style="color:var(--fg-faint)">（原文拼写错误 inititalize）</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>启动成功后立即让目标跑起来：</p>
+      <div class="code">
+<pre><code><span class="k">if</span> (JLINK_IsHalted()) JLINK_Go();</code></pre>
+      </div>
+
+      <h3>5.2 采样包格式</h3>
+      <p class="lead">
+        <code>JLINK_HSS_Read(buf, size)</code> 返回本次读到的<strong>字节数</strong>，
+        缓冲区内容为紧密排列的定长样本。变量在样本内的偏移在
+        <code>JLINK_HSS_Start</code> 之前就固定算好，读取后直接按偏移切片。
+      </p>
+
+      <div class="packet">
+        <p class="cap" style="font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-faint);margin:0">
+          实例：3 个变量 g_speed(float32) · g_state(uint8) · g_count(int16) → 样本 = 4+4+1+2 = 11 字节
+        </p>
+        <div class="pkt-row">
+          <div class="pkt ts"><span class="off">offset 0</span><span class="nm">timestamp</span><span class="sz">uint32 · µs</span></div>
+          <div class="pkt v"><span class="off">offset 4</span><span class="nm">g_speed</span><span class="sz">float32 · 4 B</span></div>
+          <div class="pkt v2"><span class="off">offset 8</span><span class="nm">g_state</span><span class="sz">uint8 · 1 B</span></div>
+          <div class="pkt v3"><span class="off">offset 9</span><span class="nm">g_count</span><span class="sz">int16 · 2 B</span></div>
+        </div>
+        <div class="strip" aria-hidden="true">
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+        </div>
+        <div class="strip-key">
+          <span><i class="swatch" style="background:var(--ch1)"></i>ts (µs)</span>
+          <span><i class="swatch" style="background:var(--accent)"></i>g_speed</span>
+          <span><i class="swatch" style="background:var(--ch4)"></i>g_state</span>
+          <span><i class="swatch" style="background:var(--ch3)"></i>g_count</span>
+          <span style="color:var(--fg-faint)">→ 样本按此长度首尾相接填满整个读缓冲</span>
+        </div>
+      </div>
+
+      <h3>5.3 读取泵</h3>
+      <div class="code">
+        <p class="cap">FUN_140040fa0</p>
+<pre><code><span class="k">int</span> bufSize = <span class="n">0x200000</span> - (<span class="n">0x200000</span> % (sampleSize * numVars));  <span class="c">// ≈2 MB 对齐</span>
+<span class="k">void</span> *buf = malloc(bufSize);
+<span class="k">int</span> n = JLINK_HSS_Read(buf, bufSize);      <span class="c">// 返回字节数</span>
+<span class="k">if</span> (n &gt;= <span class="n">0</span>) UnpackSamples(n, buf);
+free(buf);</code></pre>
+      </div>
+      <div class="callout key">
+        <p>由 <strong>10 ms 周期 Job</strong>（<code>APP: &lt;ReadPeriodic&gt;</code>，<code>job-&gt;period = 10</code>）驱动 ——
+        探针在后台以设定周期<strong>自主采样并缓存</strong>，主机每 10 ms 批量取走积压数据。
+        <strong>采样率与主机轮询频率彻底解耦</strong>，这正是 HSS 能到 µs 级的原因。</p>
+      </div>
+    </section>
+
+    <!-- ══ 06 ══ -->
+    

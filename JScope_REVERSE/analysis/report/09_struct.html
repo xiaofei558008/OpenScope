@@ -1,0 +1,131 @@
+    <!-- ══ 09 ══ -->
+    <section id="s9">
+      <h2><span class="sec-n">09</span>数据结构总览</h2>
+      <p class="lead">
+        J-Scope 的内部对象全部由自研分配器分配，<strong>没有 C++ 类实例化痕迹</strong>（除了 Qt 与几个对话框类）——
+        核心对象是"裸结构体 + 手写初始化函数"。这解释了为什么反编译产物如此"可读"：
+        字段偏移在代码里直接可见。下面四张表是重实现时真正需要对齐的东西。
+      </p>
+
+      <h3>9.1 变量记录 / 符号树节点（0x3F0 字节）<span class="badge b-obs">观测</span></h3>
+      <div class="code">
+        <p class="cap">分配点：FUN_140040ab0 — Alloc(0x3F0)，无标签；同一结构既当"变量"又当"树节点"</p>
+<pre><code><span class="k">struct</span> SymbolNode {           <span class="c">// 0x3F0 B，字段偏移全部来自反编译交叉验证</span>
+    <span class="k">uint32_t</span>  nodeKind;      <span class="c">// +0x000  节点种类（变量/数组/结构体…）</span>
+    <span class="k">char</span>      Name[<span class="n">0x104</span>];    <span class="c">// +0x004  叶名（XML 属性 Name）</span>
+    <span class="k">char</span>      NameWithParents[<span class="n">0x108</span>]; <span class="c">// +0x108  全路径名</span>
+    <span class="k">char</span>      Type[<span class="n">0x100</span>];    <span class="c">// +0x110  类型名（"float"/"unsigned int"/…）</span>
+    <span class="k">char</span>      File[<span class="n">0x104</span>];    <span class="c">// +0x210  来源文件</span>
+    <span class="k">int</span>       TypeID;         <span class="c">// +0x314  见 §8（0=不支持）</span>
+    <span class="k">uint32_t</span>  Address;        <span class="c">// +0x318  绝对地址</span>
+    <span class="k">uint32_t</span>  Size;           <span class="c">// +0x31C  字节数</span>
+    <span class="k">int</span>       elemCount;      <span class="c">// +0x320  数组元素数</span>
+    <span class="k">void</span>     *elemList;       <span class="c">// +0x328  元素节点链（每个 0x10 B 节点，释放时逐个 Free）</span>
+    <span class="k">char</span>      isSignedFloat;  <span class="c">// +0x330  bool/float 时=0/1；整型时 0=无符号、1=有符号</span>
+    <span class="k">uint32_t</span>  bitWidth;       <span class="c">// +0x338  位域：位宽</span>
+    <span class="k">uint32_t</span>  bitShift;       <span class="c">// +0x33C  位域：位偏移</span>
+    <span class="k">int</span>       DrawStyle;      <span class="c">// +0x348  0=线 1=点 2=点+线 3=竖线</span>
+    <span class="k">double</span>    YOffset;        <span class="c">// +0x350  像素偏移</span>
+    <span class="k">int</span>       YResolution;    <span class="c">// +0x358  每格量程</span>
+    <span class="k">bool</span>      IsAutoConfig;   <span class="c">// +0x35D</span>
+    <span class="k">bool</span>      ShowInGraph;    <span class="c">// +0x35E  默认 1（初值 0x00010000 写 +0x35C）</span>
+    <span class="k">bool</span>      ShowCheckBox;   <span class="c">// +0x35F  树中是否给勾选框</span>
+    <span class="k">void</span>     *treeItem;       <span class="c">// +0x360  对应的 QTreeWidgetItem*</span>
+    <span class="k">void</span>     *selNode;        <span class="c">// +0x368  选中链节点（移除时置 0）</span>
+    <span class="k">void</span>     *color;          <span class="c">// +0x378  QColor*（RGB 三元组）</span>
+    <span class="k">bool</span>      hasData;        <span class="c">// +0x388  本周期是否有有效样本</span>
+    <span class="k">uint32_t</span>  sampleOffset;   <span class="c">// +0x38C  ★ 在采样包内的字节偏移</span>
+    <span class="k">uint64_t</span>  field390;       <span class="c">// +0x390  每周期复位（用途未定）</span>
+    <span class="k">double</span>    yMaxSampled;    <span class="c">// +0x398  初值 -DBL_MAX</span>
+    <span class="k">double</span>    yMinSampled;    <span class="c">// +0x3A0  初值 +DBL_MAX</span>
+    <span class="k">double</span>    yAvgSampled;    <span class="c">// +0x3A8  滑动平均</span>
+    <span class="k">double</span>    MaxValue;       <span class="c">// +0x3B0  类型量程上限（自动定标用）</span>
+    <span class="k">longlong</span>  lastSamplePtr;  <span class="c">// +0x3C8  上一次写入样本在环内的地址（触发比较的"prev"）</span>
+    <span class="k">void</span>     *dataBuf;        <span class="c">// +0x3D0  ★ 该变量的 64 MB 数据环</span>
+    <span class="k">SymbolNode</span> *children;    <span class="c">// +0x3D8  子节点链 / 变量表尾指针（懒创建）</span>
+    <span class="k">SymbolNode</span> *children2;   <span class="c">// +0x3E0  第二条子链（析构函数 FUN_140040bd0 同时遍历两者）</span>
+};</code></pre>
+      </div>
+      <p>
+        <strong>MaxValue（+0x3B0）</strong>是自动定标的基准：bool→1.0、float→<code>0x47EFFFFFE0000000</code>(FLT_MAX)、
+        double→<code>0x7FEFFFFFFFFFFFFF</code>、uint8/16/32/64→255/65535/4294967295/1.8446744e19、
+        int8/16/32/64→127/32767/2147483647/9.223372e18。这些常量在 <code>FUN_140040050</code> 里逐一可见 ——
+        也就是"J-Scope 认为这个类型的值最大能到多少"。
+      </p>
+
+      <h3>9.2 配置结构 Configuration（0x5BC）<span class="badge b-obs">观测</span></h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th class="m" style="width:70px">偏移</th><th style="width:180px">字段</th><th>说明 / 证据</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x000</td><td class="m">TargetDevice[0x80]</td><td>器件名；空或查不到 → 弹 <code>JLINKARM_DEVICE_SelectDialog</code></td></tr>
+            <tr><td class="m">+0x080</td><td class="m">ElfFile[0x400]</td><td>ELF 路径（"The elf file at\n%s\nwas deleted or moved…" 直接引用该偏移）</td></tr>
+            <tr><td class="m">+0x38C</td><td class="m">ScriptFile[0x80]</td><td>→ <code>JLINKARM_ExecCommand("ScriptFile = %s")</code></td></tr>
+            <tr><td class="m">+0x490</td><td class="m">IpAddress[0x80]</td><td>→ <code>JLINKARM_SelectIP()</code></td></tr>
+            <tr><td class="m">+0x510</td><td class="m">Nickname[0x80]</td><td>→ <code>JLINK_EMU_SelectByUSBNickname()</code>（优先于序列号）</td></tr>
+            <tr><td class="m">+0x594</td><td class="m">int SerialNo</td><td>→ <code>JLINKARM_EMU_SelectByUSBSN()</code>；0 = 不指定</td></tr>
+            <tr><td class="m">+0x59C</td><td class="m">int TargetInterface</td><td>0=JTAG · 1=SWD · 7=JTAG 变体 → <code>JLINKARM_TIF_Select()</code></td></tr>
+            <tr><td class="m">+0x5A0</td><td class="m">int InterfaceSpeed</td><td>kHz → <code>JLINKARM_SetSpeed()</code></td></tr>
+            <tr><td class="m">+0x5A4</td><td class="m">char IsRTTSession</td><td>0=HSS（异步）, 1=RTT（同步）</td></tr>
+            <tr><td class="m">+0x5A5</td><td class="m">char IsRTTWithTimeStamp</td><td>RTT 上行通道带 <code>t4</code>（或存在 <code>JScope_Data_t</code>）时置 1</td></tr>
+            <tr><td class="m">+0x5A6</td><td class="m">char IsRTTPlus</td><td>RTT-Plus：下发给目标端变量表</td></tr>
+            <tr><td class="m">+0x5A8</td><td class="m">int SamplingPeriod</td><td>µs → <code>JLINK_HSS_Start</code> 第 3 参；默认 1000</td></tr>
+            <tr><td class="m">+0x5AC</td><td class="m">int ConnectionType</td><td>0=USB（昵称/序列号）· 2=TCP/IP · 4=会话（寄生模式）</td></tr>
+            <tr><td class="m">+0x5B0</td><td class="m">int JTAG_DRPre</td><td rowspan="2">仅 JTAG 使用；<strong>真正下发给 <code>JLINKARM_ConfigJTAG()</code> 的是 +0x5B4</strong></td></tr>
+            <tr><td class="m">+0x5B4</td><td class="m">int JTAG_IRPre</td></tr>
+            <tr><td class="m">+0x5B8</td><td class="m">char SessionMode</td><td>ConnectionType==4 时置 1 → <strong>停止采集时跳过 <code>JLINK_HSS_Stop</code></strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout">
+        <p><strong>读这一节前必须知道的一个陷阱：XML 读写用的是"项目结构"基址（比运行期 Configuration 高 8 字节）。</strong>
+        同一字段在两处的偏移<strong>天然相差 8</strong>，若不加区分会得到自相矛盾的字段表：</p>
+        <div class="tw">
+          <table>
+            <thead><tr><th style="width:150px">字段</th><th class="m">写入方读的偏移（运行期 C）</th><th class="m">读取方写的偏移（项目结构 P = C−8）</th><th class="m">换算</th></tr></thead>
+            <tbody>
+              <tr><td>IsRTTSession</td><td class="m">C+0x5A4</td><td class="m">P+0x5AC</td><td class="m">0x5AC−8 = 0x5A4 ✓</td></tr>
+              <tr><td>SamplingPeriod</td><td class="m">C+0x5A8</td><td class="m">P+0x5B0</td><td class="m">0x5B0−8 = 0x5A8 ✓</td></tr>
+              <tr><td>InterfaceSpeed</td><td class="m">C+0x5A0</td><td class="m">P+0x5A8</td><td class="m">0x5A8−8 = 0x5A0 ✓</td></tr>
+              <tr><td>JTAG_IRPre</td><td class="m">C+0x5B4（送 ConfigJTAG）</td><td class="m">P+0x5BC</td><td class="m">0x5BC−8 = 0x5B4 ✓</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>因此本报告修正三点：</strong>① JTAG_IRPre 在 <code>+0x5B4</code>（<code>+0x5B0</code> 是 DRPre）；
+        ② <code>+0x5B8</code> 不是"JTAG 配置值"而是<strong>会话模式标志</strong>（<code>Connection==4</code> 时置位，
+        停采时据此跳过 <code>JLINK_HSS_Stop</code>）；③ 所谓"+0x5A8 既是接口速率又是采样周期"的字段重叠
+        <strong>并不存在</strong>——那是把 P 与 C 的偏移混看的产物。</p>
+      </div>
+
+      <h3>9.3 工程设置 ProjectSettings（0x5E8）= Configuration + 视图/符号状态</h3>
+      <div class="code">
+<pre><code><span class="c">// 两个全局只差 8 字节：Configuration 是 ProjectSettings 的 +0x08 成员</span>
+<span class="n">0x142864a80</span>  ProjectSettings {            <span class="c">// 0x5E8 = 0x08 + 0x5BC + 0x24</span>
+<span class="n">0x142864a88</span>      Configuration cfg;        <span class="c">// 0x5BC（见 9.2）</span>
+                  <span class="c">// 尾部 0x24 B：FUN_14003cec0（InitProjSettings）读取</span>
+                  <span class="k">int</span>   f5C4, f5C8;          <span class="c">// +0x5C4 / +0x5C8</span>
+                  <span class="k">char</span>  f5CC, f5CD, f5CE;    <span class="c">// +0x5CC/5CD/5CE（布尔标志组）</span>
+                  <span class="k">int</span>   f5D0, f5D4;          <span class="c">// +0x5D0 / +0x5D4</span>
+              }</code></pre>
+      </div>
+      <p>
+        另有独立于配置的<strong>触发结构</strong>（0x18 字节，全局 <code>DAT_14285d9e0</code>）与 <strong>作业对象</strong>（0x28 字节，见 §2.1）、
+        <strong>动态缓冲区</strong>（<code>DYNBUFFER</code>：基址 + 容量 + 当前长 + 越界回调，见 <code>dumps/dynbuf.txt</code>）。
+      </p>
+
+      <h3>9.4 内存分配器：带签名守卫的自研堆</h3>
+      <p class="lead">
+        所有非 Qt 对象都走 <code>FUN_140043d20(size, label)</code> / <code>FUN_140043d10(size)</code>，
+        释放走 <code>FUN_140043e60(ptr)</code>。它在 <code>malloc</code> 之上加了块头与校验：
+      </p>
+      <div class="code">
+<pre><code><span class="s">"Wrong alloc signature in memory block !"</span>          <span class="c">// 释放/校验时签名不符 → 野指针或越界写坏了块头</span>
+<span class="s">"Buffer overflow in memory block. %d ..."</span>          <span class="c">// 尾部哨兵被改写 → 缓冲溢出</span>
+<span class="s">"DYNBUFFER: dynamic buffer"</span> <span class="s">"Cannot allocate %d bytes of memory for dynamic buffer"</span>
+<span class="s">"Insufficient memory!"</span></code></pre>
+      </div>
+      <p>
+        标签（<code>"APP: &lt;ReadPeriodic&gt;"</code>、<code>"RTT read buffer allocation"</code>…）随块存储，
+        用于出错时定位与内存审计。这是<strong>调试期价值高、发布期有开销</strong>的经典取舍（详见 §15）。
+      </p>
+    </section>
