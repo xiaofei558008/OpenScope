@@ -1,6 +1,12 @@
     <!-- ══ 07 ══ -->
     <section id="s7">
       <h2><span class="sec-n">07</span>RTT 与 RTT-Plus 协议（逐字节实证）</h2>
+      <div class="callout key">
+        <p><strong>本节结论已在真机验证（2026-10-12）：</strong>用主机侧伪造 SEGGER RTT 控制块的办法，
+        J-Scope 以 RTT-Plus 模式启动后实际写入 <code>JScope_Config</code> 的字节被完整抓取 ——
+        <strong>每条 16 字节：<code>+0 Addr / +4 0 / +8 Size / +12 0</code>，末尾 16 字节 0 终止</strong>，
+        与 SEGGER UM08028 文档（8 字节/条）不一致，以本节实测为准。详见 §17.3。</p>
+      </div>
       <p><strong>专题</strong>：J-Scope 到底往目标端发了什么字节（RTT-Plus 配置串）、以及 RTT 三种模式（RTT-Plus / RTT-Normal VarFormat / HSS 对照）的完整数据通路。</p>
       <p><strong>证据来源</strong></p>
       <ul>

@@ -43,6 +43,22 @@
 | 日志回调 | `0x14000a760` 是 `ret 0` **空桩** —— 日志只累积在 4 KB 全局缓冲，段末弹框 |
 | 采样率 10× | 三处独立证据（µs 换算、超时×1000 比较点、显示路径无补偿）确认公式恒为真值 10 倍；只需硬件对照定案 |
 
+---
+
+## 真机实测结果（2026-10-12，J-Link PRO + STM32F303RC）
+
+三项待实测项全部闭环（完整数据见 `report.html` §17）：
+
+| 项 | 结果 |
+|---|---|
+| **HSS caps / flags** | `JLINK_HSS_GetCaps` 32 B = `{maxBlocks=100, maxRateHz=100000, capBits=0x2, …0}`；**`flags.bit0` = 时间戳时基（1=µs，0=ms）**，实测比率 0.994 vs 0.001；J-Scope 恒传 1 |
+| **采样率 10 倍因子** | 请求 100 µs → 真值 **9868 Sa/s**（时间戳中位增量 99 µs），J-Scope 状态栏显示 **81 kSamples/s** → **放大 ≈8.2×**（公式为 10×）✓ 缺陷坐实 |
+| **RTT-Plus 配置串** | 实测 48 B：每条 **16 B = {addr, 0, size, 0}** ×2 + **16 B 全 0 终止** —— 与 SEGGER 文档（8 B/条）**不一致**；目标端不回应则报 *"Timeout. No response from target!"*（需回 256 B 0） |
+
+附带产出：`.jscope` 读取端的硬性要求（XML 声明、`<Windows>`、`Scope/Options TimeResolutionUs`、
+`Trigger/Options` 六属性、符号 18 属性齐全）与可用参考工程 `f303_debug.jscope`；
+台架 `tools/jlink_lab.py`（ctypes 直调 JLink_x64.dll）、GUI 自动化 `lab/*.ps1`（DPI 感知）。
+
 **第二轮对第一轮的修正（重要）**
 
 1. **RTT 读缓冲是 `max(0x2000, 通道缓冲)`，不是 min**（`FUN_14003ef60`）。
