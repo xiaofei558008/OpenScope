@@ -1,0 +1,165 @@
+=== strings matching /1998 - |Qt4 which is under|JLinkARM.dll V|Software..SEGGER/ referenced by 2 functions ===
+
+--- FUN_14002ce80 @ 14002ce80  size=1227
+      "Copyright (C) %s 1998 - %s\n\nThe GUI of this software uses Qt4 which is under LGPLv21\nAdd. 3rd party licensing and source code of Qt4:\nhttps://www.segger.com/qt-usage/"
+
+--- FUN_140041780 @ 140041780  size=226
+      "JLinkARM.dll V%d.%.2d%s (DLL compiled %s)"
+
+
+################ DECOMP: FUN_14002ce80 @ 14002ce80 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+QWidget * FUN_14002ce80(QWidget *param_1,undefined8 param_2,undefined8 param_3)
+
+{
+  QLabel *this;
+  undefined8 uVar1;
+  QLabel *this_00;
+  QLabel *this_01;
+  QPixmap *this_02;
+  QLayout *this_03;
+  QLayout *pQVar2;
+  QWidget *pQVar3;
+  uint *puVar4;
+  undefined4 *puVar5;
+  QSize *pQVar6;
+  QPixmap *pQVar7;
+  QWidget *this_04;
+  undefined1 auStackY_5d8 [32];
+  undefined8 local_598;
+  undefined4 local_590;
+  undefined4 local_58c;
+  QWidget *local_588;
+  undefined1 local_578 [304];
+  char local_448 [1024];
+  ulonglong local_48;
+  
+  local_48 = DAT_140096fe8 ^ (ulonglong)auStackY_5d8;
+  this_04 = (QWidget *)0x0;
+  local_58c = 0;
+  local_588 = param_1;
+  QDialog::QDialog((QDialog *)param_1,param_2,&local_58c);
+  *(undefined ***)param_1 = AboutDialog::vftable;
+  *(undefined ***)(param_1 + 0x10) = AboutDialog::vftable;
+  *(undefined8 *)(param_1 + 0x28) = 0;
+  QWidget::hide(param_1);
+  QDialog::setModal((QDialog *)param_1,true);
+  local_598 = (QWidget *)QString::fromAscii_helper("About",-1);
+  QWidget::setWindowTitle(param_1,(QString *)&local_598);
+  QString::~QString((QString *)&local_598);
+  FUN_14002c8f0(local_578,300,"%s\nCompiled: %s %s\nhttps://www.segger.com",param_3);
+  this = (QLabel *)FUN_140035ff0(param_1,0);
+  FUN_140036e00(this,1,1);
+  FUN_1400359e0(local_578,local_448,0x400);
+  local_598 = (QWidget *)QString::fromAscii_helper(local_448,-1);
+  QLabel::setText(this,(QString *)&local_598);
+  QString::~QString((QString *)&local_598);
+  FUN_1400271c0();
+  uVar1 = FUN_1400271b0();
+  FUN_14002c8f0(local_578,300,
+                "Copyright (C) %s 1998 - %s\n\nThe GUI of this software uses Qt4 which is under LGPLv21\nAdd. 3rd party licensing and source code of Qt4:\nhttps://www.segger.com/qt-usage/"
+                ,uVar1);
+  this_00 = (QLabel *)FUN_140035ff0(param_1,0);
+  FUN_140036e00(this_00,1,1);
+  FUN_1400359e0(local_578,local_448,0x400);
+  local_598 = (QWidget *)QString::fromAscii_helper(local_448,-1);
+  QLabel::setText(this_00,(QString *)&local_598);
+  QString::~QString((QString *)&local_598);
+  this_01 = (QLabel *)FUN_140035ff0(param_1,0);
+  this_02 = (QPixmap *)FUN_140058d94(0x18);
+  pQVar7 = (QPixmap *)this_04;
+  local_598 = (QWidget *)this_02;
+  if (this_02 != (QPixmap *)0x0) {
+    QPixmap::QPixmap(this_02);
+    *(undefined ***)this_02 = QPixmap::vftable;
+    pQVar7 = this_02;
+  }
+  local_590 = 0;
+  QPixmap::loadFromData(pQVar7,&PNG_14006cca0,0x3a2,&DAT_14006d358);
+  QLabel::setPixmap(this_01,pQVar7);
+  uVar1 = FUN_140035cf0(param_1,&DAT_14006d378,param_1,"1_Slot_OnBtnOK(void)");
+  *(undefined8 *)(param_1 + 0x28) = uVar1;
+  QObject::connect((QObject *)param_1,"2_Sig_CloseDlg(void)",(QObject *)param_1,
+                   "1_Slot_OnBtnOK(void)",2);
+  this_03 = (QLayout *)FUN_140035e90(0);
+  QLayout::setContentsMargins(this_03,0,0,0,0);
+  local_590 = 0x20;
+  QGridLayout::addWidget((QGridLayout *)this_03,this_01,0,0);
+  local_590 = 1;
+  QGridLayout::addWidget((QGridLayout *)this_03,this,0,1);
+  pQVar2 = (QLayout *)FUN_140035e90(0);
+  pQVar3 = (QWidget *)FUN_140058d94(0x28);
+  local_598 = pQVar3;
+  if (pQVar3 != (QWidget *)0x0) {
+    local_590 = 0;
+    QWidget::QWidget(pQVar3,param_1,&local_590);
+    *(undefined ***)pQVar3 = QWidget::vftable;
+    *(undefined ***)(pQVar3 + 0x10) = QWidget::vftable;
+    this_04 = pQVar3;
+  }
+  QWidget::setLayout(this_04,this_03);
+  local_598 = (QWidget *)((ulonglong)local_598 & 0xffffffff00000000);
+  QGridLayout::addWidget((QGridLayout *)pQVar2,this_04,0,0);
+  local_598._0_4_ = 1;
+  QGridLayout::addWidget((QGridLayout *)pQVar2,this_00,1);
+  local_598._0_4_ = 2;
+  QGridLayout::addWidget((QGridLayout *)pQVar2,*(undefined8 *)(param_1 + 0x28),2);
+  QWidget::setLayout(param_1,pQVar2);
+  puVar4 = (uint *)QWidget::windowFlags(param_1);
+  local_598._0_4_ = *puVar4 & 0xfffe3fff;
+  QWidget::setWindowFlags(param_1,&local_598);
+  puVar4 = (uint *)QWidget::windowFlags(param_1);
+  *puVar4 = *puVar4 | 0x800;
+  local_598._0_4_ = *puVar4;
+  QWidget::setWindowFlags(param_1,&local_598);
+  puVar5 = (undefined4 *)QWidget::windowFlags(param_1);
+  local_598 = (QWidget *)(CONCAT44(local_598._4_4_,*puVar5) | 0x40000);
+  QWidget::setWindowFlags(param_1,&local_598);
+  pQVar6 = (QSize *)QWidget::minimumSize(param_1);
+  QWidget::setFixedSize(param_1,pQVar6);
+  QWidget::show(param_1);
+  return param_1;
+}
+
+
+
+
+################ DECOMP: FUN_140041780 @ 140041780 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+void FUN_140041780(void)
+
+{
+  undefined4 uVar1;
+  undefined8 uVar2;
+  undefined1 auStack_e8 [32];
+  undefined4 local_c8;
+  undefined1 *local_c0;
+  undefined8 local_b8;
+  undefined1 local_a8 [4];
+  undefined4 local_a4;
+  undefined4 local_a0;
+  undefined1 local_98 [128];
+  ulonglong local_18;
+  
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_e8;
+  uVar2 = thunk_FUN_14003ec90();
+  FUN_140027140(local_98,uVar2,0x80);
+  FUN_140027700(local_98,&DAT_140060de4,0x80);
+  uVar2 = thunk_FUN_14003ea60();
+  FUN_140027700(local_98,uVar2,0x80);
+  _guard_check_icall(DAT_14286d388,local_98);
+  uVar1 = JLINKARM_GetDLLVersion();
+  FUN_1400271f0(local_a8,uVar1);
+  local_b8 = JLINKARM_GetCompileDateTime();
+  local_c0 = local_a8;
+  local_c8 = local_a0;
+  FUN_140028380(local_98,0x80,"JLinkARM.dll V%d.%.2d%s (DLL compiled %s)",local_a4);
+  _guard_check_icall(DAT_14286d388,local_98);
+  return;
+}
+
+

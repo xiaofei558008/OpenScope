@@ -1,0 +1,349 @@
+=== seeds: 1 keys -> 1 fns; total with callers(depth 3): 6 ===
+  L0  JLINK_RTTERMINAL_Read @ 1400291b0 size=101
+  L1  FUN_140040ed0 @ 140040ed0 size=202
+  L1  FUN_140042260 @ 140042260 size=313
+  L2  FUN_1400427b0 @ 1400427b0 size=528
+  L2  FUN_140041710 @ 140041710 size=101
+  L3  FUN_14003d5c0 @ 14003d5c0 size=503
+
+
+################ L0 JLINK_RTTERMINAL_Read @ 1400291b0 ################
+
+void JLINK_RTTERMINAL_Read(undefined4 param_1,undefined8 param_2,undefined4 param_3)
+
+{
+  if (DAT_14085bcd8 == (code *)0x0) {
+    DAT_14085bcd8 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Read");
+    if (DAT_14085bcd8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029212. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bcd8)(param_1,param_2,param_3);
+  return;
+}
+
+
+
+
+################ L1 FUN_140040ed0 @ 140040ed0 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+undefined4 FUN_140040ed0(longlong param_1,undefined4 param_2)
+
+{
+  undefined4 uVar1;
+  int iVar2;
+  uint uVar3;
+  int iVar4;
+  undefined1 auStack_148 [32];
+  char local_128 [256];
+  ulonglong local_28;
+  
+  local_28 = DAT_140096fe8 ^ (ulonglong)auStack_148;
+  if (param_1 == 0) {
+    uVar1 = 0xfffffffd;
+  }
+  else {
+    uVar3 = 0;
+    iVar4 = 0;
+    do {
+      uVar3 = uVar3 + 1;
+      iVar2 = JLINK_RTTERMINAL_Read(DAT_14085d188,local_128,0x100);
+      iVar4 = iVar4 + iVar2;
+      if (iVar4 == 0x100) {
+        if (local_128[0] != '\0') {
+          FUN_14002c8f0(param_1,param_2,"Target Error: %s",local_128);
+          return 0xffffffff;
+        }
+        return 0;
+      }
+      Sleep(1);
+    } while (uVar3 < 0x65);
+    uVar1 = 0xfffffffe;
+  }
+  return uVar1;
+}
+
+
+
+
+################ L1 FUN_140042260 @ 140042260 ################
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+size_t FUN_140042260(void)
+
+{
+  uint uVar1;
+  void *pvVar2;
+  int iVar3;
+  uint uVar4;
+  uint uVar5;
+  size_t sVar6;
+  size_t _Size;
+  
+  sVar6 = 0;
+  if (DAT_14085d183 != '\0') {
+    iVar3 = FUN_140041540();
+    pvVar2 = DAT_14285d200;
+    if (iVar3 == 0) {
+      _Size = (size_t)DAT_14285da24;
+    }
+    else {
+      DAT_14285da24 = 0;
+      _DAT_14285da30 = 0;
+      uRam000000014285da38 = 0;
+      _DAT_14285da40 = 0;
+      uRam000000014285da48 = 0;
+      _DAT_14285da50 = 0;
+      uRam000000014285da58 = 0;
+      _DAT_14285da60 = 0;
+      uRam000000014285da68 = 0;
+      _Size = sVar6;
+    }
+    uVar4 = DAT_14285d1fc;
+    if (0x200000 < DAT_14285d1fc) {
+      uVar4 = 0x200000;
+    }
+    memcpy(DAT_14285d200,&DAT_14285da30,_Size);
+    iVar3 = JLINK_RTTERMINAL_Read(DAT_14085d188,_Size + (longlong)pvVar2,uVar4 - (int)_Size);
+    pvVar2 = DAT_14285d200;
+    if (iVar3 < 0) {
+      sVar6 = 0xffffffff;
+    }
+    else {
+      uVar4 = iVar3 + (int)_Size;
+      if (0 < (int)uVar4) {
+        uVar5 = uVar4 % DAT_14085d184;
+        uVar1 = uVar4 - uVar5;
+        if (uVar5 == 0) {
+          uVar1 = uVar4;
+        }
+        FUN_14003fa70(uVar1,DAT_14285d200);
+        if (uVar5 == 0) {
+          DAT_14285da24 = 0;
+        }
+        else {
+          if (0x40 < uVar5) {
+            uVar5 = 0x40;
+          }
+          memcpy(&DAT_14285da30,(void *)((longlong)pvVar2 + (longlong)(int)uVar1),(ulonglong)uVar5);
+          DAT_14285da24 = uVar5;
+        }
+      }
+    }
+  }
+  FUN_14004e120(DAT_14286d388);
+  return sVar6;
+}
+
+
+
+
+################ L2 FUN_1400427b0 @ 1400427b0 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+ulonglong FUN_1400427b0(void)
+
+{
+  int iVar1;
+  ulonglong uVar2;
+  int iVar3;
+  char *pcVar4;
+  undefined1 auStack_378 [32];
+  undefined *local_358;
+  undefined4 local_350;
+  undefined8 local_348;
+  undefined8 local_340;
+  undefined4 local_338;
+  int local_330;
+  int local_328;
+  char local_318 [256];
+  undefined1 local_218 [512];
+  ulonglong local_18;
+  
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_378;
+  iVar3 = 0;
+  while( true ) {
+    if ((DAT_14285d415 == '\x01') && (iVar1 = FUN_140040ed0(local_318,0x100), iVar1 == -1)) {
+      local_338 = 0x300;
+      local_340 = 0;
+      local_348 = 0;
+      local_350 = 0;
+      local_358 = (undefined *)0x0;
+      local_330 = iVar1;
+      local_328 = iVar1;
+      FUN_14003f580("Got pending Error from Target.",&DAT_14005f306,local_318,&DAT_1400746bc);
+    }
+    JLINK_RTTERMINAL_Control(1);
+    if (DAT_14285d208 != 1) {
+      FUN_14003f390();
+    }
+    FUN_14003f890();
+    JLINK_RTTERMINAL_Control(0,0);
+    uVar2 = FUN_140042100(&DAT_14285d420);
+    if ((int)uVar2 < 0) {
+      return uVar2;
+    }
+    FUN_140042630();
+    uVar2 = FUN_140040ed0(local_318,0x100);
+    iVar1 = (int)uVar2;
+    if (iVar1 == -2) {
+      pcVar4 = "Timeout. No response from target!";
+      DAT_14285d415 = '\x01';
+    }
+    else {
+      DAT_14285d415 = '\0';
+      if (iVar1 == -1) {
+        pcVar4 = local_318;
+      }
+      else {
+        if (iVar1 == 0) {
+          DAT_14285d415 = 0;
+          return uVar2;
+        }
+        pcVar4 = "Unspecified Error!";
+      }
+    }
+    if (iVar3 == 1) break;
+    iVar3 = iVar3 + 1;
+    FUN_14002c8f0(local_218,0x200,"%s\nRetry?",pcVar4);
+    local_328 = -1;
+    local_330 = -1;
+    local_338 = 0x300;
+    local_340 = 0;
+    local_348 = 0;
+    local_350 = 0;
+    local_358 = &DAT_14007473c;
+    iVar1 = FUN_14003f580("Error.",&DAT_14005f306,local_218,&DAT_140074740);
+    if (iVar1 != 0) {
+      return 0xffffffff;
+    }
+  }
+  local_328 = 0xffffffff;
+  local_330 = 0xffffffff;
+  local_338 = 0x300;
+  local_340 = 0;
+  local_348 = 0;
+  local_350 = 0;
+  local_358 = (undefined *)0x0;
+  FUN_14003f580("Error.",&DAT_14005f306,pcVar4,&DAT_1400746bc);
+  return uVar2 & 0xffffffff;
+}
+
+
+
+
+################ L2 FUN_140041710 @ 140041710 ################
+
+undefined8 FUN_140041710(void)
+
+{
+  int iVar1;
+  ulonglong uVar2;
+  
+  FUN_14004e9c0(&DAT_14285d420);
+  if (DAT_14285d9c4 == '\0') {
+    iVar1 = FUN_140040fa0();
+  }
+  else {
+    iVar1 = FUN_140042260();
+  }
+  if (iVar1 < 0) {
+    FUN_14003e680();
+  }
+  uVar2 = FUN_140043970(DAT_14285d1f0);
+  DAT_14285d1f8 = (undefined4)((uint)(DAT_14085d1ec * 10000000) / uVar2);
+  DAT_14285d1f0 = FUN_140043990();
+  return 0;
+}
+
+
+
+
+################ L3 FUN_14003d5c0 @ 14003d5c0 ################
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+void FUN_14003d5c0(longlong param_1)
+
+{
+  char cVar1;
+  int iVar2;
+  undefined8 *puVar3;
+  bool bVar4;
+  
+  FUN_14003f830("Read start");
+  memset(&DAT_14285d420,0,0x5bc);
+  DAT_14285d9e0 = 0;
+  uRam000000014285d9e8 = 0;
+  _DAT_14285d9f0 = 0;
+  FUN_14004e9c0(&DAT_14285d420);
+  FUN_14004ea20(&DAT_14285d9e0);
+  DAT_14285d1f0 = FUN_140043990();
+  _DAT_14285d9f0 = (uint5)_DAT_14285d9f0;
+  FUN_14004ed00(&DAT_14285d9e0);
+  iVar2 = 0;
+  cVar1 = FUN_14003eee0();
+  if ((cVar1 == '\0') && (iVar2 = FUN_14003ef60(), iVar2 < 0)) goto LAB_14003d791;
+  FUN_140042a60();
+  if (DAT_14085d182 == '\0') {
+    if (DAT_140096dd4 != 0) goto LAB_14003d689;
+  }
+  else {
+    FUN_140040980();
+    DAT_140096dd4 = 1;
+    _DAT_14285d410 = 1;
+LAB_14003d689:
+    FUN_14003e050();
+    memset(&DAT_14085d1f0,0,0x2000000);
+    DAT_140096dd4 = 0;
+  }
+  if (DAT_14285d9c4 != '\0') {
+    JLINK_RTTERMINAL_Control(0,0);
+  }
+  if ((DAT_14285d9c6 != '\0') && (DAT_14285d414 != '\0')) {
+    iVar2 = FUN_1400427b0();
+  }
+  if (DAT_14085d183 != '\0') {
+    cVar1 = JLINKARM_IsHalted();
+    DAT_14285d20c = (uint)(cVar1 == '\0');
+  }
+  if (-1 < iVar2) {
+    while( true ) {
+      DAT_14085d181 = 1;
+      DAT_140096dd0 = 0;
+      DAT_14085d182 = 0;
+      FUN_14004e120(DAT_14286d388);
+      bVar4 = DAT_14285da10 != (undefined8 *)0x0;
+      *(undefined4 *)(param_1 + 0x1c) = 0;
+      if (bVar4) {
+        return;
+      }
+      puVar3 = (undefined8 *)FUN_140043d20(0x28,"APP: <ReadPeriodic>");
+      DAT_14285da10 = puVar3;
+      if (puVar3 != (undefined8 *)0x0) break;
+      FUN_14003f110("Insufficient memory!");
+    }
+    *puVar3 = 0;
+    puVar3[1] = 0;
+    puVar3[2] = 0;
+    puVar3[3] = 0;
+    puVar3[4] = 0;
+    puVar3[2] = FUN_140041710;
+    *(undefined4 *)(puVar3 + 4) = 10;
+    FUN_1400392d0(puVar3);
+    return;
+  }
+LAB_14003d791:
+  *(int *)(param_1 + 0x1c) = iVar2;
+  FUN_14004e0f0(DAT_14286d388);
+  FUN_14003d7d0(0);
+  return;
+}
+
+

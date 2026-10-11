@@ -1,0 +1,250 @@
+=== strings matching /JLINK_.*/ referenced by 11 functions ===
+
+--- FUN_1400291b0 @ 1400291b0  size=101
+      "JLINK_RTTERMINAL_Read"
+
+--- FUN_140029220 @ 140029220  size=101
+      "JLINK_RTTERMINAL_Write"
+
+--- FUN_140029160 @ 140029160  size=80
+      "JLINK_RTTERMINAL_Control"
+
+--- FUN_140028fe0 @ 140028fe0  size=62
+      "JLINK_HSS_GetCaps"
+
+--- FUN_140029070 @ 140029070  size=101
+      "JLINK_HSS_Start"
+
+--- FUN_1400290e0 @ 1400290e0  size=52
+      "JLINK_HSS_Stop"
+
+--- FUN_140029020 @ 140029020  size=80
+      "JLINK_HSS_Read"
+
+--- FUN_140028fa0 @ 140028fa0  size=52
+      "JLINK_Go"
+
+--- FUN_140029120 @ 140029120  size=52
+      "JLINK_IsHalted"
+
+--- FUN_140028f30 @ 140028f30  size=103
+      "JLINK_ExecCommand"
+
+--- FUN_140028ef0 @ 140028ef0  size=62
+      "JLINK_EMU_SelectByUSBNickname"
+
+
+################ DECOMP: FUN_1400291b0 @ 1400291b0 ################
+
+void FUN_1400291b0(undefined4 param_1,undefined8 param_2,undefined4 param_3)
+
+{
+  if (DAT_14085bcd8 == (code *)0x0) {
+    DAT_14085bcd8 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Read");
+    if (DAT_14085bcd8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029212. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bcd8)(param_1,param_2,param_3);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140029220 @ 140029220 ################
+
+void FUN_140029220(undefined4 param_1,undefined8 param_2,undefined4 param_3)
+
+{
+  if (DAT_14085bce0 == (code *)0x0) {
+    DAT_14085bce0 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Write");
+    if (DAT_14085bce0 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029282. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bce0)(param_1,param_2,param_3);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140029160 @ 140029160 ################
+
+void FUN_140029160(undefined4 param_1,undefined8 param_2)
+
+{
+  if (DAT_14085bce8 == (code *)0x0) {
+    DAT_14085bce8 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Control");
+    if (DAT_14085bce8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x0001400291ad. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bce8)(param_1,param_2);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140028fe0 @ 140028fe0 ################
+
+void FUN_140028fe0(undefined8 param_1)
+
+{
+  if (DAT_14085beb8 == (code *)0x0) {
+    DAT_14085beb8 = (code *)FUN_1400293b0("JLINK_HSS_GetCaps");
+    if (DAT_14085beb8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x00014002901b. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085beb8)(param_1);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140029070 @ 140029070 ################
+
+void FUN_140029070(undefined8 param_1,undefined4 param_2,undefined4 param_3,undefined4 param_4)
+
+{
+  if ((DAT_14085bec0 == (code *)0x0) &&
+     (DAT_14085bec0 = (code *)FUN_1400293b0("JLINK_HSS_Start"), DAT_14085bec0 == (code *)0x0)) {
+    return;
+  }
+  (*DAT_14085bec0)(param_1,param_2,param_3,param_4);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_1400290e0 @ 1400290e0 ################
+
+void FUN_1400290e0(void)
+
+{
+  if (DAT_14085bec8 == (code *)0x0) {
+    DAT_14085bec8 = (code *)FUN_1400293b0("JLINK_HSS_Stop");
+    if (DAT_14085bec8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029111. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bec8)();
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140029020 @ 140029020 ################
+
+void FUN_140029020(undefined8 param_1,undefined4 param_2)
+
+{
+  if (DAT_14085bed0 == (code *)0x0) {
+    DAT_14085bed0 = (code *)FUN_1400293b0("JLINK_HSS_Read");
+    if (DAT_14085bed0 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x00014002906d. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bed0)(param_1,param_2);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140028fa0 @ 140028fa0 ################
+
+void FUN_140028fa0(void)
+
+{
+  if (DAT_14085bf58 == (code *)0x0) {
+    DAT_14085bf58 = (code *)FUN_1400293b0("JLINK_Go");
+    if (DAT_14085bf58 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140028fcc. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bf58)();
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140029120 @ 140029120 ################
+
+void FUN_140029120(void)
+
+{
+  if (DAT_14085bf90 == (code *)0x0) {
+    DAT_14085bf90 = (code *)FUN_1400293b0("JLINK_IsHalted");
+    if (DAT_14085bf90 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029151. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bf90)();
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140028f30 @ 140028f30 ################
+
+void FUN_140028f30(undefined8 param_1,undefined8 param_2,undefined4 param_3)
+
+{
+  if (DAT_14085c138 == (code *)0x0) {
+    DAT_14085c138 = (code *)FUN_1400293b0("JLINK_ExecCommand");
+    if (DAT_14085c138 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140028f94. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085c138)(param_1,param_2,param_3);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_140028ef0 @ 140028ef0 ################
+
+void FUN_140028ef0(undefined8 param_1)
+
+{
+  if (DAT_14085c2e0 == (code *)0x0) {
+    DAT_14085c2e0 = (code *)FUN_1400293b0("JLINK_EMU_SelectByUSBNickname");
+    if (DAT_14085c2e0 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140028f2b. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085c2e0)(param_1);
+  return;
+}
+
+

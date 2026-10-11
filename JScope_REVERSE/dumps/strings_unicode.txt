@@ -1,0 +1,19 @@
+IDI_ICON1
+VS_VERSION_INFO
+StringFileInfo
+040904E4
+CompanyName
+SEGGER Microcontroller GmbH
+FileDescription
+J-Scope
+FileVersion
+ProductVersion
+9.66
+InternalName
+JScope.exe
+OriginalFilename
+JScope.exe
+ProductName
+J-Scope
+VarFileInfo
+Translation

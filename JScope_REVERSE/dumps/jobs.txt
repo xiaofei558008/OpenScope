@@ -1,0 +1,240 @@
+=== seeds: 6 keys -> 6 fns; total with callers(depth 0): 6 ===
+  L0  FUN_14003e050 @ 14003e050 size=89
+  L0  FUN_14003eee0 @ 14003eee0 size=8
+  L0  FUN_14003ef60 @ 14003ef60 size=294
+  L0  FUN_140041710 @ 140041710 size=101
+  L0  FUN_1400427b0 @ 1400427b0 size=528
+  L0  FUN_140042a60 @ 140042a60 size=82
+
+
+################ L0 FUN_14003e050 @ 14003e050 ################
+
+void FUN_14003e050(void)
+
+{
+  longlong *plVar1;
+  undefined8 uVar2;
+  longlong lVar3;
+  
+  for (plVar1 = DAT_14286d3b8; plVar1 != (longlong *)0x0; plVar1 = (longlong *)plVar1[1]) {
+    lVar3 = *plVar1;
+    if (*(longlong *)(lVar3 + 0x3d0) == 0) {
+      uVar2 = FUN_140043d10(0x4000000);
+      *(undefined8 *)(*plVar1 + 0x3d0) = uVar2;
+      lVar3 = *plVar1;
+    }
+    memset(*(void **)(lVar3 + 0x3d0),0,0x4000000);
+  }
+  return;
+}
+
+
+
+
+################ L0 FUN_14003eee0 @ 14003eee0 ################
+
+undefined1 FUN_14003eee0(void)
+
+{
+  return DAT_14085d183;
+}
+
+
+
+
+################ L0 FUN_14003ef60 @ 14003ef60 ################
+
+int FUN_14003ef60(void)
+
+{
+  int iVar1;
+  
+  FUN_14004e9c0(&DAT_14285d420);
+  iVar1 = FUN_1400418f0(&DAT_14285d420);
+  if (iVar1 < 0) {
+    return -1;
+  }
+  DAT_14285da8c = 1;
+  iVar1 = FUN_1400419f0(&DAT_14285d420);
+  if (iVar1 < 0) {
+    return -1;
+  }
+  if (DAT_14285d9c4 != '\0') {
+    DAT_14285d1fc = 0x2000;
+    if (0x2000 < DAT_14085d1b0) {
+      DAT_14285d1fc = DAT_14085d1b0;
+    }
+    DAT_14285d200 = FUN_140043d20(DAT_14285d1fc,"RTT read buffer allocation");
+    if (DAT_14285d200 == 0) {
+      iVar1 = -1;
+    }
+    if (DAT_14285d9c4 != '\0') {
+      if (DAT_14285d9c6 == '\0') {
+        if ((DAT_14285da88 == 0) && (iVar1 = FUN_140042100(&DAT_14285d420), iVar1 < 0)) {
+          return -1;
+        }
+        FUN_14004e9c0(&DAT_14285d420);
+        if (DAT_14285d9c5 == '\0') {
+          FUN_140041400();
+        }
+      }
+      if (DAT_14285d9c4 != '\0') goto LAB_14003f052;
+    }
+  }
+  iVar1 = FUN_140041f30(&DAT_14285d420);
+LAB_14003f052:
+  if (-1 < iVar1) {
+    FUN_14003f3e0(1);
+    DAT_14285da8d = 1;
+    return 0;
+  }
+  return iVar1;
+}
+
+
+
+
+################ L0 FUN_140041710 @ 140041710 ################
+
+undefined8 FUN_140041710(void)
+
+{
+  int iVar1;
+  ulonglong uVar2;
+  
+  FUN_14004e9c0(&DAT_14285d420);
+  if (DAT_14285d9c4 == '\0') {
+    iVar1 = FUN_140040fa0();
+  }
+  else {
+    iVar1 = FUN_140042260();
+  }
+  if (iVar1 < 0) {
+    FUN_14003e680();
+  }
+  uVar2 = FUN_140043970(DAT_14285d1f0);
+  DAT_14285d1f8 = (undefined4)((uint)(DAT_14085d1ec * 10000000) / uVar2);
+  DAT_14285d1f0 = FUN_140043990();
+  return 0;
+}
+
+
+
+
+################ L0 FUN_1400427b0 @ 1400427b0 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+ulonglong FUN_1400427b0(void)
+
+{
+  int iVar1;
+  ulonglong uVar2;
+  int iVar3;
+  char *pcVar4;
+  undefined1 auStack_378 [32];
+  undefined *local_358;
+  undefined4 local_350;
+  undefined8 local_348;
+  undefined8 local_340;
+  undefined4 local_338;
+  int local_330;
+  int local_328;
+  char local_318 [256];
+  undefined1 local_218 [512];
+  ulonglong local_18;
+  
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_378;
+  iVar3 = 0;
+  while( true ) {
+    if ((DAT_14285d415 == '\x01') && (iVar1 = FUN_140040ed0(local_318,0x100), iVar1 == -1)) {
+      local_338 = 0x300;
+      local_340 = 0;
+      local_348 = 0;
+      local_350 = 0;
+      local_358 = (undefined *)0x0;
+      local_330 = iVar1;
+      local_328 = iVar1;
+      FUN_14003f580("Got pending Error from Target.",&DAT_14005f306,local_318,&DAT_1400746bc);
+    }
+    JLINK_RTTERMINAL_Control(1);
+    if (DAT_14285d208 != 1) {
+      FUN_14003f390();
+    }
+    FUN_14003f890();
+    JLINK_RTTERMINAL_Control(0,0);
+    uVar2 = FUN_140042100(&DAT_14285d420);
+    if ((int)uVar2 < 0) {
+      return uVar2;
+    }
+    FUN_140042630();
+    uVar2 = FUN_140040ed0(local_318,0x100);
+    iVar1 = (int)uVar2;
+    if (iVar1 == -2) {
+      pcVar4 = "Timeout. No response from target!";
+      DAT_14285d415 = '\x01';
+    }
+    else {
+      DAT_14285d415 = '\0';
+      if (iVar1 == -1) {
+        pcVar4 = local_318;
+      }
+      else {
+        if (iVar1 == 0) {
+          DAT_14285d415 = 0;
+          return uVar2;
+        }
+        pcVar4 = "Unspecified Error!";
+      }
+    }
+    if (iVar3 == 1) break;
+    iVar3 = iVar3 + 1;
+    FUN_14002c8f0(local_218,0x200,"%s\nRetry?",pcVar4);
+    local_328 = -1;
+    local_330 = -1;
+    local_338 = 0x300;
+    local_340 = 0;
+    local_348 = 0;
+    local_350 = 0;
+    local_358 = &DAT_14007473c;
+    iVar1 = FUN_14003f580("Error.",&DAT_14005f306,local_218,&DAT_140074740);
+    if (iVar1 != 0) {
+      return 0xffffffff;
+    }
+  }
+  local_328 = 0xffffffff;
+  local_330 = 0xffffffff;
+  local_338 = 0x300;
+  local_340 = 0;
+  local_348 = 0;
+  local_350 = 0;
+  local_358 = (undefined *)0x0;
+  FUN_14003f580("Error.",&DAT_14005f306,pcVar4,&DAT_1400746bc);
+  return uVar2 & 0xffffffff;
+}
+
+
+
+
+################ L0 FUN_140042a60 @ 140042a60 ################
+
+void FUN_140042a60(void)
+
+{
+  longlong *plVar1;
+  
+  plVar1 = DAT_14286d3b8;
+  if (DAT_14285d9c4 == '\0') {
+    DAT_14085d184 = 4;
+  }
+  else {
+    DAT_14085d184 = -(uint)(DAT_14285d9c5 != '\0') & 4;
+  }
+  for (; plVar1 != (longlong *)0x0; plVar1 = (longlong *)plVar1[1]) {
+    *(uint *)(*plVar1 + 0x38c) = DAT_14085d184;
+    DAT_14085d184 = DAT_14085d184 + *(int *)(*plVar1 + 0x31c);
+  }
+  return;
+}
+
+

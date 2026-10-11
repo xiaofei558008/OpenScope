@@ -1,0 +1,11 @@
+# Toolchain (downloaded, ~1.4 GB extracted) — not source
+tools/ghidra_dl/
+tools/ghidra_12.1.4_PUBLIC/
+tools/jdk-21.0.12.1+1/
+
+# Ghidra project database (regenerable via tools/run_ghidra.bat)
+ghidra_proj/
+
+# Large intermediate dumps — keep the .txt analyses, drop bulk + run logs
+dumps/*.pkl
+dumps/*.log

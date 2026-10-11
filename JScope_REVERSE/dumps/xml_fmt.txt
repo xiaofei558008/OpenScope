@@ -1,0 +1,699 @@
+=== strings matching /JScopeProject|SelectedSymbols|GraphColorRed|NameWithParents|IsRTTSession/ referenced by 9 functions ===
+
+--- FUN_1400468c0 @ 1400468c0  size=911
+      "NameWithParents"
+      "GraphColorRed"
+
+--- FUN_140044d50 @ 140044d50  size=208
+      "NameWithParents"
+
+--- FUN_140044bb0 @ 140044bb0  size=203
+      "GraphColorRed"
+
+--- FUN_1400463b0 @ 1400463b0  size=667
+      "IsRTTSession"
+
+--- FUN_140045670 @ 140045670  size=999
+      "IsRTTSession"
+
+--- FUN_140046840 @ 140046840  size=123
+      "SelectedSymbols"
+
+--- FUN_140045a60 @ 140045a60  size=276
+      "SelectedSymbols"
+
+--- FUN_140047020 @ 140047020  size=420
+      "JScopeProject"
+
+--- FUN_1400471d0 @ 1400471d0  size=433
+      "JScopeProject"
+
+
+################ DECOMP: FUN_1400468c0 @ 1400468c0 ################
+
+undefined8 FUN_1400468c0(longlong param_1,longlong param_2)
+
+{
+  QColor *this;
+  int iVar1;
+  longlong lVar2;
+  
+  if (((DAT_14285eec0 != 0) && (param_1 != 0)) && (param_2 != 0)) {
+    lVar2 = FUN_1400397b0(DAT_14285eec0,param_1,"Symbol");
+    if (lVar2 != 0) {
+      lVar2 = FUN_1400397a0(DAT_14285eec0,lVar2,"Options");
+      if ((lVar2 != 0) && (this = *(QColor **)(param_2 + 0x378), this != (QColor *)0x0)) {
+        iVar1 = FUN_140039600(DAT_14285eec0,lVar2,&DAT_1400756d0,param_2 + 4);
+        if (-1 < iVar1) {
+          iVar1 = FUN_140039960(DAT_14285eec0,lVar2,"Address",*(undefined4 *)(param_2 + 0x318));
+          if (-1 < iVar1) {
+            iVar1 = FUN_140039600(DAT_14285eec0,lVar2,&DAT_1400756bc,param_2 + 0x110);
+            if (-1 < iVar1) {
+              iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"TypeID",*(undefined4 *)(param_2 + 0x314));
+              if (-1 < iVar1) {
+                iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,&DAT_1400756b4,
+                                      *(undefined4 *)(param_2 + 0x31c));
+                if (-1 < iVar1) {
+                  iVar1 = QColor::red(this);
+                  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"GraphColorRed",iVar1);
+                  if (-1 < iVar1) {
+                    iVar1 = QColor::green(this);
+                    iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"GraphColorGreen",iVar1);
+                    if (-1 < iVar1) {
+                      iVar1 = QColor::blue(this);
+                      iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"GraphColorBlue",iVar1);
+                      if (-1 < iVar1) {
+                        iVar1 = FUN_1400397c0(DAT_14285eec0,lVar2,"YMinSampled",
+                                              *(undefined8 *)(param_2 + 0x3a0));
+                        if (-1 < iVar1) {
+                          iVar1 = FUN_1400397c0(DAT_14285eec0,lVar2,"YMaxSampled",
+                                                *(undefined8 *)(param_2 + 0x398));
+                          if (-1 < iVar1) {
+                            iVar1 = FUN_1400397c0(DAT_14285eec0,lVar2,"YAvgSampled",
+                                                  *(undefined8 *)(param_2 + 0x3a8));
+                            if (-1 < iVar1) {
+                              iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"Offset",
+                                                    *(undefined4 *)(param_2 + 0x38c));
+                              if (-1 < iVar1) {
+                                iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"ShowInGraph",
+                                                      *(undefined1 *)(param_2 + 0x35e));
+                                if (-1 < iVar1) {
+                                  iVar1 = FUN_1400397c0(DAT_14285eec0,lVar2,"YOffset",
+                                                        *(undefined8 *)(param_2 + 0x350));
+                                  if (-1 < iVar1) {
+                                    iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsAutoConfig",
+                                                          *(undefined1 *)(param_2 + 0x35d));
+                                    if (-1 < iVar1) {
+                                      iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"YResolution",
+                                                            *(undefined4 *)(param_2 + 0x358));
+                                      if (-1 < iVar1) {
+                                        iVar1 = FUN_1400397c0(DAT_14285eec0,lVar2,"MaxValue",
+                                                              *(undefined8 *)(param_2 + 0x3b0));
+                                        if (-1 < iVar1) {
+                                          iVar1 = FUN_140039600(DAT_14285eec0,lVar2,&DAT_1400755c4,
+                                                                param_2 + 0x210);
+                                          if (-1 < iVar1) {
+                                            iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"DrawStyle",
+                                                                  *(undefined4 *)(param_2 + 0x348));
+                                            if (-1 < iVar1) {
+                                              iVar1 = FUN_140039600(DAT_14285eec0,lVar2,
+                                                                    "NameWithParents",
+                                                                    *(undefined8 *)(param_2 + 0x108)
+                                                                   );
+                                              if (-1 < iVar1) {
+                                                return 0;
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  return 0xffffffff;
+}
+
+
+
+
+################ DECOMP: FUN_140044d50 @ 140044d50 ################
+
+undefined8 FUN_140044d50(longlong param_1,longlong param_2)
+
+{
+  int iVar1;
+  longlong lVar2;
+  void *_Dst;
+  undefined1 local_res18 [16];
+  
+  if ((DAT_14285eec0 != 0) && (param_1 != 0)) {
+    local_res18[0] = 0;
+    lVar2 = FUN_140039af0(DAT_14285eec0,param_1,"NameWithParents");
+    if (lVar2 == 0) {
+      *(longlong *)(param_2 + 0x108) = param_2 + 4;
+      return 0;
+    }
+    iVar1 = FUN_140039c60(DAT_14285eec0,lVar2,local_res18,1);
+    if (-1 < iVar1) {
+      iVar1 = iVar1 + 1;
+      _Dst = (void *)FUN_140043d10(iVar1);
+      *(void **)(param_2 + 0x108) = _Dst;
+      memset(_Dst,0,(longlong)iVar1);
+      iVar1 = FUN_140039c60(DAT_14285eec0,lVar2,*(undefined8 *)(param_2 + 0x108),iVar1);
+      if (-1 < iVar1) {
+        return 0;
+      }
+    }
+  }
+  return 0xffffffff;
+}
+
+
+
+
+################ DECOMP: FUN_140044bb0 @ 140044bb0 ################
+
+undefined8 FUN_140044bb0(undefined8 param_1,longlong param_2)
+
+{
+  int iVar1;
+  QColor *this;
+  int local_res18 [2];
+  int local_res20 [2];
+  int local_18 [2];
+  QColor *local_10;
+  
+  local_18[0] = 0;
+  local_res20[0] = 0;
+  local_res18[0] = 0;
+  iVar1 = FUN_1400460b0(param_1,"GraphColorRed",local_18);
+  if (-1 < iVar1) {
+    iVar1 = FUN_1400460b0(param_1,"GraphColorGreen",local_res20);
+    if (-1 < iVar1) {
+      iVar1 = FUN_1400460b0(param_1,"GraphColorBlue",local_res18);
+      if (-1 < iVar1) {
+        this = (QColor *)FUN_140058d94(0x10);
+        if (this == (QColor *)0x0) {
+          this = (QColor *)0x0;
+        }
+        else {
+          local_10 = this;
+          QColor::setRgb(this,local_18[0],local_res20[0],local_res18[0],0xff);
+        }
+        *(QColor **)(param_2 + 0x378) = this;
+        return 0;
+      }
+    }
+  }
+  return 0xffffffff;
+}
+
+
+
+
+################ DECOMP: FUN_1400463b0 @ 1400463b0 ################
+
+undefined8 FUN_1400463b0(longlong param_1,longlong param_2)
+
+{
+  int iVar1;
+  longlong lVar2;
+  undefined4 uVar3;
+  undefined1 *puVar4;
+  
+  if (DAT_14285eec0 == 0) {
+    return 0xffffffff;
+  }
+  if (param_1 == 0) {
+    return 0xffffffff;
+  }
+  lVar2 = FUN_1400397a0(DAT_14285eec0,param_1,"JLink");
+  if (lVar2 == 0) {
+    return 0xffffffff;
+  }
+  lVar2 = FUN_1400397a0(DAT_14285eec0,lVar2,"Options");
+  if (lVar2 == 0) {
+    return 0xffffffff;
+  }
+  uVar3 = 4;
+  if (*(char *)(param_2 + 0x5b8) == '\0') {
+    uVar3 = *(undefined4 *)(param_2 + 0x5ac);
+  }
+  iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"Connection",uVar3);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsRTTSession",*(undefined1 *)(param_2 + 0x5a4));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsRTTWithTimeStamp",*(undefined1 *)(param_2 + 0x5a5));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsRTTPlus",*(undefined1 *)(param_2 + 0x5a6));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"SamplingPeriod",*(undefined4 *)(param_2 + 0x5a8));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"SerialNo",*(undefined4 *)(param_2 + 0x594));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"JTAG_IRPre",*(undefined4 *)(param_2 + 0x5b4));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"JTAG_DRPre",*(undefined4 *)(param_2 + 0x5b0));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,&DAT_140075794,param_2 + 0x490);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,"TargetDevice",param_2);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,"Nickname",param_2 + 0x510);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"InterfaceSpeed",*(undefined4 *)(param_2 + 0x5a0));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = *(int *)(param_2 + 0x59c);
+  if (iVar1 == 0) {
+    puVar4 = &DAT_14006c010;
+    goto LAB_140046614;
+  }
+  if (iVar1 != 1) {
+    if (iVar1 == 3) {
+      puVar4 = &DAT_14006c01c;
+      goto LAB_140046614;
+    }
+    if (iVar1 == 7) {
+      puVar4 = &DAT_14006c024;
+      goto LAB_140046614;
+    }
+  }
+  puVar4 = &DAT_14006c018;
+LAB_140046614:
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,"TargetInterface",puVar4);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  return 0;
+}
+
+
+
+
+################ DECOMP: FUN_140045670 @ 140045670 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+/* WARNING: Type propagation algorithm not settling */
+
+undefined8 FUN_140045670(longlong param_1,longlong param_2)
+
+{
+  char cVar1;
+  int iVar2;
+  undefined4 uVar3;
+  longlong lVar4;
+  longlong lVar5;
+  longlong lVar6;
+  longlong lVar7;
+  longlong lVar8;
+  undefined1 auStack_68 [32];
+  int local_48 [2];
+  char local_40 [24];
+  ulonglong local_28;
+  
+  local_28 = DAT_140096fe8 ^ (ulonglong)auStack_68;
+  if (DAT_14285eec0 == 0) {
+    return 0xffffffff;
+  }
+  if (param_1 == 0) {
+    return 0xffffffff;
+  }
+  lVar4 = FUN_140039d40(DAT_14285eec0,param_1,"Options");
+  if (lVar4 == 0) {
+    return 0xffffffff;
+  }
+  iVar2 = FUN_140045250(lVar4,"IsRTTSession",param_2 + 0x5ac);
+  if (iVar2 < 0) {
+    *(undefined1 *)(param_2 + 0x5ac) = 0;
+  }
+  iVar2 = FUN_140045250(lVar4,"IsRTTWithTimeStamp",param_2 + 0x5ad);
+  if (iVar2 < 0) {
+    *(undefined1 *)(param_2 + 0x5ad) = 0;
+  }
+  iVar2 = FUN_140045250(lVar4,"IsRTTPlus",param_2 + 0x5ae);
+  if (iVar2 < 0) {
+    *(undefined1 *)(param_2 + 0x5ae) = 0;
+  }
+  iVar2 = FUN_1400460b0(lVar4,"SamplingPeriod",param_2 + 0x5b0);
+  if (iVar2 < 0) {
+    *(undefined4 *)(param_2 + 0x5b0) = 1000;
+  }
+  lVar6 = 0;
+  local_48[0] = 0;
+  iVar2 = FUN_1400460b0(lVar4,"Connection",local_48);
+  if (iVar2 < 0) {
+    return 0xffffffff;
+  }
+  if ((local_48[0] == 1) || (uVar3 = 2, local_48[0] != 2)) {
+    uVar3 = 1;
+  }
+  *(undefined4 *)(param_2 + 0x5b4) = uVar3;
+  iVar2 = FUN_140045310(lVar4,"JTAG_IRPre",param_2 + 0x5bc);
+  if (iVar2 < 0) {
+    *(undefined4 *)(param_2 + 0x5bc) = 0;
+  }
+  iVar2 = FUN_140045310(lVar4,"JTAG_DRPre",param_2 + 0x5b8);
+  if (iVar2 < 0) {
+    *(undefined4 *)(param_2 + 0x5b8) = 0;
+  }
+  iVar2 = *(int *)(param_2 + 0x5b4);
+  if (iVar2 == 1) {
+    iVar2 = FUN_1400460b0(lVar4,"SerialNo",param_2 + 0x59c);
+    if (iVar2 < 0) {
+      *(undefined4 *)(param_2 + 0x59c) = 0;
+    }
+    lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,"Nickname");
+    if (lVar5 != 0) {
+      iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,param_2 + 0x518,0x80);
+      goto joined_r0x0001400458a3;
+    }
+  }
+  else if (iVar2 == 2) {
+    lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,&DAT_140075794);
+    if (lVar5 == 0) {
+      return 0xffffffff;
+    }
+    iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,param_2 + 0x498,0x80);
+joined_r0x0001400458a3:
+    if (iVar2 < 0) {
+      return 0xffffffff;
+    }
+  }
+  else {
+    if (iVar2 != 4) {
+      return 0xffffffff;
+    }
+    *(undefined1 *)(param_2 + 0x5c0) = 1;
+  }
+  lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,"TargetDevice");
+  if (lVar5 == 0) {
+    if (*(char *)(param_2 + 0x5c0) == '\0') {
+      return 0xffffffff;
+    }
+  }
+  else {
+    iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,param_2 + 8,0x80);
+    if (iVar2 < 0) {
+      return 0xffffffff;
+    }
+  }
+  lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,"TargetInterface");
+  if (lVar5 == 0) {
+    cVar1 = *(char *)(param_2 + 0x5c0);
+joined_r0x000140045a03:
+    if (cVar1 == '\0') {
+      return 0xffffffff;
+    }
+  }
+  else {
+    iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,local_40,0x14);
+    lVar5 = lVar6;
+    if (iVar2 < 0) {
+      return 0xffffffff;
+    }
+    do {
+      lVar7 = lVar5 + 1;
+      lVar8 = lVar6;
+      if (local_40[lVar5] != (&DAT_14006c010)[lVar5]) goto LAB_140045970;
+      lVar5 = lVar7;
+    } while (lVar7 != 5);
+    *(undefined4 *)(param_2 + 0x5a4) = 0;
+  }
+  goto LAB_140045a09;
+  while (lVar8 = lVar7, lVar7 != 6) {
+LAB_140045970:
+    lVar7 = lVar8 + 1;
+    lVar5 = lVar6;
+    if (local_40[lVar8] != (&DAT_14006c024)[lVar8]) goto LAB_1400459a0;
+  }
+  *(undefined4 *)(param_2 + 0x5a4) = 7;
+  goto LAB_140045a09;
+  while (lVar5 = lVar8, lVar8 != 4) {
+LAB_1400459a0:
+    lVar8 = lVar5 + 1;
+    if (local_40[lVar5] != (&DAT_14006c018)[lVar5]) goto LAB_1400459d0;
+  }
+  *(undefined4 *)(param_2 + 0x5a4) = 1;
+  goto LAB_140045a09;
+  while (lVar6 = lVar5, lVar5 != 5) {
+LAB_1400459d0:
+    lVar5 = lVar6 + 1;
+    if (local_40[lVar6] != (&DAT_14006c01c)[lVar6]) {
+      cVar1 = *(char *)(param_2 + 0x5c0);
+      goto joined_r0x000140045a03;
+    }
+  }
+  *(undefined4 *)(param_2 + 0x5a4) = 3;
+LAB_140045a09:
+  lVar6 = FUN_140039af0(DAT_14285eec0,lVar4,"InterfaceSpeed");
+  if (lVar6 == 0) {
+    if (*(char *)(param_2 + 0x5c0) != '\0') {
+      return 0;
+    }
+  }
+  else {
+    iVar2 = FUN_140045310(lVar4,"InterfaceSpeed",param_2 + 0x5a8);
+    if (-1 < iVar2) {
+      return 0;
+    }
+  }
+  return 0xffffffff;
+}
+
+
+
+
+################ DECOMP: FUN_140046840 @ 140046840 ################
+
+undefined8 FUN_140046840(longlong param_1)
+
+{
+  longlong *plVar1;
+  int iVar2;
+  longlong lVar3;
+  
+  if (((DAT_14285eec0 != 0) && (param_1 != 0)) &&
+     (lVar3 = FUN_1400397a0(DAT_14285eec0,param_1,"SelectedSymbols"), plVar1 = DAT_14286d3b8,
+     lVar3 != 0)) {
+    while( true ) {
+      if (plVar1 == (longlong *)0x0) {
+        return 0;
+      }
+      if ((*plVar1 != 0) && (iVar2 = FUN_1400468c0(lVar3), iVar2 < 0)) break;
+      plVar1 = (longlong *)plVar1[1];
+    }
+  }
+  return 0xffffffff;
+}
+
+
+
+
+################ DECOMP: FUN_140045a60 @ 140045a60 ################
+
+undefined8 FUN_140045a60(undefined8 param_1,longlong param_2)
+
+{
+  char cVar1;
+  char cVar2;
+  longlong *plVar3;
+  int iVar4;
+  longlong lVar5;
+  char *pcVar6;
+  longlong lVar7;
+  
+  if ((((DAT_14285eec0 == 0) ||
+       (lVar5 = FUN_140039d40(DAT_14285eec0,param_1,"Configuration"), lVar5 == 0)) ||
+      (iVar4 = FUN_140045370(lVar5,param_2), iVar4 < 0)) ||
+     (((lVar5 = FUN_140039d40(DAT_14285eec0,param_1,"Windows"), lVar5 == 0 ||
+       (iVar4 = FUN_140045ff0(lVar5,param_2), iVar4 < 0)) ||
+      ((lVar5 = FUN_140039d40(DAT_14285eec0,param_1,"SelectedSymbols"), plVar3 = DAT_14286d3b8,
+       lVar5 != 0 && (iVar4 = FUN_140045cc0(lVar5), plVar3 = DAT_14286d3b8, iVar4 < 0)))))) {
+    return 0xffffffff;
+  }
+  do {
+    if (plVar3 == (longlong *)0x0) {
+      return 0;
+    }
+    lVar5 = *plVar3;
+    if (lVar5 != 0) {
+      pcVar6 = (char *)(lVar5 + 4);
+      lVar7 = (longlong)&DAT_14285edc0 - (longlong)pcVar6;
+      do {
+        cVar1 = *pcVar6;
+        cVar2 = pcVar6[lVar7];
+        if (cVar1 != cVar2) break;
+        pcVar6 = pcVar6 + 1;
+      } while (cVar2 != '\0');
+      if (cVar1 == cVar2) {
+        *(longlong *)(param_2 + 0x5d0) = lVar5;
+      }
+    }
+    plVar3 = (longlong *)plVar3[1];
+  } while( true );
+}
+
+
+
+
+################ DECOMP: FUN_140047020 @ 140047020 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+undefined4 FUN_140047020(undefined8 param_1)
+
+{
+  int iVar1;
+  void *_Dst;
+  longlong lVar2;
+  longlong lVar3;
+  undefined4 uVar4;
+  undefined1 auStack_238 [32];
+  undefined1 local_218 [512];
+  ulonglong local_18;
+  
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_238;
+  if (DAT_14285eec0 != 0) {
+    iVar1 = FUN_1400399f0();
+    if (iVar1 < 0) {
+      FUN_14003f430("Failed to close project file.");
+    }
+    DAT_14285eec0 = 0;
+  }
+  _Dst = (void *)FUN_140043d10(0x5e8);
+  memset(_Dst,0,0x5e8);
+  DAT_14285eec0 = FUN_140039eb0(param_1);
+  if (DAT_14285eec0 == 0) {
+    uVar4 = 0xffffffff;
+    memset(local_218,0,0x200);
+    FUN_140028380(local_218,0x200,"Failed to open project file %s.",param_1);
+    FUN_14003f430(local_218);
+  }
+  else {
+    lVar2 = FUN_140039db0(DAT_14285eec0,"JScopeProject");
+    if (lVar2 != 0) {
+      lVar3 = FUN_140039d40(DAT_14285eec0,lVar2,"FileVersion");
+      if (lVar3 != 0) {
+        FUN_1400455e0(lVar3);
+        lVar2 = FUN_140039d40(DAT_14285eec0,lVar2,"Project");
+        if (lVar2 != 0) {
+          uVar4 = FUN_140045a60(lVar2,_Dst);
+          goto LAB_14004714f;
+        }
+      }
+    }
+    uVar4 = 0xffffffff;
+  }
+LAB_14004714f:
+  FUN_14004ecc0(_Dst);
+  FUN_140043e60(_Dst);
+  FUN_14004e120(DAT_14286d388);
+  iVar1 = FUN_1400399f0(DAT_14285eec0);
+  if (iVar1 < 0) {
+    FUN_14003f430("Failed to close project file.");
+  }
+  DAT_14285eec0 = 0;
+  return uVar4;
+}
+
+
+
+
+################ DECOMP: FUN_1400471d0 @ 1400471d0 ################
+
+undefined8 FUN_1400471d0(undefined8 param_1)
+
+{
+  int iVar1;
+  longlong lVar2;
+  void *_Dst;
+  HANDLE hObject;
+  char *pcVar3;
+  ulonglong uVar4;
+  uint uVar5;
+  
+  if (DAT_14285eec0 != 0) {
+    iVar1 = FUN_1400399f0();
+    if (iVar1 < 0) {
+      FUN_14003f430("Failed to close project file.");
+    }
+    DAT_14285eec0 = 0;
+  }
+  DAT_14285eec0 = FUN_140039a10("JScopeProject");
+  if ((DAT_14285eec0 == 0) || (lVar2 = FUN_140039d90(DAT_14285eec0), lVar2 == 0)) {
+    return 0xffffffff;
+  }
+  _Dst = (void *)FUN_140043d10(0x5e8);
+  memset(_Dst,0,0x5e8);
+  FUN_14004e9e0(_Dst);
+  iVar1 = FUN_140046320(lVar2);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140046650(lVar2,_Dst);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  hObject = (HANDLE)FUN_140043750(param_1,0x12);
+  if (hObject == (HANDLE)0xffffffffffffffff) {
+    return 0xffffffff;
+  }
+  uVar5 = 0x10000;
+  do {
+    lVar2 = FUN_140043d10(uVar5);
+    iVar1 = FUN_14003a000(DAT_14285eec0,lVar2,uVar5,0);
+    uVar4 = (ulonglong)iVar1;
+    if (iVar1 < 0) {
+      FUN_140043e60(lVar2);
+      lVar2 = 0;
+      if (0x7fffffff < uVar5) goto LAB_140047316;
+      uVar5 = uVar5 * 2;
+    }
+    else {
+      *(undefined1 *)(uVar4 + lVar2) = 0;
+      uVar4 = (ulonglong)(iVar1 + 1);
+    }
+    iVar1 = (int)uVar4;
+  } while (iVar1 == -2);
+  if (iVar1 < 0) {
+LAB_140047316:
+    if (iVar1 == -2) goto LAB_140047327;
+    pcVar3 = "Failed to save XML.";
+  }
+  else {
+    iVar1 = FUN_140043920(hObject,lVar2,uVar4 & 0xffffffff);
+    if (-1 < iVar1) goto LAB_140047327;
+    pcVar3 = "Failed to write XML to project file.";
+  }
+  FUN_14003f430(pcVar3);
+LAB_140047327:
+  CloseHandle(hObject);
+  FUN_140043e60(_Dst);
+  iVar1 = FUN_1400399f0(DAT_14285eec0);
+  if (iVar1 < 0) {
+    FUN_14003f430("Failed to close project file.");
+  }
+  DAT_14285eec0 = 0;
+  return 0;
+}
+
+

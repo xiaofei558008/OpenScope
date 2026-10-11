@@ -1,0 +1,1348 @@
+=== strings matching /RTT|JScope_/ referenced by 14 functions ===
+
+--- JLINK_RTTERMINAL_Read @ 1400291b0  size=101
+      "JLINK_RTTERMINAL_Read"
+
+--- JLINK_RTTERMINAL_Write @ 140029220  size=101
+      "JLINK_RTTERMINAL_Write"
+
+--- JLINK_RTTERMINAL_Control @ 140029160  size=80
+      "JLINK_RTTERMINAL_Control"
+
+--- FUN_14002ba50 @ 14002ba50  size=220
+      "In RTT mode specifying the target device is mandatory."
+
+--- FUN_14002a410 @ 14002a410  size=4584
+      "RTT (synchronus)"
+      "<a href="https://kb.segger.com/UM08028_J-Scope#Synchronous_Mode_(RTT)">?</a>"
+      "RTT-Plus (synchronus)"
+      "<a href="https://kb.segger.com/UM08028_J-Scope#RTT_Plus_(Synchronous)">?</a>"
+
+--- FUN_14003de20 @ 14003de20  size=54
+      "SetRTTSearchRanges %s"
+
+--- FUN_140041400 @ 140041400  size=97
+      "RTT channel is set up to provide no timestamp!\nWithout timestamp J-Scope will assume that data points are uniformly distributed with a gap of 100 [us] each.\nTo set up the application for timestamps, please see the SEGGER wiki:\nhttps://kb.segger.com/UM08028_J-Scope#RTT:_Instrumenting_an_application_to_use_it_with_J-Scope"
+
+--- FUN_1400424f0 @ 1400424f0  size=308
+      "Waiting until RTT Control Block is found..."
+      "Searching for RTT control block ..."
+
+--- FUN_14003fc90 @ 14003fc90  size=544
+      "%d Byte bool RTT Data %d"
+      "%d Byte float RTT Data %d"
+      "%d Byte unsigned RTT Data %d"
+      "%d Byte signed RTT Data %d"
+
+--- FUN_140042100 @ 140042100  size=337
+      "JScope_"
+      "Failed to start RTT Sampling.\n\nNo RTT Up-Channel named "JScope_%Format%" found"
+      "Failed to start RTT Sampling.\n\nThe first RTT Channel named JScope_... found did not contain a valid VarFormat"
+      "JScope_Data"
+      "Failed to start RTT Sampling.\n\nNo RTT Up-Channel named "JScope_Data" found"
+      "JScope_Data_t"
+      "JScope_Config"
+      "Failed to start RTT Sampling.\n\nNo RTT Down-Channel named "JScope_Config" found"
+
+--- FUN_1400419f0 @ 1400419f0  size=725
+      "Wrong syntax for "-RTTSearchRange".\n"
+
+--- FUN_14003ef60 @ 14003ef60  size=294
+      "RTT read buffer allocation"
+
+--- FUN_1400463b0 @ 1400463b0  size=667
+      "IsRTTSession"
+      "IsRTTWithTimeStamp"
+      "IsRTTPlus"
+
+--- FUN_140045670 @ 140045670  size=999
+      "IsRTTSession"
+      "IsRTTWithTimeStamp"
+      "IsRTTPlus"
+
+
+################ DECOMP: JLINK_RTTERMINAL_Read @ 1400291b0 ################
+
+void JLINK_RTTERMINAL_Read(undefined4 param_1,undefined8 param_2,undefined4 param_3)
+
+{
+  if (DAT_14085bcd8 == (code *)0x0) {
+    DAT_14085bcd8 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Read");
+    if (DAT_14085bcd8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029212. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bcd8)(param_1,param_2,param_3);
+  return;
+}
+
+
+
+
+################ DECOMP: JLINK_RTTERMINAL_Write @ 140029220 ################
+
+void JLINK_RTTERMINAL_Write(undefined4 param_1,undefined8 param_2,undefined4 param_3)
+
+{
+  if (DAT_14085bce0 == (code *)0x0) {
+    DAT_14085bce0 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Write");
+    if (DAT_14085bce0 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x000140029282. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bce0)(param_1,param_2,param_3);
+  return;
+}
+
+
+
+
+################ DECOMP: JLINK_RTTERMINAL_Control @ 140029160 ################
+
+void JLINK_RTTERMINAL_Control(undefined4 param_1,undefined8 param_2)
+
+{
+  if (DAT_14085bce8 == (code *)0x0) {
+    DAT_14085bce8 = (code *)FUN_1400293b0("JLINK_RTTERMINAL_Control");
+    if (DAT_14085bce8 == (code *)0x0) {
+      return;
+    }
+  }
+                    /* WARNING: Could not recover jumptable at 0x0001400291ad. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (*DAT_14085bce8)(param_1,param_2);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_14002ba50 @ 14002ba50 ################
+
+void FUN_14002ba50(longlong *param_1)
+
+{
+  int iVar1;
+  bool bVar2;
+  longlong *plVar3;
+  QString local_res8 [8];
+  
+  bVar2 = QAbstractButton::isChecked((QAbstractButton *)param_1[0x1e]);
+  if (bVar2) {
+    plVar3 = (longlong *)QLineEdit::text((QLineEdit *)param_1[0x15]);
+    iVar1 = *(int *)(*plVar3 + 8);
+    QString::~QString(local_res8);
+    if (iVar1 == 0) {
+      FUN_14003f640("In RTT mode specifying the target device is mandatory.");
+      return;
+    }
+  }
+  else {
+    plVar3 = (longlong *)QLineEdit::text((QLineEdit *)param_1[0x22]);
+    iVar1 = *(int *)(*plVar3 + 8);
+    QString::~QString(local_res8);
+    if (iVar1 == 0) {
+      FUN_14003f640("No ELF file selected.");
+      return;
+    }
+  }
+  FUN_14002c250(param_1);
+  if ((char)param_1[0x28] == '\0') {
+    FUN_14003e110(0);
+    FUN_14003e380(param_1[0x27]);
+  }
+  else {
+    FUN_14003e800(param_1[0x27]);
+  }
+                    /* WARNING: Could not recover jumptable at 0x00014002bb25. Too many branches */
+                    /* WARNING: Treating indirect jump as call */
+  (**(code **)(*param_1 + 0x198))(param_1);
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_14002a410 @ 14002a410 ################
+
+QWidget * FUN_14002a410(QWidget *param_1,undefined8 param_2,QWidget param_3)
+
+{
+  int iVar1;
+  void *_Dst;
+  QLayout *pQVar2;
+  QGridLayout *pQVar3;
+  undefined8 uVar4;
+  QWidget *pQVar5;
+  QSize *pQVar6;
+  longlong *plVar7;
+  longlong lVar8;
+  QWidget *pQVar9;
+  QButtonGroup *this;
+  QHBoxLayout *pQVar10;
+  undefined8 uVar11;
+  undefined8 uVar12;
+  QRegExpValidator *this_00;
+  QString *pQVar13;
+  QAbstractButton *pQVar14;
+  QButtonGroup *this_01;
+  QHBoxLayout *pQVar15;
+  QRegExpValidator *this_02;
+  undefined4 local_res18 [2];
+  QRegExp local_res20 [8];
+  Data *local_58;
+  Data *local_50;
+  QButtonGroup *local_48 [2];
+  
+  this_02 = (QRegExpValidator *)0x0;
+  local_res18[0] = 0;
+  QDialog::QDialog((QDialog *)param_1,param_2,local_res18);
+  *(undefined ***)param_1 = NewProjectDialog::vftable;
+  *(undefined ***)(param_1 + 0x10) = NewProjectDialog::vftable;
+  local_58 = QString::fromAscii_helper("^[0-9]*$",-1);
+  QRegExp::QRegExp(local_res20,(QString *)&local_58,1,0);
+  QString::~QString((QString *)&local_58);
+  QWidget::hide(param_1);
+  memset(param_1 + 0x28,0,0x120);
+  param_1[0x140] = param_3;
+  if (param_3 == (QWidget)0x0) {
+    local_50 = QString::fromAscii_helper("Create new project",-1);
+    QWidget::setWindowTitle(param_1,(QString *)&local_50);
+  }
+  else {
+    local_50 = QString::fromAscii_helper("Project settings",-1);
+    QWidget::setWindowTitle(param_1,(QString *)&local_50);
+  }
+  QString::~QString((QString *)&local_50);
+  _Dst = (void *)FUN_140043d20(0x5e8);
+  *(void **)(param_1 + 0x138) = _Dst;
+  if (_Dst == (void *)0x0) {
+    FUN_14003f430("Insufficient memory!");
+  }
+  else {
+    memset(_Dst,0,0x5e8);
+    if (param_3 != (QWidget)0x0) {
+      FUN_14004e9e0(*(undefined8 *)(param_1 + 0x138));
+    }
+    pQVar2 = (QLayout *)FUN_140035e90(0);
+    *(QLayout **)(param_1 + 0x130) = pQVar2;
+    QWidget::setLayout(param_1,pQVar2);
+    QLayout::setSizeConstraint(*(QLayout **)(param_1 + 0x130),3);
+    FUN_140036f30(param_1);
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"Connection to J-Link",pQVar3);
+    *(undefined8 *)(param_1 + 0x28) = uVar4;
+    uVar4 = FUN_140036330(param_1,&DAT_14006c788,1,param_1,"1_SlotOnToggleRadioUSB (bool)");
+    *(undefined8 *)(param_1 + 0x68) = uVar4;
+    uVar4 = FUN_140036330(param_1,"TCP/IP",0,param_1,"1_SlotOnToggleRadioTCPIP(bool)");
+    *(undefined8 *)(param_1 + 0x90) = uVar4;
+    uVar4 = FUN_140036330(param_1,"Existing Session",0,param_1,"1_SlotOnToggleRadioExSes(bool)");
+    *(undefined8 *)(param_1 + 0xa0) = uVar4;
+    uVar4 = FUN_140035d30(param_1,"SN / Nickname","2stateChanged(int)",param_1,
+                          "1_SlotOnToggleCheckUSB(int)");
+    *(undefined8 *)(param_1 + 0x70) = uVar4;
+    uVar4 = FUN_1400360a0(param_1,0,0);
+    *(undefined8 *)(param_1 + 0x78) = uVar4;
+    uVar4 = FUN_1400360a0(param_1,0,0);
+    *(undefined8 *)(param_1 + 0x98) = uVar4;
+    pQVar5 = (QWidget *)FUN_140058d94(0x28);
+    pQVar9 = (QWidget *)this_02;
+    local_50 = (Data *)pQVar5;
+    if (pQVar5 != (QWidget *)0x0) {
+      local_res18[0] = 0;
+      QWidget::QWidget(pQVar5,param_1,local_res18);
+      *(undefined ***)pQVar5 = QWidget::vftable;
+      *(undefined ***)(pQVar5 + 0x10) = QWidget::vftable;
+      pQVar9 = pQVar5;
+    }
+    *(QWidget **)(param_1 + 0x88) = pQVar9;
+    pQVar5 = (QWidget *)FUN_140058d94(0x28);
+    pQVar9 = (QWidget *)this_02;
+    local_50 = (Data *)pQVar5;
+    if (pQVar5 != (QWidget *)0x0) {
+      local_res18[0] = 0;
+      QWidget::QWidget(pQVar5,param_1,local_res18);
+      *(undefined ***)pQVar5 = QWidget::vftable;
+      *(undefined ***)(pQVar5 + 0x10) = QWidget::vftable;
+      pQVar9 = pQVar5;
+    }
+    *(QWidget **)(param_1 + 0x80) = pQVar9;
+    QWidget::hide(*(QWidget **)(param_1 + 0x78));
+    QWidget::show(*(QWidget **)(param_1 + 0x88));
+    QWidget::hide(*(QWidget **)(param_1 + 0x80));
+    QWidget::hide(*(QWidget **)(param_1 + 0x98));
+    pQVar6 = (QSize *)(**(code **)(**(longlong **)(param_1 + 0x70) + 0x60))
+                                (*(longlong **)(param_1 + 0x70),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0x70),pQVar6);
+    pQVar6 = (QSize *)(**(code **)(**(longlong **)(param_1 + 0x70) + 0x60))
+                                (*(longlong **)(param_1 + 0x70),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0x80),pQVar6);
+    pQVar6 = (QSize *)(**(code **)(**(longlong **)(param_1 + 0x78) + 0x60))
+                                (*(longlong **)(param_1 + 0x78),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0x78),pQVar6);
+    pQVar6 = (QSize *)(**(code **)(**(longlong **)(param_1 + 0x78) + 0x60))
+                                (*(longlong **)(param_1 + 0x78),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0x88),pQVar6);
+    pQVar6 = (QSize *)(**(code **)(**(longlong **)(param_1 + 0x98) + 0x60))
+                                (*(longlong **)(param_1 + 0x98),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0x98),pQVar6);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x68),0,0,1,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x90),1,0,1,2,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xa0),2,0,1,2,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x70),0,1,1,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x80),0,1,1,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x78),0,2,1,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x88),0,2,1,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x98),1,2,1,1,local_res18);
+    QWidget::hide(*(QWidget **)(param_1 + 0xa0));
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"Specify Target Device",pQVar3);
+    *(undefined8 *)(param_1 + 0x30) = uVar4;
+    uVar4 = FUN_1400360a0(param_1,0,0);
+    *(undefined8 *)(param_1 + 0xa8) = uVar4;
+    plVar7 = (longlong *)
+             FUN_140035c20(param_1,&DAT_140060544,param_1,"1_SlotOnReleaseBtnTarget(void)");
+    *(longlong **)(param_1 + 0xb0) = plVar7;
+    lVar8 = (**(code **)(*plVar7 + 0x60))(plVar7,&local_50);
+    iVar1 = *(int *)(lVar8 + 4);
+    lVar8 = (**(code **)(**(longlong **)(param_1 + 0xb0) + 0x60))
+                      (*(longlong **)(param_1 + 0xb0),local_48);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0xb0),*(int *)(lVar8 + 4),iVar1);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xa8),0,0,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xb0),0,1,local_res18);
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"Script file (optional)",pQVar3);
+    *(undefined8 *)(param_1 + 0x38) = uVar4;
+    uVar4 = FUN_1400360a0(param_1,0,0);
+    *(undefined8 *)(param_1 + 0xb8) = uVar4;
+    plVar7 = (longlong *)
+             FUN_140035c20(param_1,&DAT_140060544,param_1,"1_SlotOnReleaseBtnScript(void)");
+    *(longlong **)(param_1 + 0xc0) = plVar7;
+    lVar8 = (**(code **)(*plVar7 + 0x60))(plVar7,local_48);
+    iVar1 = *(int *)(lVar8 + 4);
+    lVar8 = (**(code **)(**(longlong **)(param_1 + 0xc0) + 0x60))
+                      (*(longlong **)(param_1 + 0xc0),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0xc0),*(int *)(lVar8 + 4),iVar1);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xb8),0,0,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xc0),0,1,local_res18);
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"Target Interface & Speed",pQVar3);
+    *(undefined8 *)(param_1 + 0x40) = uVar4;
+    uVar4 = FUN_140035e00(param_1,&PTR_DAT_140096af0,4);
+    *(undefined8 *)(param_1 + 200) = uVar4;
+    local_48[0] = (QButtonGroup *)FUN_140058d94(0x48);
+    pQVar9 = (QWidget *)this_02;
+    if (local_48[0] != (QButtonGroup *)0x0) {
+      pQVar9 = (QWidget *)FUN_1400373a0(local_48[0],param_1,"1_SlotOnChangedCmbBxSpeed(void)");
+    }
+    *(QWidget **)(param_1 + 0xd0) = pQVar9;
+    uVar4 = FUN_140035ff0(param_1,&DAT_14006c650);
+    *(undefined8 *)(param_1 + 0xd8) = uVar4;
+    QObject::connect(*(QObject **)(param_1 + 200),"2currentIndexChanged(int)",(QObject *)param_1,
+                     "1_SlotOnChangedCmbBxInterface(int)",0);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 200),0,0,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xd0),0,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0xd8),0,2,local_res18);
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"Sampling Source",pQVar3);
+    *(undefined8 *)(param_1 + 0x48) = uVar4;
+    QGridLayout::setSpacing(pQVar3,0);
+    this = (QButtonGroup *)FUN_140058d94(0x10);
+    this_01 = (QButtonGroup *)this_02;
+    local_48[0] = this;
+    if (this != (QButtonGroup *)0x0) {
+      QButtonGroup::QButtonGroup(this,(QObject *)param_1);
+      *(undefined ***)this = QButtonGroup::vftable;
+      this_01 = this;
+    }
+    *(QButtonGroup **)(param_1 + 0xe0) = this_01;
+    QButtonGroup::setExclusive(this_01,true);
+    QObject::connect(*(QObject **)(param_1 + 0xe0),"2buttonClicked(int)",(QObject *)param_1,
+                     "1_SlotOnBtnGroupSamplingModeClicked(int)",0);
+    uVar4 = FUN_140036330(param_1,"HSS (asynchronous)",1,param_1,0);
+    *(undefined8 *)(param_1 + 0xe8) = uVar4;
+    uVar4 = FUN_140035ff0(param_1,
+                          "<a href=\"https://kb.segger.com/UM08028_J-Scope#Asynchronous_Mode_(HSS)\">?</a>"
+                         );
+    FUN_140036e00(uVar4,1,1);
+    pQVar10 = (QHBoxLayout *)FUN_140058d94(0x20);
+    pQVar15 = (QHBoxLayout *)this_02;
+    local_48[0] = (QButtonGroup *)pQVar10;
+    if (pQVar10 != (QHBoxLayout *)0x0) {
+      QHBoxLayout::QHBoxLayout(pQVar10);
+      *(undefined ***)pQVar10 = QHBoxLayout::vftable;
+      *(undefined ***)(pQVar10 + 0x10) = QHBoxLayout::vftable;
+      pQVar15 = pQVar10;
+    }
+    local_res18[0] = 0;
+    QBoxLayout::addWidget((QBoxLayout *)pQVar15,*(undefined8 *)(param_1 + 0xe8),0,local_res18);
+    local_res18[0] = 0;
+    QBoxLayout::addWidget((QBoxLayout *)pQVar15,uVar4,0,local_res18);
+    local_res18[0] = 1;
+    QGridLayout::addLayout(pQVar3,pQVar15,0,0,local_res18);
+    QButtonGroup::addButton
+              (*(QButtonGroup **)(param_1 + 0xe0),*(QAbstractButton **)(param_1 + 0xe8));
+    uVar4 = FUN_140036330(param_1,"RTT (synchronus)",0,param_1,0);
+    *(undefined8 *)(param_1 + 0xf0) = uVar4;
+    uVar4 = FUN_140035ff0(param_1,
+                          "<a href=\"https://kb.segger.com/UM08028_J-Scope#Synchronous_Mode_(RTT)\">?</a>"
+                         );
+    FUN_140036e00(uVar4,1,1);
+    pQVar10 = (QHBoxLayout *)FUN_140058d94(0x20);
+    pQVar15 = (QHBoxLayout *)this_02;
+    local_48[0] = (QButtonGroup *)pQVar10;
+    if (pQVar10 != (QHBoxLayout *)0x0) {
+      QHBoxLayout::QHBoxLayout(pQVar10);
+      *(undefined ***)pQVar10 = QHBoxLayout::vftable;
+      *(undefined ***)(pQVar10 + 0x10) = QHBoxLayout::vftable;
+      pQVar15 = pQVar10;
+    }
+    local_res18[0] = 0;
+    QBoxLayout::addWidget((QBoxLayout *)pQVar15,*(undefined8 *)(param_1 + 0xf0),0,local_res18);
+    local_res18[0] = 0;
+    QBoxLayout::addWidget((QBoxLayout *)pQVar15,uVar4,0,local_res18);
+    local_res18[0] = 1;
+    QGridLayout::addLayout(pQVar3,pQVar15,1,0,local_res18);
+    QButtonGroup::addButton
+              (*(QButtonGroup **)(param_1 + 0xe0),*(QAbstractButton **)(param_1 + 0xf0));
+    uVar4 = FUN_140036330(param_1,"RTT-Plus (synchronus)",0,param_1,0);
+    *(undefined8 *)(param_1 + 0xf8) = uVar4;
+    uVar4 = FUN_140035ff0(param_1,
+                          "<a href=\"https://kb.segger.com/UM08028_J-Scope#RTT_Plus_(Synchronous)\">?</a>"
+                         );
+    FUN_140036e00(uVar4,1,1);
+    pQVar10 = (QHBoxLayout *)FUN_140058d94(0x20);
+    pQVar15 = (QHBoxLayout *)this_02;
+    local_48[0] = (QButtonGroup *)pQVar10;
+    if (pQVar10 != (QHBoxLayout *)0x0) {
+      QHBoxLayout::QHBoxLayout(pQVar10);
+      *(undefined ***)pQVar10 = QHBoxLayout::vftable;
+      *(undefined ***)(pQVar10 + 0x10) = QHBoxLayout::vftable;
+      pQVar15 = pQVar10;
+    }
+    local_res18[0] = 0;
+    QBoxLayout::addWidget((QBoxLayout *)pQVar15,*(undefined8 *)(param_1 + 0xf8),0,local_res18);
+    local_res18[0] = 0;
+    QBoxLayout::addWidget((QBoxLayout *)pQVar15,uVar4,0,local_res18);
+    local_res18[0] = 1;
+    QGridLayout::addLayout(pQVar3,pQVar15,2,0,local_res18);
+    QButtonGroup::addButton
+              (*(QButtonGroup **)(param_1 + 0xe0),*(QAbstractButton **)(param_1 + 0xf8));
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"Sampling Rate",pQVar3);
+    *(undefined8 *)(param_1 + 0x50) = uVar4;
+    uVar4 = FUN_140035ff0(param_1,"Sample every ");
+    uVar11 = FUN_140035ff0(param_1,"us, sampling rate: 10 kHz");
+    *(undefined8 *)(param_1 + 0x108) = uVar11;
+    uVar11 = FUN_140035ff0(param_1,
+                           "Set 0 to sample as fast as possible. <a href=\"https://kb.segger.com/UM08028_J-Scope\">?</a>"
+                          );
+    FUN_140036e00(uVar11,1,1);
+    uVar12 = FUN_1400360a0(param_1,&DAT_14006cb6c,0);
+    *(undefined8 *)(param_1 + 0x100) = uVar12;
+    this_00 = (QRegExpValidator *)FUN_140058d94(0x18);
+    local_48[0] = (QButtonGroup *)this_00;
+    if (this_00 != (QRegExpValidator *)0x0) {
+      QRegExpValidator::QRegExpValidator(this_00,(QObject *)param_1);
+      *(undefined ***)this_00 = QRegExpValidator::vftable;
+      this_02 = this_00;
+    }
+    QRegExpValidator::setRegExp(this_02,local_res20);
+    QLineEdit::setValidator(*(QLineEdit **)(param_1 + 0x100),(QValidator *)this_02);
+    pQVar6 = (QSize *)(**(code **)(**(longlong **)(param_1 + 0x100) + 0x60))
+                                (*(longlong **)(param_1 + 0x100),local_48);
+    QWidget::resize(*(QWidget **)(param_1 + 0x100),pQVar6);
+    QObject::connect(*(QObject **)(param_1 + 0x100),"2textChanged(const QString&)",
+                     (QObject *)param_1,"1_SlotOnTextChangedLineSampRate(const QString&)",0);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,uVar4,0,0,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x100),0,1,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x108),0,2,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,uVar11,1,0,1,3,local_res18);
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,"ELF File",pQVar3);
+    *(undefined8 *)(param_1 + 0x58) = uVar4;
+    uVar4 = FUN_1400360a0(param_1,&DAT_14005f306,0);
+    *(undefined8 *)(param_1 + 0x110) = uVar4;
+    plVar7 = (longlong *)
+             FUN_140035c20(param_1,&DAT_140060544,param_1,"1_SlotOnReleaseBtnElfFile(void)");
+    *(longlong **)(param_1 + 0x118) = plVar7;
+    lVar8 = (**(code **)(*plVar7 + 0x60))(plVar7,local_48);
+    iVar1 = *(int *)(lVar8 + 4);
+    lVar8 = (**(code **)(**(longlong **)(param_1 + 0x118) + 0x60))
+                      (*(longlong **)(param_1 + 0x118),&local_50);
+    QWidget::setFixedSize(*(QWidget **)(param_1 + 0x118),*(int *)(lVar8 + 4),iVar1);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x110),0,0,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x118),0,1,local_res18);
+    pQVar3 = (QGridLayout *)FUN_140035e90(0);
+    uVar4 = FUN_140035f30(param_1,0,pQVar3);
+    *(undefined8 *)(param_1 + 0x60) = uVar4;
+    uVar4 = FUN_140035c20(param_1,&DAT_14006cc0c,param_1,"1_SlotOnReleaseBtnOK(void)");
+    *(undefined8 *)(param_1 + 0x120) = uVar4;
+    uVar4 = FUN_140035c20(param_1,"Cancel",param_1,"1_SlotOnReleaseBtnCancel(void)");
+    *(undefined8 *)(param_1 + 0x128) = uVar4;
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x120),0,0,local_res18);
+    local_res18[0] = 0;
+    QGridLayout::addWidget(pQVar3,*(undefined8 *)(param_1 + 0x128),0,1,local_res18);
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x28));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x30));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x38));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x40));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x48));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x50));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x58));
+    QLayout::addWidget(*(QLayout **)(param_1 + 0x130),*(QWidget **)(param_1 + 0x60));
+    iVar1 = 4000;
+    if (*(int *)(*(longlong *)(param_1 + 0x138) + 0x5a8) != 0) {
+      iVar1 = *(int *)(*(longlong *)(param_1 + 0x138) + 0x5a8);
+    }
+    FUN_140037670(*(undefined8 *)(param_1 + 0xd0),iVar1);
+    iVar1 = FUN_14002c650(&PTR_DAT_140096af0,4,
+                          *(undefined4 *)(*(longlong *)(param_1 + 0x138) + 0x5a4));
+    QComboBox::setCurrentIndex(*(QComboBox **)(param_1 + 200),iVar1);
+    lVar8 = *(longlong *)(param_1 + 0x138);
+    if (*(char *)(lVar8 + 8) != '\0') {
+      local_50 = QString::fromAscii_helper((char *)(lVar8 + 8),-1);
+      QLineEdit::setText(*(QLineEdit **)(param_1 + 0xa8),(QString *)&local_50);
+      QString::~QString((QString *)&local_50);
+      lVar8 = *(longlong *)(param_1 + 0x138);
+    }
+    if (*(char *)(lVar8 + 0x88) != '\0') {
+      local_50 = QString::fromAscii_helper((char *)(lVar8 + 0x88),-1);
+      QLineEdit::setText(*(QLineEdit **)(param_1 + 0x110),(QString *)&local_50);
+      QString::~QString((QString *)&local_50);
+      lVar8 = *(longlong *)(param_1 + 0x138);
+    }
+    if (*(char *)(lVar8 + 0x498) != '\0') {
+      local_50 = QString::fromAscii_helper((char *)(lVar8 + 0x498),-1);
+      QLineEdit::setText(*(QLineEdit **)(param_1 + 0x98),(QString *)&local_50);
+      QString::~QString((QString *)&local_50);
+      lVar8 = *(longlong *)(param_1 + 0x138);
+    }
+    if (*(char *)(lVar8 + 0x394) != '\0') {
+      local_50 = QString::fromAscii_helper((char *)(lVar8 + 0x394),-1);
+      QLineEdit::setText(*(QLineEdit **)(param_1 + 0xb8),(QString *)&local_50);
+      QString::~QString((QString *)&local_50);
+      lVar8 = *(longlong *)(param_1 + 0x138);
+    }
+    pQVar14 = *(QAbstractButton **)(param_1 + 0x70);
+    if (*(int *)(lVar8 + 0x59c) == 0) {
+      if (*(char *)(lVar8 + 0x518) == '\0') {
+        QAbstractButton::setChecked(pQVar14,false);
+        local_50 = QString::fromAscii_helper("",-1);
+        QLineEdit::setText(*(QLineEdit **)(param_1 + 0x78),(QString *)&local_50);
+      }
+      else {
+        QAbstractButton::setChecked(pQVar14,true);
+        local_50 = QString::fromAscii_helper((char *)(*(longlong *)(param_1 + 0x138) + 0x518),-1);
+        QLineEdit::setText(*(QLineEdit **)(param_1 + 0x78),(QString *)&local_50);
+      }
+    }
+    else {
+      QAbstractButton::setChecked(pQVar14,true);
+      pQVar13 = (QString *)
+                QString::number((int)&local_50,*(int *)(*(longlong *)(param_1 + 0x138) + 0x59c));
+      QLineEdit::setText(*(QLineEdit **)(param_1 + 0x78),pQVar13);
+    }
+    QString::~QString((QString *)&local_50);
+    if (*(char *)(*(longlong *)(param_1 + 0x138) + 0x5ac) == '\0') {
+      pQVar14 = *(QAbstractButton **)(param_1 + 0xe8);
+    }
+    else if (*(char *)(*(longlong *)(param_1 + 0x138) + 0x5ae) == '\0') {
+      pQVar14 = *(QAbstractButton **)(param_1 + 0xf0);
+    }
+    else {
+      pQVar14 = *(QAbstractButton **)(param_1 + 0xf8);
+    }
+    QAbstractButton::setChecked(pQVar14,true);
+    lVar8 = *(longlong *)(param_1 + 0x138);
+    if (*(int *)(lVar8 + 0x5a8) != 0) {
+      FUN_140037670(*(undefined8 *)(param_1 + 0xd0));
+      lVar8 = *(longlong *)(param_1 + 0x138);
+    }
+    if (*(int *)(lVar8 + 0x5b0) != 0) {
+      pQVar13 = (QString *)QString::number((uint)&local_50,*(int *)(lVar8 + 0x5b0));
+      QLineEdit::setText(*(QLineEdit **)(param_1 + 0x100),pQVar13);
+      QString::~QString((QString *)&local_50);
+      lVar8 = *(longlong *)(param_1 + 0x138);
+    }
+    if ((*(int *)(lVar8 + 0x5b4) == 1) || (*(int *)(lVar8 + 0x5b4) != 2)) {
+      pQVar14 = *(QAbstractButton **)(param_1 + 0x68);
+    }
+    else {
+      pQVar14 = *(QAbstractButton **)(param_1 + 0x90);
+    }
+    QAbstractButton::setChecked(pQVar14,true);
+    QWidget::show(param_1);
+  }
+  QRegExp::~QRegExp(local_res20);
+  return param_1;
+}
+
+
+
+
+################ DECOMP: FUN_14003de20 @ 14003de20 ################
+
+undefined8 FUN_14003de20(undefined8 param_1)
+
+{
+  FUN_1400276b0(param_1,0x2c,0x20);
+  FUN_140028380(&DAT_14285d210,0x200,"SetRTTSearchRanges %s",param_1);
+  return 0;
+}
+
+
+
+
+################ DECOMP: FUN_140041400 @ 140041400 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+void FUN_140041400(void)
+
+{
+  undefined1 auStack_838 [32];
+  undefined1 local_818 [2048];
+  ulonglong local_18;
+  
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_838;
+  if (DAT_14285da8e == '\0') {
+    FUN_140028380(local_818,0x800,
+                  "RTT channel is set up to provide no timestamp!\nWithout timestamp J-Scope will assume that data points are uniformly distributed with a gap of 100 [us] each.\nTo set up the application for timestamps, please see the SEGGER wiki:\nhttps://kb.segger.com/UM08028_J-Scope#RTT:_Instrumenting_an_application_to_use_it_with_J-Scope"
+                 );
+    FUN_14003f490(local_818);
+    DAT_14285da8e = '\x01';
+  }
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_1400424f0 @ 1400424f0 ################
+
+undefined4 FUN_1400424f0(char *param_1,ulonglong param_2,uint *param_3)
+
+{
+  uint uVar1;
+  undefined4 uVar2;
+  undefined8 uVar3;
+  int iVar4;
+  uint uVar5;
+  
+  FUN_140042f90("Waiting until RTT Control Block is found...");
+  uVar5 = 0;
+  uVar3 = FUN_14004e1f0(DAT_14286d388,0,"Searching for RTT control block ...",2000,0);
+  iVar4 = 0;
+  do {
+    Sleep(5);
+    iVar4 = iVar4 + 1;
+    uVar1 = JLINK_RTTERMINAL_Control(3,param_3 + 1);
+    if (iVar4 == 2000) {
+      FUN_14004e1f0(DAT_14286d388,uVar3,0,2000,0xffffffff);
+      goto LAB_140042602;
+    }
+    FUN_14004e1f0(DAT_14286d388,uVar3,0,2000,iVar4);
+  } while (uVar1 == 0xfffffffe);
+  if ((int)uVar1 < 0) {
+LAB_140042602:
+    uVar2 = 0xffffffff;
+  }
+  else {
+    FUN_14004e1f0(DAT_14286d388,uVar3,0,2000,0xffffffff);
+    uVar2 = 0;
+    if (uVar1 != 0) {
+      do {
+        *param_3 = uVar5;
+        JLINK_RTTERMINAL_Control(2,param_3);
+        iVar4 = strncmp((char *)(param_3 + 2),param_1,param_2 & 0xffffffff);
+        if (iVar4 == 0) {
+          return 0;
+        }
+        uVar5 = uVar5 + 1;
+        uVar2 = 0xffffffff;
+      } while (uVar5 < uVar1);
+    }
+  }
+  return uVar2;
+}
+
+
+
+
+################ DECOMP: FUN_14003fc90 @ 14003fc90 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+void FUN_14003fc90(longlong param_1)
+
+{
+  longlong lVar1;
+  char cVar2;
+  char *pcVar3;
+  int iVar4;
+  int iVar5;
+  int iVar6;
+  int iVar7;
+  undefined1 auStack_178 [32];
+  int local_158;
+  char local_148 [32];
+  undefined1 local_128 [256];
+  ulonglong local_28;
+  
+  local_28 = DAT_140096fe8 ^ (ulonglong)auStack_178;
+  iVar4 = 0;
+  FUN_140027140(local_148,&DAT_14085d190,0x20);
+  if (local_148[0] != '_') {
+    pcVar3 = local_148;
+    do {
+      if (local_148[0] == '\0') break;
+      local_148[0] = pcVar3[1];
+      pcVar3 = pcVar3 + 1;
+      iVar4 = iVar4 + 1;
+    } while (local_148[0] != '_');
+  }
+  FUN_14003ea40();
+  iVar6 = 0;
+  cVar2 = local_148[(longlong)iVar4 + 1];
+  lVar1 = (longlong)iVar4 + 1;
+  do {
+    if ((cVar2 == '\0') || (local_148[lVar1 + 1] == '\0')) {
+      return;
+    }
+    cVar2 = FUN_140027860(local_148[lVar1]);
+    iVar4 = (int)local_148[lVar1 + 1];
+    iVar7 = iVar4 + -0x30;
+    if (cVar2 == 't') {
+      *(undefined1 *)(param_1 + 0x5a5) = 1;
+      FUN_14004ec40(param_1);
+    }
+    else {
+      if (cVar2 == 'b') {
+        iVar5 = 0;
+        if (iVar7 == 1) {
+          iVar5 = 5;
+        }
+        pcVar3 = "%d Byte bool RTT Data %d";
+      }
+      else if (cVar2 == 'f') {
+        if (iVar7 == 4) {
+          pcVar3 = "%d Byte float RTT Data %d";
+          iVar5 = 1;
+        }
+        else {
+          pcVar3 = "%d Byte float RTT Data %d";
+          iVar5 = 2;
+          if (iVar7 != 8) {
+            iVar5 = 0;
+          }
+        }
+      }
+      else {
+        iVar5 = 0;
+        if (cVar2 == 'u') {
+          if (iVar4 == 0x31) {
+            iVar5 = 6;
+            pcVar3 = "%d Byte unsigned RTT Data %d";
+          }
+          else if (iVar4 == 0x32) {
+            iVar5 = 7;
+            pcVar3 = "%d Byte unsigned RTT Data %d";
+          }
+          else if (iVar7 == 4) {
+            iVar5 = 8;
+            pcVar3 = "%d Byte unsigned RTT Data %d";
+          }
+          else if (iVar7 == 8) {
+            iVar5 = 9;
+            pcVar3 = "%d Byte unsigned RTT Data %d";
+          }
+          else {
+            pcVar3 = "%d Byte unsigned RTT Data %d";
+          }
+        }
+        else {
+          if (cVar2 != 'i') goto LAB_14003fe70;
+          if (iVar4 == 0x31) {
+            iVar5 = 10;
+          }
+          else if (iVar4 == 0x32) {
+            iVar5 = 0xb;
+          }
+          else if (iVar7 == 4) {
+            iVar5 = 0xc;
+          }
+          else if (iVar7 == 8) {
+            iVar5 = 0xd;
+          }
+          pcVar3 = "%d Byte signed RTT Data %d";
+        }
+      }
+      local_158 = iVar6;
+      FUN_140028380(local_128,0x100,pcVar3,iVar7);
+      if (iVar5 != 0) {
+        FUN_14003dfa0(iVar7,iVar5,0,local_128);
+        iVar6 = iVar6 + 1;
+      }
+    }
+LAB_14003fe70:
+    cVar2 = local_148[lVar1 + 2];
+    lVar1 = lVar1 + 2;
+  } while( true );
+}
+
+
+
+
+################ DECOMP: FUN_140042100 @ 140042100 ################
+
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+undefined8 FUN_140042100(longlong param_1)
+
+{
+  int iVar1;
+  undefined8 uVar2;
+  
+  *(undefined1 *)(param_1 + 0x5a5) = 0;
+  DAT_14285da88 = 0;
+  iVar1 = JLINK_RTTERMINAL_Control(0,0);
+  if (iVar1 < 0) {
+LAB_14004216d:
+    uVar2 = 0xffffffff;
+  }
+  else {
+    _DAT_14085d18c = 0;
+    uVar2 = 1;
+    if (*(char *)(param_1 + 0x5a6) == '\0') {
+      iVar1 = FUN_1400424f0("JScope_",7,&DAT_14085d188);
+      if (iVar1 < 0) {
+        FUN_14003f110(
+                     "Failed to start RTT Sampling.\n\nNo RTT Up-Channel named \"JScope_%Format%\" found"
+                     );
+        goto LAB_14004216d;
+      }
+      FUN_14003fc90(param_1);
+      if (DAT_14085d1e8 == 0) {
+        FUN_14003f110(
+                     "Failed to start RTT Sampling.\n\nThe first RTT Channel named JScope_... found did not contain a valid VarFormat"
+                     );
+        uVar2 = 0xffffffff;
+        goto LAB_1400421bb;
+      }
+      FUN_14004dc70(DAT_14286d388);
+      FUN_14004e120(DAT_14286d388);
+    }
+    else {
+      iVar1 = FUN_1400424f0("JScope_Data",0xb,&DAT_14085d188);
+      if (iVar1 < 0) {
+        FUN_14003f110(
+                     "Failed to start RTT Sampling.\n\nNo RTT Up-Channel named \"JScope_Data\" found"
+                     );
+        uVar2 = 0xffffffff;
+        goto LAB_1400421bb;
+      }
+      iVar1 = FUN_140027760(&DAT_14085d190,"JScope_Data_t");
+      if (iVar1 == 0) {
+        *(undefined1 *)(param_1 + 0x5a5) = 1;
+      }
+      _DAT_14085d1bc = 1;
+      iVar1 = FUN_1400424f0("JScope_Config",0xe,&DAT_14085d1b8);
+      if (iVar1 < 0) {
+        FUN_14003f110(
+                     "Failed to start RTT Sampling.\n\nNo RTT Down-Channel named \"JScope_Config\" found"
+                     );
+        uVar2 = 0xffffffff;
+        goto LAB_1400421bb;
+      }
+    }
+    FUN_140042a60();
+    DAT_14285da88 = 1;
+  }
+LAB_1400421bb:
+  FUN_14004ec40(param_1);
+  return uVar2;
+}
+
+
+
+
+################ DECOMP: FUN_1400419f0 @ 1400419f0 ################
+
+/* WARNING: Function: __chkstk replaced with injection: alloca_probe */
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+/* WARNING: Globals starting with '_' overlap smaller symbols at the same address */
+
+undefined4 FUN_1400419f0(char *param_1)
+
+{
+  undefined4 uVar1;
+  undefined4 uVar2;
+  undefined4 uVar3;
+  int iVar4;
+  uint uVar5;
+  undefined8 uVar6;
+  undefined1 auStack_11d8 [32];
+  undefined4 local_11b8;
+  undefined1 local_11b4 [4];
+  undefined8 *local_11b0;
+  undefined1 local_838 [4];
+  uint local_834;
+  char local_818 [1024];
+  undefined1 local_418 [1024];
+  ulonglong local_18;
+  undefined8 uStack_10;
+  
+  uStack_10 = 0x1400419fc;
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_11d8;
+  memset(local_818,0,0x400);
+  if (((*(int *)(param_1 + 0x59c) == 0) || (*(int *)(param_1 + 0x59c) == 7)) &&
+     (-1 < *(int *)(param_1 + 0x5b0))) {
+    JLINKARM_ConfigJTAG(*(undefined4 *)(param_1 + 0x5b4));
+  }
+  JLINKARM_ExecCommand("SetSkipInitECCRAMOnConnect = 1",0,0);
+  if ((*param_1 == '\0') || (iVar4 = FUN_140027760(param_1), iVar4 == 0)) {
+    iVar4 = JLINKARM_DEVICE_SelectDialog(DAT_14286d388,0,0);
+    if (iVar4 == -1) {
+      FUN_14003f280("User cancelled device selection.");
+      return 0xffffffff;
+    }
+    memset(local_11b4,0,0x974);
+    local_11b8 = 0x978;
+    JLINKARM_DEVICE_GetInfo(iVar4,&local_11b8);
+    uVar6 = local_11b0[1];
+    *(undefined8 *)param_1 = *local_11b0;
+    *(undefined8 *)(param_1 + 8) = uVar6;
+    uVar6 = local_11b0[3];
+    *(undefined8 *)(param_1 + 0x10) = local_11b0[2];
+    *(undefined8 *)(param_1 + 0x18) = uVar6;
+    uVar6 = local_11b0[5];
+    *(undefined8 *)(param_1 + 0x20) = local_11b0[4];
+    *(undefined8 *)(param_1 + 0x28) = uVar6;
+    uVar6 = local_11b0[7];
+    *(undefined8 *)(param_1 + 0x30) = local_11b0[6];
+    *(undefined8 *)(param_1 + 0x38) = uVar6;
+    uVar6 = local_11b0[9];
+    *(undefined8 *)(param_1 + 0x40) = local_11b0[8];
+    *(undefined8 *)(param_1 + 0x48) = uVar6;
+    uVar6 = local_11b0[0xb];
+    *(undefined8 *)(param_1 + 0x50) = local_11b0[10];
+    *(undefined8 *)(param_1 + 0x58) = uVar6;
+    uVar1 = *(undefined4 *)((longlong)local_11b0 + 100);
+    uVar2 = *(undefined4 *)(local_11b0 + 0xd);
+    uVar3 = *(undefined4 *)((longlong)local_11b0 + 0x6c);
+    *(undefined4 *)(param_1 + 0x60) = *(undefined4 *)(local_11b0 + 0xc);
+    *(undefined4 *)(param_1 + 100) = uVar1;
+    *(undefined4 *)(param_1 + 0x68) = uVar2;
+    *(undefined4 *)(param_1 + 0x6c) = uVar3;
+    uVar1 = *(undefined4 *)((longlong)local_11b0 + 0x74);
+    uVar2 = *(undefined4 *)(local_11b0 + 0xf);
+    uVar3 = *(undefined4 *)((longlong)local_11b0 + 0x7c);
+    *(undefined4 *)(param_1 + 0x70) = *(undefined4 *)(local_11b0 + 0xe);
+    *(undefined4 *)(param_1 + 0x74) = uVar1;
+    *(undefined4 *)(param_1 + 0x78) = uVar2;
+    *(undefined4 *)(param_1 + 0x7c) = uVar3;
+    FUN_14004ec40(param_1);
+  }
+  FUN_140028380(local_418,0x400,"device = %s",param_1);
+  JLINKARM_ExecCommand(local_418,local_818,0x400);
+  if (local_818[0] != '\0') {
+    FUN_14003f120("Failed to select target device \'%s\'.",param_1);
+    return 0xffffffff;
+  }
+  if (param_1[0x38c] != '\0') {
+    FUN_140028380(local_418,0x400,"ScriptFile = %s",param_1 + 0x38c);
+    JLINKARM_ExecCommand(local_418,local_818,0x400);
+    if (local_818[0] != '\0') {
+      FUN_14003f120("Failed to select script file \'%s\'.",param_1 + 0x38c);
+      return 0xffffffff;
+    }
+  }
+  JLINKARM_TIF_Select(*(undefined4 *)(param_1 + 0x59c));
+  JLINKARM_SetSpeed(*(undefined4 *)(param_1 + 0x5a0));
+  if ((DAT_14285d210 != '\0') && (iVar4 = JLINK_ExecCommand(&DAT_14285d210,0,0), iVar4 != 0)) {
+    FUN_14003f110("Wrong syntax for \"-RTTSearchRange\".\n");
+    return 0xffffffff;
+  }
+  iVar4 = JLINKARM_Connect();
+  if (iVar4 < 0) {
+    FUN_14003f110("Failed to establish connection to target.");
+    return 0xffffffff;
+  }
+  if (param_1[0x5a4] == '\0') {
+    iVar4 = JLINKARM_EMU_HasCapEx(0x35);
+    if (iVar4 == 0) {
+      uVar6 = 20000;
+    }
+    else {
+      uVar5 = JLINKARM_GetDLLVersion();
+      if (0xc79b < uVar5) {
+        iVar4 = JLINK_HSS_GetCaps(local_838);
+        if (iVar4 != 0) {
+          return 0;
+        }
+        _DAT_14285da90 = (int)(1000000 / (ulonglong)local_834);
+        return 0;
+      }
+      uVar6 = 10;
+    }
+    FUN_14003f400(uVar6);
+  }
+  return 0;
+}
+
+
+
+
+################ DECOMP: FUN_14003ef60 @ 14003ef60 ################
+
+int FUN_14003ef60(void)
+
+{
+  int iVar1;
+  
+  FUN_14004e9c0(&DAT_14285d420);
+  iVar1 = FUN_1400418f0(&DAT_14285d420);
+  if (iVar1 < 0) {
+    return -1;
+  }
+  DAT_14285da8c = 1;
+  iVar1 = FUN_1400419f0(&DAT_14285d420);
+  if (iVar1 < 0) {
+    return -1;
+  }
+  if (DAT_14285d9c4 != '\0') {
+    DAT_14285d1fc = 0x2000;
+    if (0x2000 < DAT_14085d1b0) {
+      DAT_14285d1fc = DAT_14085d1b0;
+    }
+    DAT_14285d200 = FUN_140043d20(DAT_14285d1fc,"RTT read buffer allocation");
+    if (DAT_14285d200 == 0) {
+      iVar1 = -1;
+    }
+    if (DAT_14285d9c4 != '\0') {
+      if (DAT_14285d9c6 == '\0') {
+        if ((DAT_14285da88 == 0) && (iVar1 = FUN_140042100(&DAT_14285d420), iVar1 < 0)) {
+          return -1;
+        }
+        FUN_14004e9c0(&DAT_14285d420);
+        if (DAT_14285d9c5 == '\0') {
+          FUN_140041400();
+        }
+      }
+      if (DAT_14285d9c4 != '\0') goto LAB_14003f052;
+    }
+  }
+  iVar1 = FUN_140041f30(&DAT_14285d420);
+LAB_14003f052:
+  if (-1 < iVar1) {
+    FUN_14003f3e0(1);
+    DAT_14285da8d = 1;
+    return 0;
+  }
+  return iVar1;
+}
+
+
+
+
+################ DECOMP: FUN_1400463b0 @ 1400463b0 ################
+
+undefined8 FUN_1400463b0(longlong param_1,longlong param_2)
+
+{
+  int iVar1;
+  longlong lVar2;
+  undefined4 uVar3;
+  undefined1 *puVar4;
+  
+  if (DAT_14285eec0 == 0) {
+    return 0xffffffff;
+  }
+  if (param_1 == 0) {
+    return 0xffffffff;
+  }
+  lVar2 = FUN_1400397a0(DAT_14285eec0,param_1,"JLink");
+  if (lVar2 == 0) {
+    return 0xffffffff;
+  }
+  lVar2 = FUN_1400397a0(DAT_14285eec0,lVar2,"Options");
+  if (lVar2 == 0) {
+    return 0xffffffff;
+  }
+  uVar3 = 4;
+  if (*(char *)(param_2 + 0x5b8) == '\0') {
+    uVar3 = *(undefined4 *)(param_2 + 0x5ac);
+  }
+  iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"Connection",uVar3);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsRTTSession",*(undefined1 *)(param_2 + 0x5a4));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsRTTWithTimeStamp",*(undefined1 *)(param_2 + 0x5a5));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039760(DAT_14285eec0,lVar2,"IsRTTPlus",*(undefined1 *)(param_2 + 0x5a6));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"SamplingPeriod",*(undefined4 *)(param_2 + 0x5a8));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_1400398d0(DAT_14285eec0,lVar2,"SerialNo",*(undefined4 *)(param_2 + 0x594));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"JTAG_IRPre",*(undefined4 *)(param_2 + 0x5b4));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"JTAG_DRPre",*(undefined4 *)(param_2 + 0x5b0));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,&DAT_140075794,param_2 + 0x490);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,"TargetDevice",param_2);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,"Nickname",param_2 + 0x510);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = FUN_140039850(DAT_14285eec0,lVar2,"InterfaceSpeed",*(undefined4 *)(param_2 + 0x5a0));
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  iVar1 = *(int *)(param_2 + 0x59c);
+  if (iVar1 == 0) {
+    puVar4 = &DAT_14006c010;
+    goto LAB_140046614;
+  }
+  if (iVar1 != 1) {
+    if (iVar1 == 3) {
+      puVar4 = &DAT_14006c01c;
+      goto LAB_140046614;
+    }
+    if (iVar1 == 7) {
+      puVar4 = &DAT_14006c024;
+      goto LAB_140046614;
+    }
+  }
+  puVar4 = &DAT_14006c018;
+LAB_140046614:
+  iVar1 = FUN_140039600(DAT_14285eec0,lVar2,"TargetInterface",puVar4);
+  if (iVar1 < 0) {
+    return 0xffffffff;
+  }
+  return 0;
+}
+
+
+
+
+################ DECOMP: FUN_140045670 @ 140045670 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+/* WARNING: Type propagation algorithm not settling */
+
+undefined8 FUN_140045670(longlong param_1,longlong param_2)
+
+{
+  char cVar1;
+  int iVar2;
+  undefined4 uVar3;
+  longlong lVar4;
+  longlong lVar5;
+  longlong lVar6;
+  longlong lVar7;
+  longlong lVar8;
+  undefined1 auStack_68 [32];
+  int local_48 [2];
+  char local_40 [24];
+  ulonglong local_28;
+  
+  local_28 = DAT_140096fe8 ^ (ulonglong)auStack_68;
+  if (DAT_14285eec0 == 0) {
+    return 0xffffffff;
+  }
+  if (param_1 == 0) {
+    return 0xffffffff;
+  }
+  lVar4 = FUN_140039d40(DAT_14285eec0,param_1,"Options");
+  if (lVar4 == 0) {
+    return 0xffffffff;
+  }
+  iVar2 = FUN_140045250(lVar4,"IsRTTSession",param_2 + 0x5ac);
+  if (iVar2 < 0) {
+    *(undefined1 *)(param_2 + 0x5ac) = 0;
+  }
+  iVar2 = FUN_140045250(lVar4,"IsRTTWithTimeStamp",param_2 + 0x5ad);
+  if (iVar2 < 0) {
+    *(undefined1 *)(param_2 + 0x5ad) = 0;
+  }
+  iVar2 = FUN_140045250(lVar4,"IsRTTPlus",param_2 + 0x5ae);
+  if (iVar2 < 0) {
+    *(undefined1 *)(param_2 + 0x5ae) = 0;
+  }
+  iVar2 = FUN_1400460b0(lVar4,"SamplingPeriod",param_2 + 0x5b0);
+  if (iVar2 < 0) {
+    *(undefined4 *)(param_2 + 0x5b0) = 1000;
+  }
+  lVar6 = 0;
+  local_48[0] = 0;
+  iVar2 = FUN_1400460b0(lVar4,"Connection",local_48);
+  if (iVar2 < 0) {
+    return 0xffffffff;
+  }
+  if ((local_48[0] == 1) || (uVar3 = 2, local_48[0] != 2)) {
+    uVar3 = 1;
+  }
+  *(undefined4 *)(param_2 + 0x5b4) = uVar3;
+  iVar2 = FUN_140045310(lVar4,"JTAG_IRPre",param_2 + 0x5bc);
+  if (iVar2 < 0) {
+    *(undefined4 *)(param_2 + 0x5bc) = 0;
+  }
+  iVar2 = FUN_140045310(lVar4,"JTAG_DRPre",param_2 + 0x5b8);
+  if (iVar2 < 0) {
+    *(undefined4 *)(param_2 + 0x5b8) = 0;
+  }
+  iVar2 = *(int *)(param_2 + 0x5b4);
+  if (iVar2 == 1) {
+    iVar2 = FUN_1400460b0(lVar4,"SerialNo",param_2 + 0x59c);
+    if (iVar2 < 0) {
+      *(undefined4 *)(param_2 + 0x59c) = 0;
+    }
+    lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,"Nickname");
+    if (lVar5 != 0) {
+      iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,param_2 + 0x518,0x80);
+      goto joined_r0x0001400458a3;
+    }
+  }
+  else if (iVar2 == 2) {
+    lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,&DAT_140075794);
+    if (lVar5 == 0) {
+      return 0xffffffff;
+    }
+    iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,param_2 + 0x498,0x80);
+joined_r0x0001400458a3:
+    if (iVar2 < 0) {
+      return 0xffffffff;
+    }
+  }
+  else {
+    if (iVar2 != 4) {
+      return 0xffffffff;
+    }
+    *(undefined1 *)(param_2 + 0x5c0) = 1;
+  }
+  lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,"TargetDevice");
+  if (lVar5 == 0) {
+    if (*(char *)(param_2 + 0x5c0) == '\0') {
+      return 0xffffffff;
+    }
+  }
+  else {
+    iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,param_2 + 8,0x80);
+    if (iVar2 < 0) {
+      return 0xffffffff;
+    }
+  }
+  lVar5 = FUN_140039af0(DAT_14285eec0,lVar4,"TargetInterface");
+  if (lVar5 == 0) {
+    cVar1 = *(char *)(param_2 + 0x5c0);
+joined_r0x000140045a03:
+    if (cVar1 == '\0') {
+      return 0xffffffff;
+    }
+  }
+  else {
+    iVar2 = FUN_140039c60(DAT_14285eec0,lVar5,local_40,0x14);
+    lVar5 = lVar6;
+    if (iVar2 < 0) {
+      return 0xffffffff;
+    }
+    do {
+      lVar7 = lVar5 + 1;
+      lVar8 = lVar6;
+      if (local_40[lVar5] != (&DAT_14006c010)[lVar5]) goto LAB_140045970;
+      lVar5 = lVar7;
+    } while (lVar7 != 5);
+    *(undefined4 *)(param_2 + 0x5a4) = 0;
+  }
+  goto LAB_140045a09;
+  while (lVar8 = lVar7, lVar7 != 6) {
+LAB_140045970:
+    lVar7 = lVar8 + 1;
+    lVar5 = lVar6;
+    if (local_40[lVar8] != (&DAT_14006c024)[lVar8]) goto LAB_1400459a0;
+  }
+  *(undefined4 *)(param_2 + 0x5a4) = 7;
+  goto LAB_140045a09;
+  while (lVar5 = lVar8, lVar8 != 4) {
+LAB_1400459a0:
+    lVar8 = lVar5 + 1;
+    if (local_40[lVar5] != (&DAT_14006c018)[lVar5]) goto LAB_1400459d0;
+  }
+  *(undefined4 *)(param_2 + 0x5a4) = 1;
+  goto LAB_140045a09;
+  while (lVar6 = lVar5, lVar5 != 5) {
+LAB_1400459d0:
+    lVar5 = lVar6 + 1;
+    if (local_40[lVar6] != (&DAT_14006c01c)[lVar6]) {
+      cVar1 = *(char *)(param_2 + 0x5c0);
+      goto joined_r0x000140045a03;
+    }
+  }
+  *(undefined4 *)(param_2 + 0x5a4) = 3;
+LAB_140045a09:
+  lVar6 = FUN_140039af0(DAT_14285eec0,lVar4,"InterfaceSpeed");
+  if (lVar6 == 0) {
+    if (*(char *)(param_2 + 0x5c0) != '\0') {
+      return 0;
+    }
+  }
+  else {
+    iVar2 = FUN_140045310(lVar4,"InterfaceSpeed",param_2 + 0x5a8);
+    if (-1 < iVar2) {
+      return 0;
+    }
+  }
+  return 0xffffffff;
+}
+
+

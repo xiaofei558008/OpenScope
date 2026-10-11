@@ -1,0 +1,3035 @@
+14005eaaf	11	C<built-in>
+14005eac0	7	<stdin>
+14005ecc8	23	Invalid ELF file handle
+14005ece0	38	Recursion limit exceeded in ELF parser
+14005ed08	56	Symbol constant value data exceeds allocation size limit
+14005ed50	73	DW_OP_implicit_value with data size greater than 8 bytes is not supported
+14005eda0	76	DW_OP_entry_value opcode encountered that does not specify an entry location
+14005edf0	66	symbol location description contains more parts than can be stored
+14005ee38	51	byte-unaligned symbol data pieces not yet supported
+14005ee70	44	failed to parse location description element
+14005eea0	40	could not parse debug info for type unit
+14005eed0	47	could not parse debug info for compilation unit
+14005ef00	91	compilation unit with DWARF5 debug information detected - DWARF5 is not yet fully supported
+14005ef60	53	could not parse source file info for compilation unit
+14005ef98	53	could not parse source line info for compilation unit
+14005efd0	33	could not parse macro information
+14005eff8	52	could not parse call frame info for compilation unit
+14005f030	38	could not initialize symbol name index
+14005f058	61	evaluation of opcode 'DW_EXPR_EXPRESSION' not yet implemented
+14005f0a0	65	evaluation of opcode 'DW_EXPR_VAL_EXPRESSION' not yet implemented
+14005f0e8	37	unknown cfi register table value type
+14005f110	95	a debug information entry (DIE) at a specific data section offset could not be parsed/generated
+14005f170	37	file not tagged with ELF magic number
+14005f198	26	not an executable ELF file
+14005f1b8	28	file class is ELF_CLASS_NONE
+14005f1d8	30	data encoding is ELF_DATA_NONE
+14005f1f8	39	header version number is not EV_CURRENT
+14005f220	31	unsupported file version number
+14005f240	46	a maximum number of ELF files are already open
+14005f270	36	file could not be opened for reading
+14005f298	20	unexpected file size
+14005f2b0	23	parser is out of memory
+14005f2c8	23	error reading file data
+14005f2e0	37	failed to initialize libdwarf library
+14005f308	11	.debug_info
+14005f318	12	.debug_types
+14005f328	10	.debug_loc
+14005f338	10	.debug_str
+14005f348	13	.debug_abbrev
+14005f358	12	.debug_frame
+14005f368	11	.debug_line
+14005f378	14	.debug_macinfo
+14005f388	12	.debug_macro
+14005f398	13	.debug_ranges
+14005f3a8	14	.debug_aranges
+14005f3b8	9	.eh_frame
+14005f3c8	7	.symtab
+14005f3d0	7	.strtab
+14005f3d8	13	.symtab_shndx
+14005f3e8	5	.note
+14005f3f0	9	.note.iar
+14005f400	15	.debug_loclists
+14005f410	15	.debug_rnglists
+14005f420	15	.debug_line_str
+14005f430	12	.debug_names
+14005f440	11	.debug_addr
+14005f450	18	.debug_str_offsets
+14005f468	13	Little Endian
+14005f478	10	Big Endian
+14005f488	21	Unknown data encoding
+14005f4a0	65	Symbol at address %llX: did not pass allocation size sanity check
+14005f4e8	6	0x%llX
+14005f4f0	10	debug.info
+14005f500	11	debug.types
+14005f518	5	const
+14005f520	8	volatile
+14005f530	8	restrict
+14005f544	6	struct
+14005f554	5	union
+14005f55c	5	class
+14005f568	7	_Atomic
+14005f598	6	static
+14005f5a0	7	virtual
+14005f5ac	5	%s/%s
+14005f5c0	37	parsed debug types section in ms: %ld
+14005f5e8	36	parsed debug info section in ms: %ld
+14005f610	34	parsed source line info in ms: %ld
+14005f638	28	parsed macro info in ms: %ld
+14005f658	33	parsed call frame info in ms: %ld
+14005f680	15	File Size: %llu
+14005f690	21	debug_info size: %llu
+14005f6a8	22	debug_types size: %llu
+14005f6c0	17	DWARF Version: %d
+14005f6d8	17	Data Encoding: %s
+14005f6f8	19	Source Language: %s
+14005f710	15	%8u ELF symbols
+14005f720	17	%8u DWARF symbols
+14005f738	11	%8lld Funcs
+14005f748	17	%8lld InlineFuncs
+14005f760	22	%8lld Global variables
+14005f778	11	%8lld Types
+14005f788	11	%8u Members
+14005f798	19	%8u Local variables
+14005f7b0	23	%8lld Compilation units
+14005f7c8	14	%8lld SrcLines
+14005f7d8	16	%8lld Namespaces
+14005f7f0	26	%8lld Namespace extensions
+14005f810	12	%8lld Macros
+14005f820	8	%8u FDEs
+14005f830	8	%8u CIEs
+14005f840	23	Total init time: %ld ms
+140060498	8	alignof 
+1400604b0	10	const_cast
+1400604e0	9	delete[] 
+1400604f0	12	dynamic_cast
+140060508	7	delete 
+140060588	11	operator"" 
+1400605c8	5	new[]
+140060650	16	reinterpret_cast
+140060678	9	sizeof...
+140060690	11	static_cast
+1400606a0	7	sizeof 
+1400606b0	5	throw
+1400606bc	6	throw 
+1400606c8	11	signed char
+1400606e0	7	boolean
+1400606f8	6	double
+140060700	11	long double
+14006070c	5	float
+140060718	10	__float128
+140060728	13	unsigned char
+140060740	12	unsigned int
+140060750	8	unsigned
+140060768	13	unsigned long
+140060778	8	__int128
+140060788	17	unsigned __int128
+14006079c	5	short
+1400607a8	14	unsigned short
+1400607c0	9	long long
+1400607d0	18	unsigned long long
+1400607e8	9	decimal32
+1400607f8	9	decimal64
+140060808	10	decimal128
+140060820	8	char16_t
+140060830	8	char32_t
+140060840	17	decltype(nullptr)
+140060858	14	std::allocator
+140060868	9	allocator
+140060878	17	std::basic_string
+140060890	12	basic_string
+1400608a0	11	std::string
+1400608b0	70	std::basic_string<char, std::char_traits<char>, std::allocator<char> >
+1400608f8	12	std::istream
+140060908	49	std::basic_istream<char, std::char_traits<char> >
+140060940	13	basic_istream
+140060950	12	std::ostream
+140060960	49	std::basic_ostream<char, std::char_traits<char> >
+140060998	13	basic_ostream
+1400609a8	13	std::iostream
+1400609b8	50	std::basic_iostream<char, std::char_traits<char> >
+1400609f0	14	basic_iostream
+140060a00	8	_GLOBAL_
+140060a10	21	(anonymous namespace)
+140060a30	14	decltype(auto)
+140060a40	14	string literal
+140060a64	5	[abi:
+140060a70	13	{default arg#
+140060a84	6	JArray
+140060a8c	5	auto:
+140060a98	30	template parameter object for 
+140060ab8	11	vtable for 
+140060ac8	8	VTT for 
+140060ad8	24	construction vtable for 
+140060b00	13	typeinfo for 
+140060b10	18	typeinfo name for 
+140060b28	16	typeinfo fn for 
+140060b40	21	non-virtual thunk to 
+140060b58	17	virtual thunk to 
+140060b70	26	covariant return thunk to 
+140060b90	15	java Class for 
+140060ba0	19	guard variable for 
+140060bb8	22	TLS init function for 
+140060bd0	25	TLS wrapper function for 
+140060bf0	21	reference temporary #
+140060c08	5	 for 
+140060c10	17	hidden alias for 
+140060c28	22	transaction clone for 
+140060c40	26	non-transaction clone for 
+140060c5c	5	_Sat 
+140060c64	6	_Accum
+140060c6c	6	_Fract
+140060c78	8	operator
+140060c88	9	operator 
+140060cb0	5	false
+140060cc0	14	java resource 
+140060cd0	10	decltype (
+140060ce4	6	{parm#
+140060cf0	29	global constructors keyed to 
+140060d10	28	global destructors keyed to 
+140060d30	8	{lambda(
+140060d40	14	{unnamed type#
+140060d50	8	 [clone 
+140060d60	9	 restrict
+140060d70	9	 volatile
+140060d7c	6	 const
+140060d88	17	 transaction_safe
+140060da0	9	 noexcept
+140060dac	6	 throw
+140060db8	8	complex 
+140060dc8	10	imaginary 
+140060dd8	10	 __vector(
+140060de8	17	dwarf_attr_create
+140060e00	13	dwarf_hasattr
+140060e10	18	dwarf_attrval_flag
+140060e28	20	dwarf_attrval_string
+140060e40	20	dwarf_attrval_signed
+140060e58	22	dwarf_attrval_unsigned
+140060e70	22	dwarf_next_cu_header_c
+140060e88	13	dwarf_child_b
+140060e98	17	dwarf_siblingof_b
+140060eb0	27	_dwarf_search_die_within_cu
+140060ed0	14	dwarf_offdie_b
+140060ee0	9	dwarf_tag
+140060ef0	22	dwarf_get_address_size
+140060f08	21	DW_AT_abstract_origin
+140060f20	19	DW_AT_accessibility
+140060f38	15	DW_AT_addr_base
+140060f48	19	DW_AT_address_class
+140060f60	15	DW_AT_alignment
+140060f70	15	DW_AT_allocated
+140060f80	16	DW_AT_artificial
+140060f98	16	DW_AT_associated
+140060fb0	16	DW_AT_base_types
+140060fc8	18	DW_AT_binary_scale
+140060fe0	16	DW_AT_bit_offset
+140060ff8	14	DW_AT_bit_size
+140061008	16	DW_AT_bit_stride
+140061020	15	DW_AT_byte_size
+140061030	17	DW_AT_byte_stride
+140061048	20	DW_AT_call_all_calls
+140061060	27	DW_AT_call_all_source_calls
+140061080	25	DW_AT_call_all_tail_calls
+1400610a0	24	DW_AT_call_data_location
+1400610c0	21	DW_AT_call_data_value
+1400610d8	17	DW_AT_call_origin
+1400610f0	20	DW_AT_call_parameter
+140061108	13	DW_AT_call_pc
+140061118	20	DW_AT_call_return_pc
+140061130	20	DW_AT_call_tail_call
+140061148	17	DW_AT_call_target
+140061160	27	DW_AT_call_target_clobbered
+140061180	16	DW_AT_call_value
+140061198	24	DW_AT_calling_convention
+1400611b8	22	DW_AT_common_reference
+1400611d0	14	DW_AT_comp_dir
+1400611e0	16	DW_AT_const_expr
+1400611f8	17	DW_AT_const_value
+140061210	21	DW_AT_containing_type
+140061228	11	DW_AT_count
+140061238	17	DW_AT_call_column
+140061250	15	DW_AT_call_file
+140061260	15	DW_AT_call_line
+140061270	21	DW_AT_data_bit_offset
+140061288	19	DW_AT_data_location
+1400612a0	26	DW_AT_data_member_location
+1400612c0	17	DW_AT_decl_column
+1400612d8	15	DW_AT_decl_file
+1400612e8	15	DW_AT_decl_line
+1400612f8	17	DW_AT_declaration
+140061310	19	DW_AT_default_value
+140061328	19	DW_AT_decimal_scale
+140061340	18	DW_AT_decimal_sign
+140061358	15	DW_AT_defaulted
+140061368	13	DW_AT_deleted
+140061378	17	DW_AT_description
+140061390	17	DW_AT_digit_count
+1400613a8	11	DW_AT_discr
+1400613b8	16	DW_AT_discr_list
+1400613d0	17	DW_AT_discr_value
+1400613e8	14	DW_AT_dwo_name
+1400613f8	18	DW_AT_element_list
+140061410	14	DW_AT_encoding
+140061420	16	DW_AT_enum_class
+140061438	20	DW_AT_export_symbols
+140061450	14	DW_AT_external
+140061460	14	DW_AT_entry_pc
+140061470	15	DW_AT_extension
+140061480	14	DW_AT_explicit
+140061490	15	DW_AT_endianity
+1400614a0	15	DW_AT_elemental
+1400614b0	16	DW_AT_frame_base
+1400614c8	12	DW_AT_friend
+1400614d8	13	DW_AT_high_pc
+1400614e8	13	DW_AT_hi_user
+1400614f8	21	DW_AT_identifier_case
+140061510	12	DW_AT_import
+140061520	12	DW_AT_inline
+140061530	17	DW_AT_is_optional
+140061548	14	DW_AT_language
+140061558	18	DW_AT_linkage_name
+140061570	13	DW_AT_lo_user
+140061580	14	DW_AT_location
+140061590	19	DW_AT_loclists_base
+1400615a8	12	DW_AT_low_pc
+1400615b8	17	DW_AT_lower_bound
+1400615d0	16	DW_AT_macro_info
+1400615e8	12	DW_AT_macros
+1400615f8	21	DW_AT_main_subprogram
+140061610	13	DW_AT_mutable
+140061620	12	DW_AT_member
+140061630	10	DW_AT_name
+140061640	19	DW_AT_namelist_item
+140061658	14	DW_AT_noreturn
+140061668	14	DW_AT_ordering
+140061678	20	DW_AT_object_pointer
+140061690	14	DW_AT_priority
+1400616a0	14	DW_AT_producer
+1400616b0	16	DW_AT_prototyped
+1400616c8	20	DW_AT_picture_string
+1400616e0	10	DW_AT_pure
+1400616f0	17	DW_AT_return_addr
+140061708	12	DW_AT_ranges
+140061718	10	DW_AT_rank
+140061728	15	DW_AT_recursive
+140061738	15	DW_AT_reference
+140061748	19	DW_AT_rnglists_base
+140061760	22	DW_AT_rvalue_reference
+140061778	13	DW_AT_segment
+140061788	13	DW_AT_sibling
+140061798	15	DW_AT_signature
+1400617a8	19	DW_AT_specification
+1400617c0	17	DW_AT_start_scope
+1400617d8	17	DW_AT_static_link
+1400617f0	15	DW_AT_stmt_list
+140061800	22	DW_AT_str_offsets_base
+140061818	19	DW_AT_string_length
+140061830	28	DW_AT_string_length_bit_size
+140061850	29	DW_AT_string_length_byte_size
+140061870	17	DW_AT_subscr_data
+140061888	11	DW_AT_small
+140061898	10	DW_AT_type
+1400618a8	16	DW_AT_trampoline
+1400618c0	20	DW_AT_threads_scaled
+1400618d8	17	DW_AT_upper_bound
+1400618f0	18	DW_AT_use_location
+140061908	14	DW_AT_use_UTF8
+140061918	24	DW_AT_variable_parameter
+140061938	16	DW_AT_virtuality
+140061950	16	DW_AT_visibility
+140061968	26	DW_AT_vtable_elem_location
+140061988	12	DW_FORM_addr
+140061998	13	DW_FORM_block
+1400619a8	14	DW_FORM_block1
+1400619b8	14	DW_FORM_block2
+1400619c8	14	DW_FORM_block4
+1400619d8	13	DW_FORM_data1
+1400619e8	13	DW_FORM_data2
+1400619f8	13	DW_FORM_data4
+140061a08	13	DW_FORM_data8
+140061a18	15	DW_FORM_exprloc
+140061a28	12	DW_FORM_flag
+140061a38	20	DW_FORM_flag_present
+140061a50	16	DW_FORM_indirect
+140061a68	12	DW_FORM_ref1
+140061a78	12	DW_FORM_ref2
+140061a88	12	DW_FORM_ref4
+140061a98	12	DW_FORM_ref8
+140061aa8	16	DW_FORM_ref_addr
+140061ac0	16	DW_FORM_ref_sig8
+140061ad8	17	DW_FORM_ref_udata
+140061af0	13	DW_FORM_sdata
+140061b00	18	DW_FORM_sec_offset
+140061b18	14	DW_FORM_string
+140061b28	12	DW_FORM_strp
+140061b38	13	DW_FORM_udata
+140061b48	16	DW_FORM_rnglistx
+140061b60	12	DW_FORM_strx
+140061b70	13	DW_FORM_strx1
+140061b80	13	DW_FORM_strx2
+140061b90	13	DW_FORM_strx3
+140061ba0	13	DW_FORM_strx4
+140061bb0	13	DW_FORM_addrx
+140061bc0	16	DW_FORM_ref_sup4
+140061bd8	16	DW_FORM_strp_sup
+140061bf0	14	DW_FORM_data16
+140061c00	22	DW_FORM_implicit_const
+140061c18	16	DW_FORM_loclistx
+140061c30	16	DW_FORM_ref_sup8
+140061c48	14	DW_FORM_addrx1
+140061c58	14	DW_FORM_addrx2
+140061c68	14	DW_FORM_addrx3
+140061c78	14	DW_FORM_addrx4
+140061c88	11	DW_OP_deref
+140061c98	10	DW_OP_reg0
+140061ca8	10	DW_OP_reg1
+140061cb8	10	DW_OP_reg2
+140061cc8	10	DW_OP_reg3
+140061cd8	10	DW_OP_reg4
+140061ce8	10	DW_OP_reg5
+140061cf8	10	DW_OP_reg6
+140061d08	10	DW_OP_reg7
+140061d18	10	DW_OP_reg8
+140061d28	10	DW_OP_reg9
+140061d38	11	DW_OP_reg10
+140061d48	11	DW_OP_reg11
+140061d58	11	DW_OP_reg12
+140061d68	11	DW_OP_reg13
+140061d78	11	DW_OP_reg14
+140061d88	11	DW_OP_reg15
+140061d98	11	DW_OP_reg16
+140061da8	11	DW_OP_reg17
+140061db8	11	DW_OP_reg18
+140061dc8	11	DW_OP_reg19
+140061dd8	11	DW_OP_reg20
+140061de8	11	DW_OP_reg21
+140061df8	11	DW_OP_reg22
+140061e08	11	DW_OP_reg23
+140061e18	11	DW_OP_reg24
+140061e28	11	DW_OP_reg25
+140061e38	11	DW_OP_reg26
+140061e48	11	DW_OP_reg27
+140061e58	11	DW_OP_reg28
+140061e68	11	DW_OP_reg29
+140061e78	11	DW_OP_reg30
+140061e88	11	DW_OP_reg31
+140061e98	10	DW_OP_lit0
+140061ea8	10	DW_OP_lit1
+140061eb8	10	DW_OP_lit2
+140061ec8	10	DW_OP_lit3
+140061ed8	10	DW_OP_lit4
+140061ee8	10	DW_OP_lit5
+140061ef8	10	DW_OP_lit6
+140061f08	10	DW_OP_lit7
+140061f18	10	DW_OP_lit8
+140061f28	10	DW_OP_lit9
+140061f38	11	DW_OP_lit10
+140061f48	11	DW_OP_lit11
+140061f58	11	DW_OP_lit12
+140061f68	11	DW_OP_lit13
+140061f78	11	DW_OP_lit14
+140061f88	11	DW_OP_lit15
+140061f98	11	DW_OP_lit16
+140061fa8	11	DW_OP_lit17
+140061fb8	11	DW_OP_lit18
+140061fc8	11	DW_OP_lit19
+140061fd8	11	DW_OP_lit20
+140061fe8	11	DW_OP_lit21
+140061ff8	11	DW_OP_lit22
+140062008	11	DW_OP_lit23
+140062018	11	DW_OP_lit24
+140062028	11	DW_OP_lit25
+140062038	11	DW_OP_lit26
+140062048	11	DW_OP_lit27
+140062058	11	DW_OP_lit28
+140062068	11	DW_OP_lit29
+140062078	11	DW_OP_lit30
+140062088	11	DW_OP_lit31
+140062098	9	DW_OP_dup
+1400620a8	10	DW_OP_drop
+1400620b8	10	DW_OP_over
+1400620c8	10	DW_OP_swap
+1400620d8	9	DW_OP_rot
+1400620e8	12	DW_OP_xderef
+1400620f8	9	DW_OP_abs
+140062108	9	DW_OP_and
+140062118	9	DW_OP_div
+140062128	11	DW_OP_minus
+140062138	9	DW_OP_mod
+140062148	9	DW_OP_mul
+140062158	9	DW_OP_neg
+140062168	9	DW_OP_not
+140062178	8	DW_OP_or
+140062188	10	DW_OP_plus
+140062198	9	DW_OP_shl
+1400621a8	9	DW_OP_shr
+1400621b8	10	DW_OP_shra
+1400621c8	9	DW_OP_xor
+1400621d8	8	DW_OP_eq
+1400621e8	8	DW_OP_ge
+1400621f8	8	DW_OP_gt
+140062208	8	DW_OP_le
+140062218	8	DW_OP_lt
+140062228	8	DW_OP_ne
+140062238	9	DW_OP_nop
+140062248	13	DW_OP_const1u
+140062258	13	DW_OP_const1s
+140062268	10	DW_OP_pick
+140062278	16	DW_OP_deref_size
+140062290	17	DW_OP_xderef_size
+1400622a8	13	DW_OP_const2u
+1400622b8	13	DW_OP_const2s
+1400622c8	9	DW_OP_bra
+1400622d8	10	DW_OP_skip
+1400622e8	13	DW_OP_const4u
+1400622f8	13	DW_OP_const4s
+140062308	13	DW_OP_const8u
+140062318	13	DW_OP_const8s
+140062328	12	DW_OP_constu
+140062338	17	DW_OP_plus_uconst
+140062350	10	DW_OP_regx
+140062360	11	DW_OP_piece
+140062370	12	DW_OP_consts
+140062380	11	DW_OP_breg0
+140062390	11	DW_OP_breg1
+1400623a0	11	DW_OP_breg2
+1400623b0	11	DW_OP_breg3
+1400623c0	11	DW_OP_breg4
+1400623d0	11	DW_OP_breg5
+1400623e0	11	DW_OP_breg6
+1400623f0	11	DW_OP_breg7
+140062400	11	DW_OP_breg8
+140062410	11	DW_OP_breg9
+140062420	12	DW_OP_breg10
+140062430	12	DW_OP_breg11
+140062440	12	DW_OP_breg12
+140062450	12	DW_OP_breg13
+140062460	12	DW_OP_breg14
+140062470	12	DW_OP_breg15
+140062480	12	DW_OP_breg16
+140062490	12	DW_OP_breg17
+1400624a0	12	DW_OP_breg18
+1400624b0	12	DW_OP_breg19
+1400624c0	12	DW_OP_breg20
+1400624d0	12	DW_OP_breg21
+1400624e0	12	DW_OP_breg22
+1400624f0	12	DW_OP_breg23
+140062500	12	DW_OP_breg24
+140062510	12	DW_OP_breg25
+140062520	12	DW_OP_breg26
+140062530	12	DW_OP_breg27
+140062540	12	DW_OP_breg28
+140062550	12	DW_OP_breg29
+140062560	12	DW_OP_breg30
+140062570	12	DW_OP_breg31
+140062580	11	DW_OP_fbreg
+140062590	11	DW_OP_bregx
+1400625a0	10	DW_OP_addr
+1400625b0	25	DW_OP_push_object_address
+1400625d0	11	DW_OP_call2
+1400625e0	11	DW_OP_call4
+1400625f0	14	DW_OP_call_ref
+140062600	22	DW_OP_form_tls_address
+140062618	20	DW_OP_call_frame_cfa
+140062630	15	DW_OP_bit_piece
+140062640	20	DW_OP_implicit_value
+140062658	17	DW_OP_stack_value
+140062670	17	DW_OP_xderef_type
+140062688	22	DW_OP_implicit_pointer
+1400626a0	26	DW_OP_GNU_implicit_pointer
+1400626c0	11	DW_OP_addrx
+1400626d0	15	DW_OP_GNU_addrx
+1400626e0	12	DW_OP_constx
+1400626f0	16	DW_OP_GNU_constx
+140062708	17	DW_OP_entry_value
+140062720	21	DW_OP_GNU_entry_value
+140062738	16	DW_OP_const_type
+140062750	20	DW_OP_GNU_const_type
+140062768	21	DW_OP_GNU_regval_type
+140062780	17	DW_OP_regval_type
+140062798	16	DW_OP_deref_type
+1400627b0	20	DW_OP_GNU_deref_type
+1400627c8	13	DW_OP_convert
+1400627d8	17	DW_OP_GNU_convert
+1400627f0	17	DW_OP_reinterpret
+140062808	21	DW_OP_GNU_reinterpret
+140062820	23	DW_OP_GNU_parameter_ref
+140062838	26	DW_OP_GNU_push_tls_address
+140062858	20	dwarf_global_formref
+140062870	14	dwarf_formaddr
+140062880	14	dwarf_formflag
+140062890	15	dwarf_formudata
+1400628a0	15	dwarf_formsdata
+1400628b0	14	dwarf_formsig8
+1400628c0	17	dwarf_formexprloc
+1400628d8	18	dwarf_get_fde_list
+1400628f0	19	dwarf_get_fde_at_pc
+140062908	31	dwarf_get_fde_info_for_cfa_reg3
+140062928	14	dwarf_elf_init
+140062938	14	dwarf_srclines
+140062948	16	compilation unit
+140062960	12	source lines
+140062970	14	dwarf_srcfiles
+140062980	12	source files
+140062990	15	dwarf_loclist_n
+1400629a0	7	loclist
+1400629a8	23	dwarf_loclist_from_expr
+1400629c0	23	dwarf_get_macro_details
+1400629d8	5	%s %s
+1400629e0	17	_dwarf_get_ranges
+1400629f8	16	dwarf_get_ranges
+140062a10	13	dwarf_get_str
+140062a20	6	offset
+140062a28	17	_dwarf_calloc_mem
+140062a40	17	_dwarf_abbrev_add
+140062a58	18	_dwarf_attrdef_add
+140062a70	19	_dwarf_abbrev_parse
+140062a88	18	_dwarf_abbrev_find
+140062aa0	17	_dwarf_attr_alloc
+140062ab8	15	_dwarf_attr_add
+140062ac8	16	_dwarf_attr_init
+140062ae0	18	_dwarf_attr_create
+140062af8	16	_dwarf_die_alloc
+140062b10	17	_dwarf_die_create
+140062b28	16	_dwarf_die_parse
+140062b40	15	_dwarf_elf_init
+140062b50	27	'compilation unit @ 0x%llX'
+140062b74	6	armcc+
+140062b80	34	_dwarf_frame_parse_lsb_cie_augment
+140062ba8	20	_ParseCFI_V4_Members
+140062bc0	29	_dwarf_frame_read_lsb_encoded
+140062be0	20	_dwarf_frame_add_cie
+140062bf8	20	_dwarf_frame_add_fde
+140062c10	25	_dwarf_frame_section_init
+140062c30	21	_dwarf_frame_run_inst
+140062c48	26	_dwarf_frame_regtable_copy
+140062c68	31	_dwarf_frame_get_internal_table
+140062c88	20	_dwarf_frame_cleanup
+140062ca0	25	_dwarf_frame_section_load
+140062cc0	31	_dwarf_frame_interal_table_init
+140062ce0	20	_dwarf_info_first_cu
+140062cf8	20	_dwarf_info_first_tu
+140062d10	19	_dwarf_info_next_cu
+140062d28	19	_dwarf_info_next_tu
+140062d40	16	_dwarf_info_load
+140062d58	19	_dwarf_info_cleanup
+140062d70	20	_dwarf_consumer_init
+140062d88	6	.debug
+140062d90	17	.debug_abbrev.dwo
+140062da8	15	.debug_info.dwo
+140062db8	15	.debug_line.dwo
+140062dc8	19	.debug_loclists.dwo
+140062de0	16	.debug_macro.dwo
+140062df8	14	.debug_str.dwo
+140062e08	22	.debug_str_offsets.dwo
+140062e20	15	.debug_cu_index
+140062e30	15	.debug_tu_index
+140062e40	20	_dwarf_producer_init
+140062e58	11	_dwarf_init
+140062e68	12	_dwarf_alloc
+140062e78	22	_dwarf_lineno_add_file
+140062e90	25	_dwarf_lineno_run_program
+140062eb0	38	_dwarf_lineno_init_include_directories
+140062ed8	41	_dwarf_lineno_add_include_dir_name_dwarf5
+140062f08	45	_dwarf_lineno_init_include_directories_dwarf5
+140062f38	28	_dwarf_lineno_init_file_list
+140062f58	35	_dwarf_lineno_read_file_name_dwarf5
+140062f80	41	_dwarf_lineno_read_directory_index_dwarf5
+140062fb0	39	_dwarf_lineno_read_file_mod_time_dwarf5
+140062fd8	35	_dwarf_lineno_read_file_size_dwarf5
+140063000	29	_dwarf_lineno_read_md5_dwarf5
+140063020	35	_dwarf_lineno_init_file_list_dwarf5
+140063048	18	_dwarf_lineno_init
+140063060	19	_dwarf_loc_fill_loc
+140063078	23	_dwarf_loc_fill_locdesc
+140063090	23	_dwarf_loc_fill_locexpr
+1400630a8	14	_dwarf_loc_add
+1400630b8	26	_dwarf_loclist_add_locdesc
+1400630d8	18	_dwarf_loclist_add
+1400630f0	27	_dwarf_loclists_add_locdesc
+140063110	19	_dwarf_loclists_add
+140063128	42	_dwarf_macinfo_parse_opcode_operands_table
+140063158	20	_dwarf_macinfo_parse
+140063170	19	_dwarf_macinfo_init
+140063188	26	_dwarf_ranges_parse_dwarf4
+1400631a8	26	_dwarf_ranges_parse_dwarf5
+1400631c8	17	_dwarf_ranges_add
+1400631e8	22	_dwarf_write_lsb_alloc
+140063200	22	_dwarf_write_msb_alloc
+140063218	30	_dwarf_read_value_from_section
+140063238	34	_dwarf_read_addridx_dot_debug_addr
+140063260	31	_dwarf_read_string_from_section
+140063280	18	_dwarf_strtab_init
+140063b68	32	0123456789ABCDEF0123456789abcdef
+140063ddc	5	%d GB
+140063de8	12	%lld.%lld GB
+140063df8	5	%d MB
+140063e00	12	%lld.%lld MB
+140063e10	5	%d KB
+140063e18	12	%lld.%lld KB
+140063e28	9	%llu Byte
+140063e38	8	%d Bytes
+140063e58	27	SEGGER Microcontroller GmbH
+140063e78	7	Windows
+140063e88	23	Could not %s file [%s]!
+140063ec0	9	Cortex-M1
+140063ed8	9	Cortex-M3
+140063ee8	9	Simulator
+140063ef8	9	Cortex-M0
+140063f08	10	Cortex-M23
+140063f28	6	Rev.%d
+140063f30	9	Cortex-A7
+140063f40	9	Cortex-A9
+140063f50	10	Cortex-A12
+140063f60	10	Cortex-A15
+140063f70	10	Cortex-A17
+140063f80	9	Cortex-A8
+140063f90	10	Cortex-A32
+140063fa0	10	Cortex-A35
+140063fb0	11	Cortex-A520
+140063fc0	10	Cortex-A53
+140063fd0	10	Cortex-A55
+140063fe0	10	Cortex-A57
+140063ff0	10	Cortex-A72
+140064000	10	Cortex-A76
+140064010	10	Cortex-R52
+14006401c	6	BT5511
+140064048	5	ARM10
+140064050	5	ARM11
+140064058	7	ARM1136
+140064060	8	ARM1136J
+140064070	10	ARM1136J-S
+140064080	9	ARM1136JF
+140064090	9	ARM11JF-S
+1400640a0	7	ARM1156
+1400640a8	7	ARM1176
+1400640b0	8	ARM1176J
+1400640c0	10	ARM1176J-S
+1400640d0	9	ARM1176JF
+1400640e0	11	ARM1176JF-S
+1400640f0	9	Cortex-R4
+140064100	9	Cortex-R5
+140064110	9	Cortex-R8
+140064120	9	Cortex-R7
+140064130	9	Cortex-M4
+140064140	9	Cortex-M7
+140064150	10	Cortex-M33
+140064160	10	Cortex-M52
+140064170	10	Cortex-M55
+140064188	8	STAR-MC3
+140064198	10	Cortex-M85
+1400641a8	22	Unknown Cortex-M4 like
+1400641c0	9	Cortex-A5
+1400641d0	18	PowerPC (Nexus 2+)
+1400641e8	17	PowerPC (Nexus 1)
+140064200	8	MIPS M4K
+140064210	15	MIPS MicroAptiv
+140064220	9	MIPS M14K
+14006423c	6	RISC-V
+140064248	9	Xtensa LX
+140064254	6	HiFi 1
+140064260	7	HiFi 1s
+140064268	6	HiFi 3
+140064270	7	HiFi 3z
+140064278	6	HiFi 4
+140064280	6	HiFi 5
+140064288	7	HiFi 5s
+140064290	9	Fusion F1
+1400642a0	12	Unknown type
+1400642b0	11	Unspecified
+1400642bc	6	%s%s%s
+1400642c8	86	0123456789ABCDEF0123456789abcdef0123456789ABCDEF0123456789abcdefSoftware\SEGGER\J-Link
+140064320	23	Software\SEGGER\Flasher
+140064338	11	InstallPath
+140064348	13	JLink_x64.dll
+140064358	21	bin_x64\JLink_x64.dll
+140064370	11	Target DLL 
+140064380	12	 not found !
+140064390	12	J-Link Error
+1400643a0	13	DLL function 
+1400643b0	17	(...) not found !
+1400643c8	14	JLINKARM_Close
+1400643d8	19	JLINKARM_ConfigJTAG
+1400643f0	16	JLINKARM_Connect
+140064408	20	JLINKARM_ExecCommand
+140064420	27	JLINKARM_GetCompileDateTime
+140064440	22	JLINKARM_GetDLLVersion
+140064458	11	JLINKARM_Go
+140064468	13	JLINKARM_Halt
+140064478	17	JLINKARM_IsHalted
+140064490	15	JLINKARM_OpenEx
+1400644a0	14	JLINKARM_Reset
+1400644b0	17	JLINKARM_SelectIP
+1400644c8	17	JLINKARM_SetSpeed
+1400644e0	23	JLINKARM_DEVICE_GetInfo
+1400644f8	28	JLINKARM_DEVICE_SelectDialog
+140064518	21	JLINKARM_EMU_HasCapEx
+140064530	26	JLINKARM_EMU_SelectByUSBSN
+140064550	21	JLINK_RTTERMINAL_Read
+140064568	22	JLINK_RTTERMINAL_Write
+140064580	24	JLINK_RTTERMINAL_Control
+1400645a0	19	JLINKARM_TIF_Select
+1400645b8	17	JLINK_HSS_GetCaps
+1400645d0	15	JLINK_HSS_Start
+1400645e0	14	JLINK_HSS_Stop
+1400645f0	14	JLINK_HSS_Read
+140064600	8	JLINK_Go
+140064610	14	JLINK_IsHalted
+140064620	17	JLINK_ExecCommand
+140064638	29	JLINK_EMU_SelectByUSBNickname
+140064658	12	&New Project
+140064668	37	1_SlotOnActionNewProjectDialog (void)
+140064690	20	Create a new Project
+1400646a8	13	&Open Project
+1400646b8	37	1_SlotOnActionOpenProjectDialog(void)
+1400646e0	24	Open an existing Project
+140064700	13	&Save Project
+140064710	32	1_SlotOnActionSaveProject (void)
+140064738	24	Save the current Project
+140064758	20	Save Project &as ...
+140064770	34	1_SlotOnActionSaveProjectAs (void)
+140064798	31	Save the current Project as ...
+1400647b8	16	Export &Data ...
+1400647d0	31	1_SlotOnActionExportData (void)
+1400647f0	16	Save data to csv
+140064808	15	Export &Raw ...
+140064818	30	1_SlotOnActionExportRaw (void)
+140064838	21	Save raw data to file
+140064850	11	Impor&t Raw
+140064860	30	1_SlotOnActionImportRaw (void)
+140064880	19	Load data from file
+140064894	5	E&xit
+1400648a0	25	1_SlotOnActionExit (void)
+1400648c0	13	Quit this app
+1400648d0	12	Symbol Watch
+1400648e0	32	1_SlotOnActionWatchWindow (void)
+140064908	17	Show watch window
+140064920	12	Graph window
+140064930	32	1_SlotOnActionGraphWindow (void)
+140064958	17	Show Graph window
+140064970	16	Project Settings
+140064988	35	1_SlotOnActionProjectSettings(void)
+1400649b0	21	Show Project Settings
+1400649c8	10	User Guide
+1400649d8	30	1_SlotOnActionUserGuide (void)
+1400649f8	15	Open the manual
+140064a08	6	&About
+140064a10	26	1_SlotOnActionAbout (void)
+140064a30	17	Show about dialog
+140064a44	5	&File
+140064a4c	5	&View
+140064a54	6	&Tools
+140064a5c	5	&Help
+140064e68	16	2triggered(void)
+140064e80	37	https://kb.segger.com/UM08028_J-Scope
+140064ea8	34	Failed to open User Guide at:\n"%s"
+14006c5c0	17	Temp. device list
+14006c5e0	63	J-Link script files (*.JLinkScript *.pex *.pc);;All files (*.*)
+14006c620	16	Open script file
+14006c638	19	us, sampling rate: 
+14006c658	55	Output files (*.elf *.out *.obj *.axf);;All files (*.*)
+14006c690	16	Open output file
+14006c6a8	54	In RTT mode specifying the target device is mandatory.
+14006c6e0	21	No ELF file selected.
+14006c6f8	8	^[0-9]*$
+14006c708	16	Project settings
+14006c720	18	Create new project
+14006c738	20	Insufficient memory!
+14006c750	20	Connection to J-Link
+14006c768	29	1_SlotOnToggleRadioUSB (bool)
+14006c790	30	1_SlotOnToggleRadioTCPIP(bool)
+14006c7b0	6	TCP/IP
+14006c7b8	30	1_SlotOnToggleRadioExSes(bool)
+14006c7d8	16	Existing Session
+14006c7f0	27	1_SlotOnToggleCheckUSB(int)
+14006c810	18	2stateChanged(int)
+14006c828	13	SN / Nickname
+14006c838	21	Specify Target Device
+14006c850	30	1_SlotOnReleaseBtnTarget(void)
+14006c870	22	Script file (optional)
+14006c888	30	1_SlotOnReleaseBtnScript(void)
+14006c8a8	24	Target Interface & Speed
+14006c8c8	31	1_SlotOnChangedCmbBxSpeed(void)
+14006c8e8	34	1_SlotOnChangedCmbBxInterface(int)
+14006c910	25	2currentIndexChanged(int)
+14006c930	15	Sampling Source
+14006c940	40	1_SlotOnBtnGroupSamplingModeClicked(int)
+14006c970	19	2buttonClicked(int)
+14006c988	18	HSS (asynchronous)
+14006c9a0	77	<a href="https://kb.segger.com/UM08028_J-Scope#Asynchronous_Mode_(HSS)">?</a>
+14006c9f0	16	RTT (synchronus)
+14006ca10	76	<a href="https://kb.segger.com/UM08028_J-Scope#Synchronous_Mode_(RTT)">?</a>
+14006ca60	21	RTT-Plus (synchronus)
+14006ca80	76	<a href="https://kb.segger.com/UM08028_J-Scope#RTT_Plus_(Synchronous)">?</a>
+14006cad0	13	Sampling Rate
+14006cae0	13	Sample every 
+14006caf0	25	us, sampling rate: 10 kHz
+14006cb10	90	Set 0 to sample as fast as possible. <a href="https://kb.segger.com/UM08028_J-Scope">?</a>
+14006cb70	47	1_SlotOnTextChangedLineSampRate(const QString&)
+14006cba0	28	2textChanged(const QString&)
+14006cbc0	8	ELF File
+14006cbd0	31	1_SlotOnReleaseBtnElfFile(void)
+14006cbf0	26	1_SlotOnReleaseBtnOK(void)
+14006cc10	30	1_SlotOnReleaseBtnCancel(void)
+14006cc30	6	Cancel
+14006cc58	22	0123456789ABCDEF(null)
+14006d268	5	About
+14006d270	8	12:17:58
+14006d280	41	%s\nCompiled: %s %s\nhttps://www.segger.com
+14006d2b0	166	Copyright (C) %s 1998 - %s\n\nThe GUI of this software uses Qt4 which is under LGPLv21\nAdd. 3rd party licensing and source code of Qt4:\nhttps://www.segger.com/qt-usage/
+14006d360	20	1_Slot_OnBtnOK(void)
+14006d380	20	2_Sig_CloseDlg(void)
+14006e198	21	gridline-color: gray;
+14006e1b0	21	1OnColFilterChanged()
+14006e1c8	22	2SignalFilterChanged()
+14006e1e0	24	1OnColSelectionChanged()
+14006e200	25	2SignalSelectionChanged()
+14006e220	19	1OnColTextChanged()
+14006e238	20	2SignalTextChanged()
+14006e250	9	1accept()
+14006e260	10	2pressed()
+14006e270	9	1reject()
+14006e280	23	1OnTableCellActivated()
+14006e298	30	2activated(const QModelIndex&)
+14006e2c0	12	TargetDevice
+14006e2d8	15	DeviceDataModel
+14006e2e8	12	Manufacturer
+14006e2f8	6	Device
+14006e308	8	NumCores
+14006e318	10	Flash Size
+14006e328	21	DeviceSelectionDialog
+14006e340	34	:/Resources/Icons/plug-connect.png
+14006e368	10	gridLayout
+14006e378	11	lineButtons
+14006e388	11	frameHeader
+14006e398	18	horizontalLayout_2
+14006e3b0	10	frameTable
+14006e3c0	16	verticalLayout_2
+14006e3d8	9	tableView
+14006e3e4	6	widget
+14006e3f0	16	horizontalLayout
+14006e408	8	buttonOk
+14006e418	12	buttonCancel
+14006e428	22	Target Device Settings
+14006ed00	73	QToolButton {padding: -1px;} QToolBar {border: none; rgb(255, 255, 255);}
+14006ed50	91	QToolButton {padding: -1px;} QToolBar {border: none; background-color: rgb(200, 200, 200);}
+14006edb0	15	2released(void)
+14006f374	5	&Copy
+14006f37c	6	Ctrl+C
+14006f388	14	1_OnCopy(void)
+14006f398	10	Select All
+14006f3a4	6	Ctrl+A
+14006f3b0	19	1_OnSelectAll(void)
+14006f3c8	7	Find...
+14006f3d0	6	Ctrl+F
+14006f3d8	21	1_SlotOnActFind(void)
+14006f3f0	9	Clear All
+14006f400	22	1_SlotOnClearAll(void)
+14006f420	21	1_OnScrollToTop(void)
+14006f440	24	1_OnScrollToBottom(void)
+14006f460	8	Shift+F3
+14006f470	25	1_SlotOnActFindPrev(void)
+14006f490	12	Shift+Ctrl+G
+14006f4a8	25	1_SlotOnActFindNext(void)
+14006f4c4	6	Ctrl+G
+14006f4cc	6	Escape
+14006f4d8	20	1_SlotOnEscape(void)
+14006f720	19	Insufficient memory
+14006f738	36	CustTextView.cpp: Tmp. 'find' buffer
+14006f768	34	CustTextView.cpp: Tmp. copy buffer
+14006f790	42	CustTextView.cpp: FindNextString() tmp buf
+14006f7c0	42	2customContextMenuRequested(const QPoint&)
+14006fa48	26	%s (closing in %d seconds)
+14006fa68	16	%s (closing now)
+14006fa80	29	---------------------------\n
+14006faa0	31	\n---------------------------\n
+14006fac8	19	Temp. MsgBox string
+14006fae0	37	<Insufficient memory for message box>
+14006fb08	18	1_SlotOnBtn0(void)
+14006fb20	18	1_SlotOnBtn1(void)
+14006fb38	19	1_SlotOnTimer(void)
+14006fb50	14	2timeout(void)
+14006fb60	13	1accept(void)
+14006fb70	15	2accepted(void)
+14006fb80	13	1reject(void)
+14006fb90	15	2rejected(void)
+14006fba0	18	1_SlotOnCopy(void)
+14006fbb8	16	2activated(void)
+14006fbd0	25	DYNBUFFER: dynamic buffer
+14006fbf0	53	Cannot allocate %d bytes of memory for dynamic buffer
+14006fc30	89	Debugger accesses memory in dynamic buffer at offset 0x%08X which is out of array bounds.
+14006fc90	13	OTALLOC block
+14006fd39	8	 \n	"(),
+140070bf0	7	http://
+140070bf8	8	https://
+140070c08	7	QWidget
+140070c10	22	2editingFinished(void)
+140070c28	14	2toggled(bool)
+140070c38	18	2valueChanged(int)
+140070c50	9	<a href="
+140070e40	143	QLineEdit{border: 1px solid #CCCCCC; background-color: transparent;} QLineEdit:hover{border: 1px solid #CCCCCC; background-color: transparent;}
+140071138	11	[0-9]{0,%d}
+140071148	30	1_SlotOnCustSpeedEntered(void)
+140071168	25	2SignalSpeedChanged(void)
+140071678	6	Filter
+140071680	21	1OnToggleFilter(bool)
+140071698	18	1AdjustPositions()
+1400716b0	30	2sectionResized(int, int, int)
+1400716d0	30	1OnSectionMoved(int, int, int)
+1400716f0	28	2sectionMoved(int, int, int)
+140071710	29	1OnContextMenu(const QPoint&)
+140071730	18	1OnEditorChanged()
+140071748	16	2returnPressed()
+140071760	18	2editingFinished()
+140071778	37	2currentIndexChanged(const QString& )
+1400717a0	34	2editTextChanged (const QString& )
+1400717c8	21	1OnSelectionChanged()
+1400717e0	28	2activated (const QString& )
+140071800	17	1OnTextChanged ()
+140071818	21	2returnPressed (void)
+140071830	21	1OnToggleColumn(bool)
+140071848	6	WORKER
+140071860	9	<!DOCTYPE
+14007186c	5	<?xml
+140071878	7	version
+140071888	8	encoding
+140071894	5	UTF-8
+1400718a0	10	standalone
+1400718c0	57	<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>\n
+140071908	5	%.17g
+140071988	11	AboutDialog
+140071995	15	_Sig_CloseDlg()
+1400719a5	15	_Slot_OnBtnOK()
+140071a30	10	CTableView
+140071a90	22	CDeviceSelectionDialog
+140071aa8	22	OnTableCellActivated()
+140071b40	21	CDeviceDataProxyModel
+140071b57	20	OnColFilterChanged()
+140071b6c	23	OnColSelectionChanged()
+140071b84	18	OnColTextChanged()
+140071c40	22	CustDockWidgetTitleBar
+140071c58	17	_SlotOnBtnFloat()
+140071c6a	17	_SlotOnBtnClose()
+140071c7c	10	IsFloating
+140071c87	24	_SlotOnFloatChange(bool)
+140071e50	12	CustTextView
+140071e5e	24	SignalRequestGUIUpdate()
+140071e77	19	SignalTextUpdated()
+140071e8f	29	_OnContextMenuRequest(QPoint)
+140071ead	14	_OnUpdateGUI()
+140071ebc	16	_OnTextUpdated()
+140071ecd	9	_OnCopy()
+140071ed7	14	_OnSelectAll()
+140071ee6	16	_OnScrollToTop()
+140071ef7	19	_OnScrollToBottom()
+140071f0b	16	_SlotOnActFind()
+140071f1c	17	_SlotOnClearAll()
+140071f2e	20	_SlotOnActFindPrev()
+140071f43	20	_SlotOnActFindNext()
+140071f58	20	_SlotOnActFindExit()
+140071f6d	15	_SlotOnEscape()
+140071fd0	12	CustTextArea
+140071fde	19	SignalTextUpdated()
+1400720b0	17	DIALOG_CustMsgBox
+1400720d1	13	_SlotOnBtn1()
+1400720df	14	_SlotOnTimer()
+1400720ee	13	_SlotOnCopy()
+140072190	14	GraphContainer
+1400721a0	5	value
+1400721a6	26	_OnScrollValueChanged(int)
+1400721c1	24	_SlotOnColorBtnClicked()
+140072370	11	GraphWidget
+14007237d	15	UpdateRequest()
+14007238d	15	_UpdateScreen()
+14007239d	30	_OnTriggeredMoveGraphToRight()
+1400723bc	29	_OnTriggeredMoveGraphToLeft()
+1400723da	30	_OnTriggeredMoveGraphToStart()
+1400723f9	28	_OnTriggeredMoveGraphToEnd()
+140072416	6	qPoint
+14007241d	31	_OnContextMenuRequested(QPoint)
+14007243d	15	_SlotOnShowX1()
+14007244d	15	_SlotOnShowX2()
+14007245d	15	_SlotOnHideX1()
+14007246d	15	_SlotOnHideX2()
+14007247d	20	_SlotOnMoveRightX1()
+140072492	20	_SlotOnMoveRightX2()
+1400724a7	19	_SlotOnMoveLeftX1()
+1400724bb	19	_SlotOnMoveLeftX2()
+1400727b0	10	MainWindow
+1400727bc	24	_SignalFinAsyncAppInit()
+1400727d5	18	_SignalUpdateGUI()
+1400727e8	19	_SignalUpdateData()
+1400727fc	20	_SignalUpdateGraph()
+140072811	20	_SignalUpdateTable()
+140072826	25	_SignalNewProjectDialog()
+140072840	22	_SignalOptionsDialog()
+140072857	28	_SignalShowSymbolSelection()
+140072874	23	_SignalShowCustMsgBox()
+14007288c	22	_SignalUpdateProgBar()
+1400728a3	24	_SignalGetSaveFileName()
+1400728bc	21	_SignalAssignColors()
+1400728d2	14	_SignalReset()
+1400728e1	14	_SignalClose()
+1400728f0	27	_SignalShowFileDialogOpen()
+14007290c	27	_SignalShowFileDialogSave()
+140072928	25	_SlotOnNewProjectDialog()
+140072942	20	_SlotOptionsDialog()
+140072957	28	_SlotOnShowSymbolSelection()
+140072974	23	_SlotOnShowCustMsgBox()
+14007298c	22	_SlotOnUpdateProgBar()
+1400729a3	18	_SlotOnUpdateGUI()
+1400729b6	19	_SlotOnUpdateData()
+1400729ca	20	_SlotOnUpdateGraph()
+1400729df	20	_SlotOnUpdateTable()
+1400729f4	24	_SlotOnGetSaveFileName()
+140072a0d	21	_SlotOnAssignColors()
+140072a23	16	_SlotOnTimeout()
+140072a34	14	_SlotOnReset()
+140072a43	14	_SlotOnClose()
+140072a52	24	_SlotOnFinAsyncAppInit()
+140072a6b	27	_SlotOnShowFileDialogOpen()
+140072a87	27	_SlotOnShowFileDialogSave()
+140072c00	7	MenuBar
+140072c09	24	_SlotOnActionUserGuide()
+140072c22	20	_SlotOnActionAbout()
+140072c37	19	_SlotOnActionExit()
+140072c4b	31	_SlotOnActionNewProjectDialog()
+140072c6b	26	_SlotOnActionSaveProject()
+140072c86	28	_SlotOnActionSaveProjectAs()
+140072ca3	32	_SlotOnActionOpenProjectDialog()
+140072cc4	30	_SlotOnActionProjectSettings()
+140072ce3	25	_SlotOnActionExportData()
+140072cfd	24	_SlotOnActionExportRaw()
+140072d16	24	_SlotOnActionImportRaw()
+140072d2f	26	_SlotOnActionGraphWindow()
+140072d4a	26	_SlotOnActionWatchWindow()
+140072ed0	16	NewProjectDialog
+140072ee2	27	_SlotOnToggleRadioUSB(bool)
+140072efe	26	_SlotOnToggleCheckUSB(int)
+140072f19	29	_SlotOnToggleRadioTCPIP(bool)
+140072f37	29	_SlotOnToggleRadioExSes(bool)
+140072f55	25	_SlotOnReleaseBtnTarget()
+140072f6f	25	_SlotOnReleaseBtnScript()
+140072f89	33	_SlotOnChangedCmbBxInterface(int)
+140072fab	26	_SlotOnChangedCmbBxSpeed()
+140072fc6	39	_SlotOnBtnGroupSamplingModeClicked(int)
+140072fee	39	_SlotOnTextChangedLineSampRate(QString)
+140073016	26	_SlotOnReleaseBtnElfFile()
+140073031	21	_SlotOnReleaseBtnOK()
+140073047	25	_SlotOnReleaseBtnCancel()
+1400730c0	9	StatusBar
+140073190	15	SymbolSelection
+1400731a3	44	_SlotOnTreeItemChanged(QTreeWidgetItem*,int)
+1400731d0	41	_SlotOnTextChangedLineEditSearch(QString)
+1400731fa	21	_SlotOnReleaseBtnOK()
+140073210	25	_SlotOnReleaseBtnCancel()
+14007322a	56	_SlotOnTreeWidgetItemDoubleClicked(QTreeWidgetItem*,int)
+140073400	11	TableWidget
+14007340d	35	_SlotOnContextMenuRequested(QPoint)
+140073431	37	_SlotOnItemChanged(QTableWidgetItem*)
+140073457	25	_SlotOnReleasedShowHide()
+140073471	26	_SlotOnReleasedYOffsetUp()
+14007348c	28	_SlotOnReleasedYOffsetDown()
+1400734a9	23	_SlotOnReleasedYResUp()
+1400734c1	25	_SlotOnReleasedYResDown()
+1400734db	29	_SlotOnReleasedRemoveSymbol()
+1400734f9	24	_SlotOnColorBtnClicked()
+140073512	25	_SlotOnDrawStyleChanged()
+14007352c	22	_SlotOnAddBtnClicked()
+140073543	5	pItem
+140073549	37	_SlotOnItemClicked(QTableWidgetItem*)
+14007356f	26	_SlotOnReleasedAutoScale()
+14007358a	40	_SlotOnItemDblClicked(QTableWidgetItem*)
+1400735b3	11	editor,hint
+1400735bf	68	_SlotOnItemEditFinished(QWidget*,QAbstractItemDelegate::EndEditHint)
+140073690	16	TIFSpeedComboBox
+1400736a2	20	SignalSpeedChanged()
+1400736b7	25	_SlotOnCustSpeedEntered()
+140073820	7	ToolBar
+140073829	31	_OnActionStartSamplingNoReset()
+140073849	30	_OnActionStartSamplingNormal()
+140073868	32	_OnActionStartSamplingShortcut()
+140073889	23	_OnActionStopSampling()
+1400738a1	17	_OnActionZoomIn()
+1400738b3	18	_OnActionZoomOut()
+1400738c6	26	_OnActionStartStopTarget()
+1400738e1	22	_OnActionResetTarget()
+1400738f8	5	index
+1400738fe	31	_OnZoomCurrentIndexChanged(int)
+14007391e	30	_OnFPSCurrentIndexChanged(int)
+14007393d	25	_OnCheckedAutoscroll(int)
+140073a20	13	TriggerWidget
+140073a2f	10	CheckState
+140073a3a	25	_SlotOnActionRising(bool)
+140073a54	26	_SlotOnActionFalling(bool)
+140073a6f	23	_SlotOnActionBoth(bool)
+140073a87	5	Index
+140073a8d	31	_SlotOnCurrentIndexChanged(int)
+140073aad	27	_SlotOnTextChanged(QString)
+140073c10	16	UtilFilterHeader
+140073c22	21	SignalFilterChanged()
+140073c38	24	SignalSelectionChanged()
+140073c51	19	SignalTextChanged()
+140073c65	18	updateGeometries()
+140073c78	17	OnEditorChanged()
+140073c8a	20	OnSelectionChanged()
+140073c9f	15	OnTextChanged()
+140073caf	26	LIndex,OldVIndex,NewVIndex
+140073cca	27	OnSectionMoved(int,int,int)
+140073ce6	17	AdjustPositions()
+140073cfc	21	OnContextMenu(QPoint)
+140073d18	20	OnToggleFilter(bool)
+140073d2d	20	OnToggleColumn(bool)
+140073e40	13	WelcomeDialog
+140073e4f	29	_SignalFinAsyncOpenProjFile()
+140073e6d	17	_SlotOnBtnStart()
+140073e7f	13	_SlotOnRBtn()
+140073e8d	17	_SlotOnBtnOther()
+140073e9f	17	_SlotOnRejected()
+140073eb1	15	_SlotOnChkBox()
+140073ec1	29	_SlotOnFinAsyncOpenProjFile()
+140073ee0	7	J-Scope
+1400740c0	22	Initialize application
+1400740d8	16	Exit application
+1400740f0	14	Create project
+140074100	27	Initialize Project Settings
+140074120	14	Parse ELF File
+140074130	18	Start reading data
+140074148	18	Pause reading data
+140074160	17	Stop reading data
+140074178	12	Save project
+140074188	15	Save project as
+140074198	17	Open project file
+1400741b0	10	Import Raw
+1400741c0	18	Check modified ELF
+1400741d8	23	Update project settings
+1400741f0	19	Set AppStart action
+140074208	7	.jscope
+140074210	32	J-Scope project files (*.jscope)
+140074240	19	Binary file (*.raw)
+140074260	8	-openprj
+140074270	62			 Opens an existing project\n		   Syntax:	 -openprj <FILENAME>
+1400742b8	61			 Select a probe over USB\n		     Syntax:	 -USB <SN/nickname>
+140074300	69			 Select a probe over TCP/IP\n		  Syntax:	 -IP <hostname/SN/nickname>
+140074348	16	-RTTSearchRanges
+140074360	115			 Defines RTT search ranges\n		   Syntax:	 -RTTSearchRanges <RangeAddr>,<RangeSize>[,<RangeAddr1>,<RangeSize1>,..] 
+1400743d4	5	_Bool
+1400743e0	54	-USB should only be used in combination with -openprj.
+140074418	27	Error while parsing USB S/N
+140074438	53	-IP should only be used in combination with -openprj.
+140074470	21	SetRTTSearchRanges %s
+140074488	15	SuppressGUI = 1
+140074498	51	CMDLINE: Unknown command line option "%s" detected!
+1400744d0	52	CMDLINE: Failed to execute command line option "%s"!
+140074508	15	SuppressGUI = 0
+140074520	11	<Inherited>
+140074530	11	<Anonymous>
+140074540	19	Node dimension size
+140074558	22	Dimension size sibling
+140074570	24	DontShowAgainStartJScope
+140074590	41	JLinkARM.dll V%d.%.2d%s (DLL compiled %s)
+1400745c0	19	Software\SEGGER\%s\
+1400745d8	23	Application log started
+1400745f0	38	Optional command line parameters found
+140074618	8	[%d]: %s
+140074628	23	Failed to initialize %s
+140074640	21	Init project settings
+140074658	16	Parsing elf file
+140074670	24	Could not open ELF file!
+140074690	20	Parsing ELF file ...
+1400746a8	16	Target Error: %s
+1400746c8	30	Got pending Error from Target.
+1400746e8	33	Timeout. No response from target!
+140074710	18	Unspecified Error!
+140074724	6	Error.
+140074730	9	%s\nRetry?
+140074748	10	Read start
+140074758	19	APP: <ReadPeriodic>
+140074770	65	The elf file at\n%s\nwas deleted or moved to a different location.\n
+1400747c0	107	The elf file at\n%s\nwas modified.\nShould J-Scope reparse the elf file and try to match the selected symbols?
+140074830	23	Reparse & Clear symbols
+140074848	23	Reparse & Match symbols
+140074860	14	Update project
+140074870	321	RTT channel is set up to provide no timestamp!\nWithout timestamp J-Scope will assume that data points are uniformly distributed with a gap of 100 [us] each.\nTo set up the application for timestamps, please see the SEGGER wiki:\nhttps://kb.segger.com/UM08028_J-Scope#RTT:_Instrumenting_an_application_to_use_it_with_J-Scope
+1400749c0	40	Failed to allocate memory on debug probe
+1400749f0	28	Too many variables specified
+140074a10	36	Target hardware does not support HSS
+140074a38	29	Failed to initialize HSS: %s.
+140074a58	26	Failed to inititalize HSS.
+140074a78	43	Waiting until RTT Control Block is found...
+140074aa8	35	Searching for RTT control block ...
+140074ad0	24	%d Byte bool RTT Data %d
+140074af0	25	%d Byte float RTT Data %d
+140074b10	28	%d Byte unsigned RTT Data %d
+140074b30	26	%d Byte signed RTT Data %d
+140074b50	7	JScope_
+140074b60	78	Failed to start RTT Sampling.\n\nNo RTT Up-Channel named "JScope_%Format%" found
+140074bb0	109	Failed to start RTT Sampling.\n\nThe first RTT Channel named JScope_... found did not contain a valid VarFormat
+140074c20	11	JScope_Data
+140074c30	74	Failed to start RTT Sampling.\n\nNo RTT Up-Channel named "JScope_Data" found
+140074c80	13	JScope_Data_t
+140074c90	13	JScope_Config
+140074ca0	78	Failed to start RTT Sampling.\n\nNo RTT Down-Channel named "JScope_Config" found
+140074cf0	30	Failed to load J-Link library.
+140074d10	38	Failed to select J-Link via IP ('%s').
+140074d38	58	Failed to select J-Link with serial number ('%d') via USB.
+140074d78	53	Failed to select J-Link with nickname ('%s') via USB.
+140074db0	31	Failed to connect to J-Link: %s
+140074dd0	30	SetSkipInitECCRAMOnConnect = 1
+140074df0	11	unspecified
+140074e00	32	User cancelled device selection.
+140074e28	11	device = %s
+140074e38	36	Failed to select target device '%s'.
+140074e60	15	ScriptFile = %s
+140074e70	34	Failed to select script file '%s'.
+140074e98	36	Wrong syntax for "-RTTSearchRange".\n
+140074ec0	41	Failed to establish connection to target.
+140074ef0	8	V%d.%.2d
+140074f00	14	SEGGER %s %s%s
+140074f10	18	Software\SEGGER\%s
+140074f28	9	ERROR: %s
+140074f38	30	Failed to start data sampling.
+140074f58	26	RTT read buffer allocation
+140074f78	29	File has read only attribute!
+140074f98	17	Access is denied!
+140074fb0	33	The filename syntax is incorrect!
+140074fd8	14	Invalid drive!
+140074fe8	15	Path not found!
+140074ff8	15	File not found!
+140075008	26	Could not %s file [%s]!\n%s
+140075028	7	Warning
+140075030	11	Information
+14007503c	5	Error
+140075048	11	WARNING: %s
+140075060	24	APP: <CreateProject> Job
+140075080	23	APP: <InitProjSettings>
+140075098	15	APP: <Init> Job
+1400750a8	11	APP: <Exit>
+1400750b8	19	APP: <ParseELFFile>
+1400750d0	16	APP: <ReadStart>
+1400750e8	16	APP: <ReadPause>
+140075100	15	APP: <ReadStop>
+140075110	18	APP: <SaveProject>
+140075128	20	APP: <SaveProjectAs>
+140075140	23	APP: <OpenProjFile> Job
+140075158	16	APP: <ImportRaw>
+140075170	32	APP: <CheckELFModifications> Job
+140075198	29	APP: <UpdateProjSettings> Job
+1400751b8	28	APP: <SetAppStartAction> Job
+1400752d0	12	Kernel32.dll
+1400752e0	20	GetThreadDescription
+1400752f8	20	SetThreadDescription
+140075310	24	CreateToolhelp32Snapshot
+140075330	14	Process32First
+140075340	13	Process32Next
+140075350	9	Winmm.dll
+140075360	15	timeBeginPeriod
+140075370	13	timeEndPeriod
+140075380	11	timeGetTime
+140075390	12	 Debug Error
+1400753a0	39	Wrong alloc signature in memory block !
+1400753c8	53	Buffer overflow in memory block. %d bytes overflowed.
+140075400	7	\SEGGER
+140075408	10	Mutex info
+140075418	44	SOFTWARE\Microsoft\Windows NT\CurrentVersion
+140075448	14	CurrentVersion
+140075458	25	CurrentMajorVersionNumber
+140075478	18	CurrentBuildNumber
+140075490	42	Failed to allocate 0x%08X bytes of memory!
+1400754c0	53	SYS_MEM_Realloc() can not be used for shared memory !
+1400754f8	44	Failed to reallocate 0x%08X bytes of memory!
+140075550	23	Expected '%c', got '%c'
+140075568	18	Expecting a number
+140075580	23	Expected a value >= %ld
+1400755a8	15	NameWithParents
+1400755b8	9	DrawStyle
+1400755d0	8	MaxValue
+1400755e0	11	YResolution
+1400755f0	12	IsAutoConfig
+140075600	7	YOffset
+140075608	11	ShowInGraph
+140075614	6	Offset
+140075620	11	YAvgSampled
+140075630	11	YMinSampled
+140075640	11	YMaxSampled
+140075650	13	GraphColorRed
+140075660	15	GraphColorGreen
+140075670	14	GraphColorBlue
+140075680	6	TypeID
+140075688	8	IsSigned
+140075699	6	_Bool*
+1400756a1	6	float*
+1400756a8	8	*double*
+1400756c8	7	Address
+1400756d8	7	Options
+1400756e0	6	Symbol
+1400756e8	5	Graph
+1400756f8	5	Watch
+140075700	12	IsRTTSession
+140075710	18	IsRTTWithTimeStamp
+140075728	9	IsRTTPlus
+140075738	14	SamplingPeriod
+140075748	10	Connection
+140075758	10	JTAG_IRPre
+140075768	10	JTAG_DRPre
+140075778	8	SerialNo
+140075788	8	Nickname
+140075798	15	TargetInterface
+1400757a8	14	InterfaceSpeed
+1400757b8	16	TimeResolutionUs
+1400757cc	5	Level
+1400757f0	5	JLink
+1400757f8	10	ScriptFile
+140075808	7	ElfFile
+140075810	8	DataFile
+140075820	7	RawFile
+140075828	5	Scope
+140075830	7	Trigger
+140075838	13	Configuration
+140075848	15	SelectedSymbols
+140075858	5	major
+140075860	106	Project file major version can not be determined!\nIt might not be compatible with this version of J-Scope.
+1400758cc	5	minor
+1400758e0	106	Project file minor version can not be determined!\nIt might not be compatible with this version of J-Scope.
+140075950	94	The project has a newer file version and might not be compatible with this version of J-Scope.
+1400759b0	11	FileVersion
+1400759c0	7	Project
+1400759c8	11	CSV (*.csv)
+1400759d8	11	Export Data
+1400759e8	25	File could not be opened!
+140075a08	9	Timestamp
+140075a20	13	JRAW (*.jraw)
+140075a38	41	Raw data exported in the order:\nTimestamp
+140075a70	114	File size does not align with selected symbols!\nFile size: %d Bytes\nSize of selected symbols + timestamp: %d Bytes
+140075af0	65	File size exceeds symbol buffers!\n Excess data will be discarded.
+140075b38	29	Failed to close project file.
+140075b58	31	Failed to open project file %s.
+140075b78	13	JScopeProject
+140075b88	19	Failed to save XML.
+140075ba0	36	Failed to write XML to project file.
+140076158	10	%0d.%03d s
+140076168	15	%0d%03d.%03d ms
+140076178	10	f  %.4f Hz
+140076188	10	f  %.2f Hz
+140076198	11	f  %.2f KHz
+1400761a8	11	f  %.2f MHz
+1400761c0	195	QPushButton { background-color: %1;padding-left:     5px; padding-right:    5px; padding-top:      2px; padding-bottom:   2px; border:           2px;} QPushButton:pressed { background-color: %2;}
+140076288	25	1_SlotOnColorBtnClicked()
+1400762a8	10	2clicked()
+1400762b8	27	1_OnScrollValueChanged(int)
+1400764d0	153	QMenu::indicator     { width: 0; height: 0;       }QMenu::item:selected { background-color: #90C8F6; }QMenu::item:selected { color:            #000000; }
+140076570	20	1_SlotOnShowX1(void)
+140076588	18	Set measurement X1
+1400765a0	20	1_SlotOnShowX2(void)
+1400765b8	18	Set measurement X2
+1400765d0	20	1_SlotOnHideX1(void)
+1400765e8	20	Clear measurement X1
+140076600	20	1_SlotOnHideX2(void)
+140076618	20	Clear measurement X2
+140076630	35	1_OnTriggeredMoveGraphToRight(void)
+140076658	12	2activated()
+140076668	34	1_OnTriggeredMoveGraphToLeft(void)
+140076690	35	1_OnTriggeredMoveGraphToStart(void)
+1400766b8	33	1_OnTriggeredMoveGraphToEnd(void)
+1400766e0	25	1_SlotOnMoveRightX1(void)
+140076700	12	2triggered()
+140076710	25	1_SlotOnMoveRightX2(void)
+140076730	24	1_SlotOnMoveLeftX1(void)
+140076750	24	1_SlotOnMoveLeftX2(void)
+140076770	20	1_UpdateScreen(void)
+140076788	20	2UpdateRequest(void)
+140076cf8	14	Open JRAW file
+140076d08	17	1_SlotOnTimeout()
+140076d20	10	2timeout()
+140076d30	19	1_SlotOnClose(void)
+140076d48	19	2_SignalClose(void)
+140076d60	30	1_SlotOnNewProjectDialog(void)
+140076d80	30	2_SignalNewProjectDialog(void)
+140076da0	25	1_SlotOptionsDialog(void)
+140076dc0	27	2_SignalOptionsDialog(void)
+140076de0	33	1_SlotOnShowSymbolSelection(void)
+140076e08	33	2_SignalShowSymbolSelection(void)
+140076e30	28	1_SlotOnShowCustMsgBox(void)
+140076e50	28	2_SignalShowCustMsgBox(void)
+140076e70	27	1_SlotOnUpdateProgBar(void)
+140076e90	27	2_SignalUpdateProgBar(void)
+140076eb0	19	1_SlotOnUpdateGUI()
+140076ec8	19	2_SignalUpdateGUI()
+140076ee0	20	1_SlotOnUpdateData()
+140076ef8	20	2_SignalUpdateData()
+140076f10	31	1_SlotOnUpdateSymbolSelection()
+140076f30	31	2_SignalUpdateSymbolSelection()
+140076f50	25	1_SlotOnGetSaveFileName()
+140076f70	25	2_SignalGetSaveFileName()
+140076f90	22	1_SlotOnAssignColors()
+140076fa8	22	2_SignalAssignColors()
+140076fc0	15	1_SlotOnReset()
+140076fd0	15	2_SignalReset()
+140076fe0	29	1_SlotOnFinAsyncAppInit(void)
+140077000	29	2_SignalFinAsyncAppInit(void)
+140077020	32	1_SlotOnShowFileDialogOpen(void)
+140077048	32	2_SignalShowFileDialogOpen(void)
+140077070	32	1_SlotOnShowFileDialogSave(void)
+140077098	32	2_SignalShowFileDialogSave(void)
+1400770d0	6	File%i
+1400770d8	22	%sRecent File List %d\
+1400770f0	12	Creating new
+140077100	7	Opening
+140077108	24	%s project file [%s] ...
+140077128	14	%s project ...
+140077138	6	Failed
+140077140	32	New project created successfully
+140077168	27	Project opened successfully
+140077190	72	The J-Scope project has been modified.\nDo you want to save your changes?
+1400771e0	26	Project saved successfully
+140077200	27	Failed to save project file
+140077220	49	All files (*.*);;J-Scope project files (*.jscope)
+140077258	12	Open project
+140077268	13	Close project
+140077280	80	Could not open file [%s]\nFile too large - maximum file size (%d bytes) exceeded!
+1400772d8	45	Could not open file [%s]\nFailed to read data!
+140077310	46	Could not save file [%s]\nFailed to write data!
+140077340	6	[%s]\n
+140077350	63	Error while parsing subkey "%s" in settings file. Syntax error.
+140077390	48	Error while parsing settings file. Syntax error.
+1400773c8	9	%s="%s"\n
+1400773d8	18	JScopeSettings.ini
+1400773f0	9	DataFiles
+140077408	12	ProjectFiles
+140077418	8	ELFFiles
+140077428	8	LogLevel
+140077438	7	Current
+140077440	7	PROJECT
+140077620	5	FPS: 
+140077628	8	Buffer: 
+140077648	11	 samples), 
+140077658	10	kSamples/s
+140077668	9	Samples/s
+1400776e0	6	Select
+140077c50	21	Preparing Symbols ...
+140077c68	21	Finishing Symbols ...
+140077c80	46	1_SlotOnTreeItemChanged(QTreeWidgetItem*, int)
+140077cb0	35	2itemChanged(QTreeWidgetItem*, int)
+140077cd8	58	1_SlotOnTreeWidgetItemDoubleClicked(QTreeWidgetItem*, int)
+140077d18	41	2itemDoubleClicked(QTreeWidgetItem*, int)
+140077d48	28	Symbol type is not supported
+140077d68	49	1_SlotOnTextChangedLineEditSearch(const QString&)
+140077da0	14	Filter symbols
+140077db8	14	Select Symbols
+140077dc8	5	Color
+140077dd0	5	Value
+140077de0	14	Moving Average
+140077df0	12	Y Resolution
+140077e00	8	Y Offset
+140077fe8	6	Points
+140077ff0	13	Line & Points
+140078000	9	Rectangle
+140078010	26	1_SlotOnDrawStyleChanged()
+140078030	7	%iM/div
+140078038	7	%ik/div
+140078040	6	%i/div
+140078048	18	font-weight: bold;
+140078060	23	1_SlotOnAddBtnClicked()
+140078078	30	1_SlotOnReleasedShowHide(void)
+140078098	31	1_SlotOnReleasedYOffsetUp(void)
+1400780b8	11	Y-Offset up
+1400780c8	33	1_SlotOnReleasedYOffsetDown(void)
+1400780f0	13	Y-Offset down
+140078100	28	1_SlotOnReleasedYResUp(void)
+140078120	15	Y-Resolution up
+140078130	30	1_SlotOnReleasedYResDown(void)
+140078150	17	Y-Resolution down
+140078168	31	1_SlotOnReleasedAutoScale(void)
+140078188	15	Autoscale Y-Res
+140078198	34	1_SlotOnReleasedRemoveSymbol(void)
+1400781c0	13	Remove Symbol
+1400781d0	8	[+-]?\d*
+1400781e0	38	1_SlotOnItemChanged(QTableWidgetItem*)
+140078208	31	2itemChanged(QTableWidgetItem*)
+140078228	38	1_SlotOnItemClicked(QTableWidgetItem*)
+140078250	31	2itemClicked(QTableWidgetItem*)
+140078270	41	1_SlotOnItemDblClicked(QTableWidgetItem*)
+1400782a0	37	2itemDoubleClicked(QTableWidgetItem*)
+1400782c8	44	1_SlotOnContextMenuRequested(const QPoint &)
+1400782f8	43	2customContextMenuRequested(const QPoint &)
+140078330	70	1_SlotOnItemEditFinished(QWidget*, QAbstractItemDelegate::EndEditHint)
+140078378	58	2closeEditor(QWidget*, QAbstractItemDelegate::EndEditHint)
+1400785a0	9	Sampling:
+1400785b0	18	Stop Sampling (F9)
+1400785c8	7	Zoom In
+1400785d0	8	Zoom Out
+1400785e0	7	Target:
+1400785e8	12	Start Target
+1400785f8	12	Reset Target
+140078608	18	Attach to Debugger
+140078620	14	Start Sampling
+140078630	28	1_OnActionStopSampling(void)
+140078650	22	1_OnActionZoomIn(void)
+140078668	23	1_OnActionZoomOut(void)
+140078680	31	1_OnActionStartStopTarget(void)
+1400786a0	27	1_OnActionResetTarget(void)
+1400786c0	36	1_OnActionStartSamplingNoReset(void)
+1400786e8	35	1_OnActionStartSamplingNormal(void)
+140078710	37	1_OnActionStartSamplingShortcut(void)
+140078738	7	 us/Div
+140078740	7	 ms/Div
+140078748	6	 s/Div
+140078750	32	1_OnZoomCurrentIndexChanged(int)
+140078778	12	Target FPS: 
+140078788	31	1_OnFPSCurrentIndexChanged(int)
+1400787a8	26	1_OnCheckedAutoscroll(int)
+1400787c8	10	Autoscroll
+1400787d8	14	Pause Sampling
+1400787e8	19	Start Sampling (F5)
+140078800	11	Stop Target
+140078a68	5	False
+140078a70	9	Triggered
+140078a80	17	Trigger control: 
+140078a98	8	Symbol: 
+140078aa8	11	Threshold: 
+140078ab8	19	Trigger Rising Edge
+140078ad0	20	Trigger Falling Edge
+140078ae8	18	Trigger Both Edges
+140078afc	6	Value:
+140078b08	26	1_SlotOnActionRising(bool)
+140078b28	27	1_SlotOnActionFalling(bool)
+140078b48	24	1_SlotOnActionBoth(bool)
+140078b68	32	1_SlotOnCurrentIndexChanged(int)
+140078b90	35	1_SlotOnTextChanged(const QString&)
+140078da0	25	Open J-Scope project file
+140078dc0	49	Please select one of the following start options:
+140078df8	18	1_SlotOnRBtn(void)
+140078e10	20	Open recent project:
+140078e28	22	1_SlotOnBtnOther(void)
+140078e40	8	Other...
+140078e50	20	1_SlotOnChkBox(void)
+140078e68	31	Do not show this message again.
+140078e88	22	1_SlotOnBtnStart(void)
+140078ea0	13	Start J-Scope
+140078eb0	34	1_SlotOnFinAsyncOpenProjFile(void)
+140078ed8	34	2_SignalFinAsyncOpenProjFile(void)
+140078f00	13	Welcome to %s
+140078f10	22	1_SlotOnRejected(void)
+140078f78	17	Unknown exception
+140078fa8	14	bad allocation
+140078fd0	20	bad array new length
+14007c640	6	.rdata
+14007c664	13	.rdata$voltmd
+14007c758	5	.data
+14007c79c	6	.pdata
+1400871a2	19	??1QString@@QEAA@XZ
+1400871b8	47	?fromAscii_helper@QString@@CAPEAUData@1@PEBDH@Z
+1400871ea	57	?connect@QObject@@SA_NPEBV1@PEBD01W4ConnectionType@Qt@@@Z
+140087226	45	?childEvent@QObject@@MEAAXPEAVQChildEvent@@@Z
+140087256	35	?connectNotify@QObject@@MEAAXPEBD@Z
+14008727c	41	?customEvent@QObject@@MEAAXPEAVQEvent@@@Z
+1400872a8	38	?disconnectNotify@QObject@@MEAAXPEBD@Z
+1400872d2	48	?eventFilter@QObject@@UEAA_NPEAV1@PEAVQEvent@@@Z
+140087306	45	?timerEvent@QObject@@MEAAXPEAVQTimerEvent@@@Z
+140087336	22	??1QByteArray@@QEAA@XZ
+140087350	19	??0QString@@QEAA@XZ
+140087366	25	??0QString@@QEAA@AEBV0@@Z
+140087382	32	??4QString@@QEAAAEAV0@$$QEAV0@@Z
+1400873a6	39	?toAscii@QString@@QEBA?AVQByteArray@@XZ
+1400873d0	29	?toInt@QString@@QEBAHPEA_NH@Z
+1400873f0	28	?number@QString@@SA?AV1@HH@Z
+140087410	28	?number@QString@@SA?AV1@IH@Z
+140087430	72	??0QRegExp@@QEAA@AEBVQString@@W4CaseSensitivity@Qt@@W4PatternSyntax@0@@Z
+14008747c	19	??1QRegExp@@QEAA@XZ
+140087492	36	?event@QObject@@UEAA_NPEAVQEvent@@@Z
+1400874ba	17	?qFree@@YAXPEAX@Z
+1400874ce	44	?cast@QMetaObject@@QEBAPEAVQObject@@PEAV2@@Z
+1400874fe	51	?connectSlotsByName@QMetaObject@@SAXPEAVQObject@@@Z
+140087534	30	??4QString@@QEAAAEAV0@AEBV0@@Z
+140087556	63	?contains@QString@@QEBA?AVQBool@@AEBV1@W4CaseSensitivity@Qt@@@Z
+140087598	27	?left@QString@@QEBA?AV1@H@Z
+1400875b6	28	?right@QString@@QEBA?AV1@H@Z
+1400875d6	57	?startsWith@QString@@QEBA_NAEBV1@W4CaseSensitivity@Qt@@@Z
+140087612	55	?endsWith@QString@@QEBA_NAEBV1@W4CaseSensitivity@Qt@@@Z
+14008764c	29	?toLower@QString@@QEBA?AV1@XZ
+14008766c	35	?append@QString@@QEAAAEAV1@AEBV1@@Z
+140087692	34	?fromAscii@QString@@SA?AV1@PEBDH@Z
+1400876b8	33	?fromUtf8@QString@@SA?AV1@PEBDH@Z
+1400876dc	53	?compare@QString@@QEBAHAEBV1@W4CaseSensitivity@Qt@@@Z
+140087714	26	??8QString@@QEBA_NAEBV0@@Z
+140087732	26	??MQString@@QEBA_NAEBV0@@Z
+140087750	24	??8QString@@QEBA_NPEBD@Z
+14008776c	24	??9QString@@QEBA_NPEBD@Z
+140087788	37	?detach@QListData@@QEAAPEAUData@1@H@Z
+1400877b0	46	?detach_grow@QListData@@QEAAPEAUData@1@PEAHH@Z
+1400877e2	28	?realloc@QListData@@QEAAXH@Z
+140087802	32	?append@QListData@@QEAAPEAPEAXXZ
+140087826	31	?begin@QListData@@QEBAPEAPEAXXZ
+140087848	105	?qt_qFindChildren_helper@@YAXPEBVQObject@@AEBVQString@@PEBVQRegExp@@AEBUQMetaObject@@PEAV?$QList@PEAX@@@Z
+1400878b4	39	?objectName@QObject@@QEBA?AVQString@@XZ
+1400878de	44	?setObjectName@QObject@@QEAAXAEBVQString@@@Z
+14008790e	33	?createData@QMapData@@SAPEAU1@H@Z
+140087932	36	?continueFreeData@QMapData@@QEAAXH@Z
+14008795a	52	?node_create@QMapData@@QEAAPEAUNode@1@QEAPEAU21@HH@Z
+140087992	52	?node_delete@QMapData@@QEAAXQEAPEAUNode@1@HPEAU21@@Z
+1400879ca	26	?qHash@@YAIAEBVQString@@@Z
+1400879e8	36	?allocateNode@QHashData@@QEAAPEAXH@Z
+140087a10	69	?detach_helper2@QHashData@@QEAAPEAU1@P6AXPEAUNode@1@PEAX@ZP6AX0@ZHH@Z
+140087a58	27	?rehash@QHashData@@QEAAXH@Z
+140087a76	48	?free_helper@QHashData@@QEAAXP6AXPEAUNode@1@@Z@Z
+140087aaa	43	?nextNode@QHashData@@SAPEAUNode@1@PEAU21@@Z
+140087ad8	20	??0QVariant@@QEAA@XZ
+140087af0	20	??1QVariant@@QEAA@XZ
+140087b08	21	??0QVariant@@QEAA@H@Z
+140087b20	21	??0QVariant@@QEAA@I@Z
+140087b38	24	??0QVariant@@QEAA@PEBD@Z
+140087b54	33	??0QVariant@@QEAA@AEBVQString@@@Z
+140087b78	33	??4QVariant@@QEAAAEAV0@$$QEAV0@@Z
+140087b9c	29	?toInt@QVariant@@QEBAHPEA_N@Z
+140087bbc	30	?toUInt@QVariant@@QEBAIPEA_N@Z
+140087bde	38	?toString@QVariant@@QEBA?AVQString@@XZ
+140087c08	23	??1QModelIndex@@QEAA@XZ
+140087c22	39	?data@QModelIndex@@QEBA?AVQVariant@@H@Z
+140087c4c	43	??0QAbstractItemModel@@QEAA@PEAVQObject@@@Z
+140087c7a	30	??1QAbstractItemModel@@UEAA@XZ
+140087c9c	58	?createIndex@QAbstractItemModel@@IEBA?AVQModelIndex@@HHH@Z
+140087cda	44	?beginResetModel@QAbstractItemModel@@IEAAXXZ
+140087d0a	42	?endResetModel@QAbstractItemModel@@IEAAXXZ
+140087d38	38	?instance@QCoreApplication@@SAPEAV1@XZ
+140087d62	64	?translate@QCoreApplication@@SA?AVQString@@PEBD00W4Encoding@1@@Z
+140087da6	37	?translate@QRect@@QEAAXAEBVQPoint@@@Z
+140087dce	55	?buddy@QAbstractItemModel@@UEBA?AVQModelIndex@@AEBV2@@Z
+140087e08	59	?canFetchMore@QAbstractItemModel@@UEBA_NAEBVQModelIndex@@@Z
+140087e46	93	?dropMimeData@QAbstractItemModel@@UEAA_NPEBVQMimeData@@W4DropAction@Qt@@HHAEBVQModelIndex@@@Z
+140087ea6	55	?fetchMore@QAbstractItemModel@@UEAAXAEBVQModelIndex@@@Z
+140087ee0	58	?hasChildren@QAbstractItemModel@@UEBA_NAEBVQModelIndex@@@Z
+140087f1e	62	?insertColumns@QAbstractItemModel@@UEAA_NHHAEBVQModelIndex@@@Z
+140087f60	59	?insertRows@QAbstractItemModel@@UEAA_NHHAEBVQModelIndex@@@Z
+140087f9e	77	?itemData@QAbstractItemModel@@UEBA?AV?$QMap@HVQVariant@@@@AEBVQModelIndex@@@Z
+140087fee	121	?match@QAbstractItemModel@@UEBA?AV?$QList@VQModelIndex@@@@AEBVQModelIndex@@HAEBVQVariant@@HV?$QFlags@W4MatchFlag@Qt@@@@@Z
+14008806a	55	?metaObject@QAbstractItemModel@@UEBAPEBUQMetaObject@@XZ
+1400880a4	79	?mimeData@QAbstractItemModel@@UEBAPEAVQMimeData@@AEBV?$QList@VQModelIndex@@@@@Z
+1400880f6	53	?mimeTypes@QAbstractItemModel@@UEBA?AVQStringList@@XZ
+14008812e	68	?qt_metacall@QAbstractItemModel@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140088176	47	?qt_metacast@QAbstractItemModel@@UEAAPEAXPEBD@Z
+1400881a8	62	?removeColumns@QAbstractItemModel@@UEAA_NHHAEBVQModelIndex@@@Z
+1400881ea	59	?removeRows@QAbstractItemModel@@UEAA_NHHAEBVQModelIndex@@@Z
+140088228	35	?revert@QAbstractItemModel@@UEAAXXZ
+14008824e	69	?setData@QAbstractItemModel@@UEAA_NAEBVQModelIndex@@AEBVQVariant@@H@Z
+140088296	77	?setHeaderData@QAbstractItemModel@@UEAA_NHW4Orientation@Qt@@AEBVQVariant@@H@Z
+1400882e6	83	?setItemData@QAbstractItemModel@@UEAA_NAEBVQModelIndex@@AEBV?$QMap@HVQVariant@@@@@Z
+14008833c	50	?sort@QAbstractItemModel@@UEAAXHW4SortOrder@Qt@@@Z
+140088372	59	?span@QAbstractItemModel@@UEBA?AVQSize@@AEBVQModelIndex@@@Z
+1400883b0	36	?submit@QAbstractItemModel@@UEAA_NXZ
+1400883d8	79	?supportedDropActions@QAbstractItemModel@@UEBA?AV?$QFlags@W4DropAction@Qt@@@@XZ
+14008842a	34	?shared_null@QListData@@2UData@1@A
+140088450	28	?shared_null@QMapData@@2U1@A
+140088470	29	?shared_null@QHashData@@2U1@A
+140088490	33	?blockSignals@QObject@@QEAA_N_N@Z
+1400884b4	31	??0QTimer@@QEAA@PEAVQObject@@@Z
+1400884d6	18	??1QTimer@@UEAA@XZ
+1400884ec	29	?setInterval@QTimer@@QEAAXH@Z
+14008850c	22	?start@QTimer@@QEAAXXZ
+140088526	21	?stop@QTimer@@QEAAXXZ
+14008853e	43	?metaObject@QTimer@@UEBAPEBUQMetaObject@@XZ
+14008856c	56	?qt_metacall@QTimer@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400885a8	35	?qt_metacast@QTimer@@UEAAPEAXPEBD@Z
+1400885ce	44	?timerEvent@QTimer@@MEAAXPEAVQTimerEvent@@@Z
+1400885fe	56	?qInstallMsgHandler@@YAP6AXW4QtMsgType@@PEBD@ZP6AX01@Z@Z
+14008863a	43	?toLocal8Bit@QString@@QEBA?AVQByteArray@@XZ
+140088668	38	?fromLocal8Bit@QString@@SA?AV1@PEBDH@Z
+140088692	19	??0QRegExp@@QEAA@XZ
+1400886a8	41	?setPattern@QRegExp@@QEAAXAEBVQString@@@Z
+1400886d4	29	??0QUrl@@QEAA@AEBVQString@@@Z
+1400886f4	16	??1QUrl@@QEAA@XZ
+140088708	48	?toNativeSeparators@QDir@@SA?AVQString@@AEBV2@@Z
+14008873c	17	?qBadAlloc@@YAXXZ
+140088750	29	?sender@QObject@@IEBAPEAV1@XZ
+140088770	35	?allocate@QVectorData@@SAPEAU1@HH@Z
+140088796	31	?free@QVectorData@@SAXPEAU1@H@Z
+1400887b8	29	?grow@QVectorData@@SAHHHH_N@Z
+1400887d8	31	?shared_null@QVectorData@@2U1@A
+1400887fa	55	?activate@QMetaObject@@SAXPEAVQObject@@PEBU1@HPEAPEAX@Z
+140088834	31	??0QChar@@QEAA@UQLatin1Char@@@Z
+140088856	43	?arg@QString@@QEBA?AV1@AEBV1@HAEBVQChar@@@Z
+140088884	29	?number@QString@@SA?AV1@NDH@Z
+1400888a4	33	?append@QString@@QEAAAEAV1@PEBD@Z
+1400888c8	39	?contains@QRect@@QEBA_NAEBVQPoint@@_N@Z
+1400888f2	58	?winEventFilter@QCoreApplication@@UEAA_NPEAUtagMSG@@PEAJ@Z
+140088930	82	?processEvents@QCoreApplication@@SAXV?$QFlags@W4ProcessEventsFlag@QEventLoop@@@@@Z
+140088986	30	?exit@QCoreApplication@@SAXH@Z
+1400889a8	31	?toDouble@QString@@QEBANPEA_N@Z
+1400889ca	42	?exactMatch@QRegExp@@QEBA_NAEBVQString@@@Z
+1400889f8	22	??0QVariant@@QEAA@_J@Z
+140088a12	21	??0QVariant@@QEAA@N@Z
+140088a2a	21	??0QVariant@@QEAA@M@Z
+140088a40	11	QtCore4.dll
+140088a4e	28	??0QKeySequence@@QEAA@HHHH@Z
+140088a6e	24	??1QKeySequence@@QEAA@XZ
+140088a8a	24	??BQKeySequence@@QEBAHXZ
+140088aa6	22	?show@QWidget@@QEAAXXZ
+140088ac0	22	?hide@QWidget@@QEAAXXZ
+140088ada	40	?addAction@QWidget@@QEAAXPEAVQAction@@@Z
+140088b06	32	??0QAction@@QEAA@PEAVQObject@@@Z
+140088b2a	19	??1QAction@@UEAA@XZ
+140088b40	38	?setText@QAction@@QEAAXAEBVQString@@@Z
+140088b6a	43	?setStatusTip@QAction@@QEAAXAEBVQString@@@Z
+140088b98	47	?setShortcut@QAction@@QEAAXAEBVQKeySequence@@@Z
+140088bca	32	?setCheckable@QAction@@QEAAX_N@Z
+140088bee	28	?isChecked@QAction@@QEBA_NXZ
+140088c0e	30	?setChecked@QAction@@QEAAX_N@Z
+140088c30	30	?setEnabled@QAction@@QEAAX_N@Z
+140088c52	30	??0QMenu@@QEAA@PEAVQWidget@@@Z
+140088c74	17	??1QMenu@@UEAA@XZ
+140088c88	37	?setTitle@QMenu@@QEAAXAEBVQString@@@Z
+140088cb0	33	??0QMenuBar@@QEAA@PEAVQWidget@@@Z
+140088cd4	20	??1QMenuBar@@UEAA@XZ
+140088cec	49	?addMenu@QMenuBar@@QEAAPEAVQAction@@PEAVQMenu@@@Z
+140088d20	22	?exec@QDialog@@QEAAHXZ
+140088d3a	45	?actionEvent@QMenu@@MEAAXPEAVQActionEvent@@@Z
+140088d6a	48	?actionEvent@QMenuBar@@MEAAXPEAVQActionEvent@@@Z
+140088d9e	39	?changeEvent@QMenu@@MEAAXPEAVQEvent@@@Z
+140088dc8	42	?changeEvent@QMenuBar@@MEAAXPEAVQEvent@@@Z
+140088df6	45	?closeEvent@QWidget@@MEAAXPEAVQCloseEvent@@@Z
+140088e26	57	?contextMenuEvent@QWidget@@MEAAXPEAVQContextMenuEvent@@@Z
+140088e62	25	?devType@QWidget@@UEBAHXZ
+140088e7e	53	?dragEnterEvent@QWidget@@MEAAXPEAVQDragEnterEvent@@@Z
+140088eb6	53	?dragLeaveEvent@QWidget@@MEAAXPEAVQDragLeaveEvent@@@Z
+140088eee	51	?dragMoveEvent@QWidget@@MEAAXPEAVQDragMoveEvent@@@Z
+140088f24	43	?dropEvent@QWidget@@MEAAXPEAVQDropEvent@@@Z
+140088f52	33	?enabledChange@QWidget@@MEAAX_N@Z
+140088f76	38	?enterEvent@QMenu@@MEAAXPEAVQEvent@@@Z
+140088fa0	40	?enterEvent@QWidget@@MEAAXPEAVQEvent@@@Z
+140088fcc	36	?event@QAction@@MEAA_NPEAVQEvent@@@Z
+140088ff4	34	?event@QMenu@@MEAA_NPEAVQEvent@@@Z
+14008901a	37	?event@QMenuBar@@MEAA_NPEAVQEvent@@@Z
+140089042	56	?eventFilter@QMenuBar@@MEAA_NPEAVQObject@@PEAVQEvent@@@Z
+14008907e	48	?focusInEvent@QMenuBar@@MEAAXPEAVQFocusEvent@@@Z
+1400890b2	47	?focusInEvent@QWidget@@MEAAXPEAVQFocusEvent@@@Z
+1400890e4	37	?focusNextPrevChild@QMenu@@MEAA_N_N@Z
+14008910c	39	?focusNextPrevChild@QWidget@@MEAA_N_N@Z
+140089136	49	?focusOutEvent@QMenuBar@@MEAAXPEAVQFocusEvent@@@Z
+14008916a	48	?focusOutEvent@QWidget@@MEAAXPEAVQFocusEvent@@@Z
+14008919e	39	?fontChange@QWidget@@MEAAXAEBVQFont@@@Z
+1400891c8	33	?getDC@QWidget@@UEBAPEAUHDC__@@XZ
+1400891ec	34	?heightForWidth@QMenuBar@@UEBAHH@Z
+140089212	33	?heightForWidth@QWidget@@UEBAHH@Z
+140089236	41	?hideEvent@QMenu@@MEAAXPEAVQHideEvent@@@Z
+140089262	43	?hideEvent@QWidget@@MEAAXPEAVQHideEvent@@@Z
+140089290	57	?inputMethodEvent@QWidget@@MEAAXPEAVQInputMethodEvent@@@Z
+1400892cc	69	?inputMethodQuery@QWidget@@UEBA?AVQVariant@@W4InputMethodQuery@Qt@@@Z
+140089314	44	?keyPressEvent@QMenu@@MEAAXPEAVQKeyEvent@@@Z
+140089344	47	?keyPressEvent@QMenuBar@@MEAAXPEAVQKeyEvent@@@Z
+140089376	48	?keyReleaseEvent@QWidget@@MEAAXPEAVQKeyEvent@@@Z
+1400893aa	32	?languageChange@QWidget@@MEAAXXZ
+1400893ce	38	?leaveEvent@QMenu@@MEAAXPEAVQEvent@@@Z
+1400893f8	41	?leaveEvent@QMenuBar@@MEAAXPEAVQEvent@@@Z
+140089424	44	?metaObject@QAction@@UEBAPEBUQMetaObject@@XZ
+140089454	42	?metaObject@QMenu@@UEBAPEBUQMetaObject@@XZ
+140089482	58	?metric@QWidget@@MEBAHW4PaintDeviceMetric@QPaintDevice@@@Z
+1400894c0	43	?minimumSizeHint@QMenuBar@@UEBA?AVQSize@@XZ
+1400894ee	42	?minimumSizeHint@QWidget@@UEBA?AVQSize@@XZ
+14008951c	56	?mouseDoubleClickEvent@QWidget@@MEAAXPEAVQMouseEvent@@@Z
+140089558	47	?mouseMoveEvent@QMenu@@MEAAXPEAVQMouseEvent@@@Z
+14008958a	50	?mouseMoveEvent@QMenuBar@@MEAAXPEAVQMouseEvent@@@Z
+1400895c0	48	?mousePressEvent@QMenu@@MEAAXPEAVQMouseEvent@@@Z
+1400895f4	51	?mousePressEvent@QMenuBar@@MEAAXPEAVQMouseEvent@@@Z
+14008962a	50	?mouseReleaseEvent@QMenu@@MEAAXPEAVQMouseEvent@@@Z
+140089660	53	?mouseReleaseEvent@QMenuBar@@MEAAXPEAVQMouseEvent@@@Z
+140089698	43	?moveEvent@QWidget@@MEAAXPEAVQMoveEvent@@@Z
+1400896c6	46	?paintEngine@QWidget@@UEBAPEAVQPaintEngine@@XZ
+1400896f8	43	?paintEvent@QMenu@@MEAAXPEAVQPaintEvent@@@Z
+140089726	46	?paintEvent@QMenuBar@@MEAAXPEAVQPaintEvent@@@Z
+140089758	45	?paletteChange@QWidget@@MEAAXAEBVQPalette@@@Z
+140089788	57	?qt_metacall@QAction@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400897c4	55	?qt_metacall@QMenu@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400897fe	36	?qt_metacast@QAction@@UEAAPEAXPEBD@Z
+140089826	34	?qt_metacast@QMenu@@UEAAPEAXPEBD@Z
+14008984c	38	?releaseDC@QWidget@@UEBAXPEAUHDC__@@@Z
+140089876	48	?resizeEvent@QMenuBar@@MEAAXPEAVQResizeEvent@@@Z
+1400898aa	47	?resizeEvent@QWidget@@MEAAXPEAVQResizeEvent@@@Z
+1400898dc	31	?setVisible@QMenuBar@@UEAAX_N@Z
+1400898fe	30	?setVisible@QWidget@@UEAAX_N@Z
+140089920	43	?showEvent@QWidget@@MEAAXPEAVQShowEvent@@@Z
+14008994e	33	?sizeHint@QMenu@@UEBA?AVQSize@@XZ
+140089972	36	?sizeHint@QMenuBar@@UEBA?AVQSize@@XZ
+14008999a	41	?styleChange@QWidget@@MEAAXAEAVQStyle@@@Z
+1400899c6	47	?tabletEvent@QWidget@@MEAAXPEAVQTabletEvent@@@Z
+1400899f8	43	?timerEvent@QMenu@@MEAAXPEAVQTimerEvent@@@Z
+140089a26	46	?timerEvent@QMenuBar@@MEAAXPEAVQTimerEvent@@@Z
+140089a58	43	?wheelEvent@QMenu@@MEAAXPEAVQWheelEvent@@@Z
+140089a86	45	?wheelEvent@QWidget@@MEAAXPEAVQWheelEvent@@@Z
+140089ab6	43	?winEvent@QWidget@@MEAA_NPEAUtagMSG@@PEAJ@Z
+140089ae4	42	?windowActivationChange@QWidget@@MEAAX_N@Z
+140089b12	19	??0QPixmap@@QEAA@XZ
+140089b28	19	??1QPixmap@@UEAA@XZ
+140089b3e	32	??4QPixmap@@QEAAAEAV0@$$QEAV0@@Z
+140089b62	78	?loadFromData@QPixmap@@QEAA_NPEBEIPEBDV?$QFlags@W4ImageConversionFlag@Qt@@@@@Z
+140089bb4	30	??0QIcon@@QEAA@AEBVQPixmap@@@Z
+140089bd6	54	??0QWidget@@QEAA@PEAV0@V?$QFlags@W4WindowType@Qt@@@@@Z
+140089c10	19	??1QWidget@@UEAA@XZ
+140089c26	31	?setDisabled@QWidget@@QEAAX_N@Z
+140089c48	41	?setFixedSize@QWidget@@QEAAXAEBVQSize@@@Z
+140089c74	32	?setFixedSize@QWidget@@QEAAXHH@Z
+140089c98	45	?setWindowTitle@QWidget@@QEAAXAEBVQString@@@Z
+140089cc8	44	?setFocus@QWidget@@QEAAXW4FocusReason@Qt@@@Z
+140089cf8	35	?resize@QWidget@@QEAAXAEBVQSize@@@Z
+140089d1e	40	?setLayout@QWidget@@QEAAXPEAVQLayout@@@Z
+140089d4a	37	?setText@QLabel@@QEAAXAEBVQString@@@Z
+140089d72	35	?text@QLineEdit@@QEBA?AVQString@@XZ
+140089d98	48	?setValidator@QLineEdit@@QEAAXPEBVQValidator@@@Z
+140089dcc	40	?setText@QLineEdit@@QEAAXAEBVQString@@@Z
+140089df8	36	?isChecked@QAbstractButton@@QEBA_NXZ
+140089e20	38	?setChecked@QAbstractButton@@QEAAX_N@Z
+140089e4a	54	?setSizeConstraint@QLayout@@QEAAXW4SizeConstraint@1@@Z
+140089e84	40	?addWidget@QLayout@@QEAAXPEAVQWidget@@@Z
+140089eb0	76	?addWidget@QBoxLayout@@QEAAXPEAVQWidget@@HV?$QFlags@W4AlignmentFlag@Qt@@@@@Z
+140089f00	23	??0QHBoxLayout@@QEAA@XZ
+140089f1a	23	??1QHBoxLayout@@UEAA@XZ
+140089f34	33	?setSpacing@QGridLayout@@QEAAXH@Z
+140089f58	78	?addWidget@QGridLayout@@QEAAXPEAVQWidget@@HHV?$QFlags@W4AlignmentFlag@Qt@@@@@Z
+140089faa	80	?addWidget@QGridLayout@@QEAAXPEAVQWidget@@HHHHV?$QFlags@W4AlignmentFlag@Qt@@@@@Z
+140089ffe	78	?addLayout@QGridLayout@@QEAAXPEAVQLayout@@HHV?$QFlags@W4AlignmentFlag@Qt@@@@@Z
+14008a050	41	??0QRegExpValidator@@QEAA@PEAVQObject@@@Z
+14008a07c	28	??1QRegExpValidator@@UEAA@XZ
+14008a09c	49	?setRegExp@QRegExpValidator@@QEAAXAEBVQRegExp@@@Z
+14008a0d0	32	?currentIndex@QComboBox@@QEBAHXZ
+14008a0f4	36	?setCurrentIndex@QComboBox@@QEAAXH@Z
+14008a11c	61	??0QDialog@@QEAA@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z
+14008a15c	19	??1QDialog@@UEAA@XZ
+14008a172	37	??0QButtonGroup@@QEAA@PEAVQObject@@@Z
+14008a19a	24	??1QButtonGroup@@UEAA@XZ
+14008a1b6	37	?setExclusive@QButtonGroup@@QEAAX_N@Z
+14008a1de	53	?addButton@QButtonGroup@@QEAAXPEAVQAbstractButton@@@Z
+14008a216	46	?id@QButtonGroup@@QEBAHPEAVQAbstractButton@@@Z
+14008a248	24	?accept@QDialog@@UEAAXXZ
+14008a264	47	?actionEvent@QWidget@@MEAAXPEAVQActionEvent@@@Z
+14008a296	45	?addItem@QBoxLayout@@UEAAXPEAVQLayoutItem@@@Z
+14008a2c6	41	?changeEvent@QWidget@@MEAAXPEAVQEvent@@@Z
+14008a2f2	45	?childEvent@QLayout@@MEAAXPEAVQChildEvent@@@Z
+14008a322	45	?closeEvent@QDialog@@MEAAXPEAVQCloseEvent@@@Z
+14008a352	57	?contextMenuEvent@QDialog@@MEAAXPEAVQContextMenuEvent@@@Z
+14008a38e	26	?count@QBoxLayout@@UEBAHXZ
+14008a3ac	23	?done@QDialog@@UEAAXH@Z
+14008a3c6	36	?event@QWidget@@MEAA_NPEAVQEvent@@@Z
+14008a3ee	55	?eventFilter@QDialog@@MEAA_NPEAVQObject@@PEAVQEvent@@@Z
+14008a428	71	?expandingDirections@QBoxLayout@@UEBA?AV?$QFlags@W4Orientation@Qt@@@@XZ
+14008a472	39	?fixup@QValidator@@UEBAXAEAVQString@@@Z
+14008a49c	35	?geometry@QLayout@@UEBA?AVQRect@@XZ
+14008a4c2	39	?hasHeightForWidth@QBoxLayout@@UEBA_NXZ
+14008a4ec	36	?heightForWidth@QBoxLayout@@UEBAHH@Z
+14008a514	38	?indexOf@QLayout@@UEBAHPEAVQWidget@@@Z
+14008a53e	31	?invalidate@QBoxLayout@@UEAAXXZ
+14008a560	26	?isEmpty@QLayout@@UEBA_NXZ
+14008a57e	44	?itemAt@QBoxLayout@@UEBAPEAVQLayoutItem@@H@Z
+14008a5ae	46	?keyPressEvent@QDialog@@MEAAXPEAVQKeyEvent@@@Z
+14008a5e0	46	?keyPressEvent@QWidget@@MEAAXPEAVQKeyEvent@@@Z
+14008a612	29	?layout@QLayout@@UEAAPEAV1@XZ
+14008a632	40	?leaveEvent@QWidget@@MEAAXPEAVQEvent@@@Z
+14008a65e	41	?maximumSize@QBoxLayout@@UEBA?AVQSize@@XZ
+14008a68a	49	?metaObject@QButtonGroup@@UEBAPEBUQMetaObject@@XZ
+14008a6be	48	?metaObject@QHBoxLayout@@UEBAPEBUQMetaObject@@XZ
+14008a6f2	53	?metaObject@QRegExpValidator@@UEBAPEBUQMetaObject@@XZ
+14008a72a	44	?metaObject@QWidget@@UEBAPEBUQMetaObject@@XZ
+14008a75a	43	?minimumHeightForWidth@QBoxLayout@@UEBAHH@Z
+14008a788	41	?minimumSize@QBoxLayout@@UEBA?AVQSize@@XZ
+14008a7b4	42	?minimumSizeHint@QDialog@@UEBA?AVQSize@@XZ
+14008a7e2	49	?mouseMoveEvent@QWidget@@MEAAXPEAVQMouseEvent@@@Z
+14008a816	50	?mousePressEvent@QWidget@@MEAAXPEAVQMouseEvent@@@Z
+14008a84c	52	?mouseReleaseEvent@QWidget@@MEAAXPEAVQMouseEvent@@@Z
+14008a884	45	?paintEvent@QWidget@@MEAAXPEAVQPaintEvent@@@Z
+14008a8b4	62	?qt_metacall@QButtonGroup@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008a8f6	61	?qt_metacall@QHBoxLayout@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008a936	66	?qt_metacall@QRegExpValidator@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008a97c	57	?qt_metacall@QWidget@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008a9b8	41	?qt_metacast@QButtonGroup@@UEAAPEAXPEBD@Z
+14008a9e4	40	?qt_metacast@QHBoxLayout@@UEAAPEAXPEBD@Z
+14008aa10	45	?qt_metacast@QRegExpValidator@@UEAAPEAXPEBD@Z
+14008aa40	36	?qt_metacast@QWidget@@UEAAPEAXPEBD@Z
+14008aa68	24	?reject@QDialog@@UEAAXXZ
+14008aa84	47	?resizeEvent@QDialog@@MEAAXPEAVQResizeEvent@@@Z
+14008aab6	43	?setGeometry@QBoxLayout@@UEAAXAEBVQRect@@@Z
+14008aae4	30	?setVisible@QDialog@@UEAAX_N@Z
+14008ab06	43	?showEvent@QDialog@@MEAAXPEAVQShowEvent@@@Z
+14008ab34	38	?sizeHint@QBoxLayout@@UEBA?AVQSize@@XZ
+14008ab5e	35	?sizeHint@QDialog@@UEBA?AVQSize@@XZ
+14008ab84	35	?sizeHint@QWidget@@UEBA?AVQSize@@XZ
+14008abaa	48	?spacerItem@QLayoutItem@@UEAAPEAVQSpacerItem@@XZ
+14008abde	44	?takeAt@QBoxLayout@@UEAAPEAVQLayoutItem@@H@Z
+14008ac0e	73	?validate@QRegExpValidator@@UEBA?AW4State@QValidator@@AEAVQString@@AEAH@Z
+14008ac5a	40	?widget@QLayoutItem@@UEAAPEAVQWidget@@XZ
+14008ac86	38	?minimumSize@QWidget@@QEBA?AVQSize@@XZ
+14008acb0	24	?close@QWidget@@QEAA_NXZ
+14008accc	61	?setWindowFlags@QWidget@@QEAAXV?$QFlags@W4WindowType@Qt@@@@@Z
+14008ad0c	59	?windowFlags@QWidget@@QEBA?AV?$QFlags@W4WindowType@Qt@@@@XZ
+14008ad4a	39	?setPixmap@QLabel@@QEAAXAEBVQPixmap@@@Z
+14008ad74	28	?setModal@QDialog@@QEAAX_N@Z
+14008ad94	40	?setContentsMargins@QLayout@@QEAAXHHHH@Z
+14008adc0	25	?devType@QPixmap@@UEBAHXZ
+14008addc	38	?getDC@QPaintDevice@@UEBAPEAUHDC__@@XZ
+14008ae06	58	?metric@QPixmap@@MEBAHW4PaintDeviceMetric@QPaintDevice@@@Z
+14008ae44	46	?paintEngine@QPixmap@@UEBAPEAVQPaintEngine@@XZ
+14008ae76	43	?releaseDC@QPaintDevice@@UEBAXPEAUHDC__@@@Z
+14008aea4	17	??0QFont@@QEAA@XZ
+14008aeb8	17	??1QFont@@QEAA@XZ
+14008aecc	30	??4QFont@@QEAAAEAV0@$$QEAV0@@Z
+14008aeee	35	??0QFontMetrics@@QEAA@AEBVQFont@@@Z
+14008af14	24	??1QFontMetrics@@QEAA@XZ
+14008af30	29	?height@QFontMetrics@@QEBAHXZ
+14008af50	37	??0QCursor@@QEAA@W4CursorShape@Qt@@@Z
+14008af78	19	??1QCursor@@QEAA@XZ
+14008af8e	42	?shape@QCursor@@QEBA?AW4CursorShape@Qt@@XZ
+14008afbc	29	?pos@QCursor@@SA?AVQPoint@@XZ
+14008afdc	31	?rect@QWidget@@QEBA?AVQRect@@XZ
+14008affe	45	?mapToGlobal@QWidget@@QEBA?AVQPoint@@AEBV2@@Z
+14008b02e	36	?setFont@QWidget@@QEAAXAEBVQFont@@@Z
+14008b056	35	?cursor@QWidget@@QEBA?AVQCursor@@XZ
+14008b07c	40	?setCursor@QWidget@@QEAAXAEBVQCursor@@@Z
+14008b0a8	44	?setStyleSheet@QWidget@@QEAAXAEBVQString@@@Z
+14008b0d8	42	?setWindowIcon@QWidget@@QEAAXAEBVQIcon@@@Z
+14008b106	27	?hasFocus@QWidget@@QEBA_NXZ
+14008b124	62	?setContextMenuPolicy@QWidget@@QEAAXW4ContextMenuPolicy@Qt@@@Z
+14008b166	40	?setGeometry@QWidget@@QEAAXAEBVQRect@@@Z
+14008b192	43	?sizePolicy@QWidget@@QEBA?AVQSizePolicy@@XZ
+14008b1c0	45	?setSizePolicy@QWidget@@QEAAXVQSizePolicy@@@Z
+14008b1f0	35	?parentWidget@QWidget@@QEBAPEAV1@XZ
+14008b216	54	?setAttribute@QWidget@@QEAAXW4WidgetAttribute@Qt@@_N@Z
+14008b250	41	?setAutoFillBackground@QWidget@@QEAAX_N@Z
+14008b27c	17	??0QIcon@@QEAA@XZ
+14008b290	17	??1QIcon@@QEAA@XZ
+14008b2a4	66	?addFile@QIcon@@QEAAXAEBVQString@@AEBVQSize@@W4Mode@1@W4State@1@@Z
+14008b2ea	34	?font@QApplication@@SA?AVQFont@@XZ
+14008b310	44	?focusWidget@QApplication@@SAPEAVQWidget@@XZ
+14008b340	48	??0QSpacerItem@@QEAA@HHW4Policy@QSizePolicy@@0@Z
+14008b374	23	??1QSpacerItem@@UEAA@XZ
+14008b38e	36	??0QGridLayout@@QEAA@PEAVQWidget@@@Z
+14008b3b6	23	??1QGridLayout@@UEAA@XZ
+14008b3d0	32	?setSpacing@QBoxLayout@@QEAAXH@Z
+14008b3f4	36	??0QHBoxLayout@@QEAA@PEAVQWidget@@@Z
+14008b41c	36	??0QVBoxLayout@@QEAA@PEAVQWidget@@@Z
+14008b444	23	??1QVBoxLayout@@UEAA@XZ
+14008b45e	46	?setText@QAbstractButton@@QEAAXAEBVQString@@@Z
+14008b490	60	??0QFrame@@QEAA@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z
+14008b4d0	18	??1QFrame@@UEAA@XZ
+14008b4e6	40	?setFrameShape@QFrame@@QEAAXW4Shape@1@@Z
+14008b512	42	?setFrameShadow@QFrame@@QEAAXW4Shadow@1@@Z
+14008b540	62	?verticalScrollBar@QAbstractScrollArea@@QEBAPEAVQScrollBar@@XZ
+14008b582	50	?viewport@QAbstractScrollArea@@QEBAPEAVQWidget@@XZ
+14008b5b8	69	?findText@QComboBox@@QEBAHAEBVQString@@V?$QFlags@W4MatchFlag@Qt@@@@@Z
+14008b600	42	?currentText@QComboBox@@QEBA?AVQString@@XZ
+14008b62e	36	??0QPushButton@@QEAA@PEAVQWidget@@@Z
+14008b656	23	??1QPushButton@@UEAA@XZ
+14008b670	38	?setAutoDefault@QPushButton@@QEAAX_N@Z
+14008b69a	34	?setDefault@QPushButton@@QEAAX_N@Z
+14008b6c0	56	?model@QAbstractItemView@@QEBAPEAVQAbstractItemModel@@XZ
+14008b6fc	62	?setSelectionMode@QAbstractItemView@@QEAAXW4SelectionMode@1@@Z
+14008b73e	70	?setSelectionBehavior@QAbstractItemView@@QEAAXW4SelectionBehavior@1@@Z
+14008b788	55	?currentIndex@QAbstractItemView@@QEBA?AVQModelIndex@@XZ
+14008b7c2	88	?setEditTriggers@QAbstractItemView@@QEAAXV?$QFlags@W4EditTrigger@QAbstractItemView@@@@@Z
+14008b81e	64	?setVerticalScrollMode@QAbstractItemView@@QEAAXW4ScrollMode@1@@Z
+14008b862	66	?setHorizontalScrollMode@QAbstractItemView@@QEAAXW4ScrollMode@1@@Z
+14008b8a8	49	?setTabKeyNavigation@QAbstractItemView@@QEAAX_N@Z
+14008b8dc	68	?indexWidget@QAbstractItemView@@QEBAPEAVQWidget@@AEBVQModelIndex@@@Z
+14008b924	49	?edit@QAbstractItemView@@QEAAXAEBVQModelIndex@@@Z
+14008b958	60	?setCurrentIndex@QAbstractItemView@@QEAAXAEBVQModelIndex@@@Z
+14008b998	89	?closeEditor@QAbstractItemView@@MEAAXPEAVQWidget@@W4EndEditHint@QAbstractItemDelegate@@@Z
+14008b9f4	59	?mouseMoveEvent@QAbstractItemView@@MEAAXPEAVQMouseEvent@@@Z
+14008ba32	64	?sourceModel@QAbstractProxyModel@@QEBAPEAVQAbstractItemModel@@XZ
+14008ba76	34	?sectionSize@QHeaderView@@QEBAHH@Z
+14008ba9c	37	?resizeSection@QHeaderView@@QEAAXHH@Z
+14008bac4	34	?setMovable@QHeaderView@@QEAAX_N@Z
+14008baea	36	?setClickable@QHeaderView@@QEAAX_N@Z
+14008bb12	45	?setSortIndicatorShown@QHeaderView@@QEAAX_N@Z
+14008bb42	55	?setSortIndicator@QHeaderView@@QEAAXHW4SortOrder@Qt@@@Z
+14008bb7c	45	?setStretchLastSection@QHeaderView@@QEAAX_N@Z
+14008bbac	44	?setDefaultSectionSize@QHeaderView@@QEAAXH@Z
+14008bbdc	46	??0QSortFilterProxyModel@@QEAA@PEAVQObject@@@Z
+14008bc0e	33	??1QSortFilterProxyModel@@UEAA@XZ
+14008bc32	42	?invalidate@QSortFilterProxyModel@@QEAAXXZ
+14008bc60	53	?sort@QSortFilterProxyModel@@UEAAXHW4SortOrder@Qt@@@Z
+14008bc98	35	??0QTableView@@QEAA@PEAVQWidget@@@Z
+14008bcbe	22	??1QTableView@@UEAA@XZ
+14008bcd8	53	?horizontalHeader@QTableView@@QEBAPEAVQHeaderView@@XZ
+14008bd10	51	?verticalHeader@QTableView@@QEBAPEAVQHeaderView@@XZ
+14008bd46	57	?setHorizontalHeader@QTableView@@QEAAXPEAVQHeaderView@@@Z
+14008bd82	31	?rowHeight@QTableView@@QEBAHH@Z
+14008bda4	33	?columnWidth@QTableView@@QEBAHH@Z
+14008bdc8	40	?setSortingEnabled@QTableView@@QEAAX_N@Z
+14008bdf4	50	?sortByColumn@QTableView@@QEAAXHW4SortOrder@Qt@@@Z
+14008be2a	44	?resizeColumnsToContents@QTableView@@QEAAXXZ
+14008be5a	46	?addItem@QGridLayout@@MEAAXPEAVQLayoutItem@@@Z
+14008be8c	58	?buddy@QSortFilterProxyModel@@UEBA?AVQModelIndex@@AEBV2@@Z
+14008beca	62	?canFetchMore@QSortFilterProxyModel@@UEBA_NAEBVQModelIndex@@@Z
+14008bf0c	49	?changeEvent@QAbstractButton@@MEAAXPEAVQEvent@@@Z
+14008bf40	40	?changeEvent@QFrame@@MEAAXPEAVQEvent@@@Z
+14008bf6c	39	?checkStateSet@QAbstractButton@@MEAAXXZ
+14008bf96	60	?columnCount@QSortFilterProxyModel@@UEBAHAEBVQModelIndex@@@Z
+14008bfd6	51	?commitData@QAbstractItemView@@MEAAXPEAVQWidget@@@Z
+14008c00c	69	?contextMenuEvent@QAbstractScrollArea@@MEAAXPEAVQContextMenuEvent@@@Z
+14008c054	27	?count@QGridLayout@@UEBAHXZ
+14008c072	53	?currentChanged@QTableView@@MEAAXAEBVQModelIndex@@0@Z
+14008c0aa	66	?data@QSortFilterProxyModel@@UEBA?AVQVariant@@AEBVQModelIndex@@H@Z
+14008c0f0	57	?dataChanged@QAbstractItemView@@MEAAXAEBVQModelIndex@@0@Z
+14008c12c	34	?doItemsLayout@QTableView@@UEAAXXZ
+14008c152	63	?dragEnterEvent@QAbstractItemView@@MEAAXPEAVQDragEnterEvent@@@Z
+14008c194	63	?dragLeaveEvent@QAbstractItemView@@MEAAXPEAVQDragLeaveEvent@@@Z
+14008c1d6	61	?dragMoveEvent@QAbstractItemView@@MEAAXPEAVQDragMoveEvent@@@Z
+14008c216	53	?dropEvent@QAbstractItemView@@MEAAXPEAVQDropEvent@@@Z
+14008c24e	96	?dropMimeData@QSortFilterProxyModel@@UEAA_NPEBVQMimeData@@W4DropAction@Qt@@HHAEBVQModelIndex@@@Z
+14008c2b2	78	?edit@QAbstractItemView@@MEAA_NAEBVQModelIndex@@W4EditTrigger@1@PEAVQEvent@@@Z
+14008c304	56	?editorDestroyed@QAbstractItemView@@MEAAXPEAVQObject@@@Z
+14008c340	46	?event@QAbstractItemView@@MEAA_NPEAVQEvent@@@Z
+14008c372	35	?event@QFrame@@MEAA_NPEAVQEvent@@@Z
+14008c398	40	?event@QPushButton@@MEAA_NPEAVQEvent@@@Z
+14008c3c4	72	?expandingDirections@QGridLayout@@UEBA?AV?$QFlags@W4Orientation@Qt@@@@XZ
+14008c410	72	?expandingDirections@QSpacerItem@@UEBA?AV?$QFlags@W4Orientation@Qt@@@@XZ
+14008c45c	58	?fetchMore@QSortFilterProxyModel@@UEAAXAEBVQModelIndex@@@Z
+14008c49a	70	?filterAcceptsColumn@QSortFilterProxyModel@@MEBA_NHAEBVQModelIndex@@@Z
+14008c4e4	82	?flags@QSortFilterProxyModel@@UEBA?AV?$QFlags@W4ItemFlag@Qt@@@@AEBVQModelIndex@@@Z
+14008c53a	57	?focusInEvent@QAbstractItemView@@MEAAXPEAVQFocusEvent@@@Z
+14008c576	51	?focusInEvent@QPushButton@@MEAAXPEAVQFocusEvent@@@Z
+14008c5ac	49	?focusNextPrevChild@QAbstractItemView@@MEAA_N_N@Z
+14008c5e0	58	?focusOutEvent@QAbstractItemView@@MEAAXPEAVQFocusEvent@@@Z
+14008c61e	52	?focusOutEvent@QPushButton@@MEAAXPEAVQFocusEvent@@@Z
+14008c656	39	?geometry@QSpacerItem@@UEBA?AVQRect@@XZ
+14008c680	61	?hasChildren@QSortFilterProxyModel@@UEBA_NAEBVQModelIndex@@@Z
+14008c6c0	40	?hasHeightForWidth@QGridLayout@@UEBA_NXZ
+14008c6ec	40	?hasHeightForWidth@QLayoutItem@@UEBA_NXZ
+14008c718	74	?headerData@QSortFilterProxyModel@@UEBA?AVQVariant@@HW4Orientation@Qt@@H@Z
+14008c766	37	?heightForWidth@QGridLayout@@UEBAHH@Z
+14008c78e	37	?heightForWidth@QLayoutItem@@UEBAHH@Z
+14008c7b6	48	?hitButton@QAbstractButton@@MEBA_NAEBVQPoint@@@Z
+14008c7ea	37	?horizontalOffset@QTableView@@MEBAHXZ
+14008c812	47	?horizontalScrollbarAction@QTableView@@MEAAXH@Z
+14008c844	60	?horizontalScrollbarValueChanged@QAbstractItemView@@MEAAXH@Z
+14008c884	60	?index@QSortFilterProxyModel@@UEBA?AVQModelIndex@@HHAEBV2@@Z
+14008c8c4	55	?indexAt@QTableView@@UEBA?AVQModelIndex@@AEBVQPoint@@@Z
+14008c8fe	67	?inputMethodEvent@QAbstractItemView@@MEAAXPEAVQInputMethodEvent@@@Z
+14008c944	79	?inputMethodQuery@QAbstractItemView@@UEBA?AVQVariant@@W4InputMethodQuery@Qt@@@Z
+14008c996	65	?insertColumns@QSortFilterProxyModel@@UEAA_NHHAEBVQModelIndex@@@Z
+14008c9da	62	?insertRows@QSortFilterProxyModel@@UEAA_NHHAEBVQModelIndex@@@Z
+14008ca1c	32	?invalidate@QGridLayout@@UEAAXXZ
+14008ca40	32	?invalidate@QLayoutItem@@UEAAXXZ
+14008ca64	30	?isEmpty@QSpacerItem@@UEBA_NXZ
+14008ca86	52	?isIndexHidden@QTableView@@MEBA_NAEBVQModelIndex@@@Z
+14008cabe	45	?itemAt@QGridLayout@@UEBAPEAVQLayoutItem@@H@Z
+14008caee	78	?itemData@QAbstractProxyModel@@UEBA?AV?$QMap@HVQVariant@@@@AEBVQModelIndex@@@Z
+14008cb40	56	?keyPressEvent@QAbstractItemView@@MEAAXPEAVQKeyEvent@@@Z
+14008cb7c	50	?keyPressEvent@QPushButton@@MEAAXPEAVQKeyEvent@@@Z
+14008cbb2	56	?keyReleaseEvent@QAbstractButton@@MEAAXPEAVQKeyEvent@@@Z
+14008cbee	55	?keyboardSearch@QAbstractItemView@@UEAAXAEBVQString@@@Z
+14008cc28	40	?layout@QLayoutItem@@UEAAPEAVQLayout@@XZ
+14008cc54	66	?mapFromSource@QSortFilterProxyModel@@UEBA?AVQModelIndex@@AEBV2@@Z
+14008cc9a	78	?mapSelectionFromSource@QSortFilterProxyModel@@UEBA?AVQItemSelection@@AEBV2@@Z
+14008ccec	76	?mapSelectionToSource@QSortFilterProxyModel@@UEBA?AVQItemSelection@@AEBV2@@Z
+14008cd3c	64	?mapToSource@QSortFilterProxyModel@@UEBA?AVQModelIndex@@AEBV2@@Z
+14008cd80	124	?match@QSortFilterProxyModel@@UEBA?AV?$QList@VQModelIndex@@@@AEBVQModelIndex@@HAEBVQVariant@@HV?$QFlags@W4MatchFlag@Qt@@@@@Z
+14008ce00	42	?maximumSize@QGridLayout@@UEBA?AVQSize@@XZ
+14008ce2e	42	?maximumSize@QSpacerItem@@UEBA?AVQSize@@XZ
+14008ce5c	43	?metaObject@QFrame@@UEBAPEBUQMetaObject@@XZ
+14008ce8a	48	?metaObject@QGridLayout@@UEBAPEBUQMetaObject@@XZ
+14008cebe	48	?metaObject@QPushButton@@UEBAPEBUQMetaObject@@XZ
+14008cef2	48	?metaObject@QVBoxLayout@@UEBAPEBUQMetaObject@@XZ
+14008cf26	82	?mimeData@QSortFilterProxyModel@@UEBAPEAVQMimeData@@AEBV?$QList@VQModelIndex@@@@@Z
+14008cf7c	56	?mimeTypes@QSortFilterProxyModel@@UEBA?AVQStringList@@XZ
+14008cfb8	44	?minimumHeightForWidth@QGridLayout@@UEBAHH@Z
+14008cfe8	44	?minimumHeightForWidth@QLayoutItem@@UEBAHH@Z
+14008d018	42	?minimumSize@QGridLayout@@UEBA?AVQSize@@XZ
+14008d046	42	?minimumSize@QSpacerItem@@UEBA?AVQSize@@XZ
+14008d074	54	?minimumSizeHint@QAbstractScrollArea@@UEBA?AVQSize@@XZ
+14008d0ae	46	?minimumSizeHint@QPushButton@@UEBA?AVQSize@@XZ
+14008d0e0	66	?mouseDoubleClickEvent@QAbstractItemView@@MEAAXPEAVQMouseEvent@@@Z
+14008d126	57	?mouseMoveEvent@QAbstractButton@@MEAAXPEAVQMouseEvent@@@Z
+14008d162	58	?mousePressEvent@QAbstractButton@@MEAAXPEAVQMouseEvent@@@Z
+14008d1a0	60	?mousePressEvent@QAbstractItemView@@MEAAXPEAVQMouseEvent@@@Z
+14008d1e0	60	?mouseReleaseEvent@QAbstractButton@@MEAAXPEAVQMouseEvent@@@Z
+14008d220	62	?mouseReleaseEvent@QAbstractItemView@@MEAAXPEAVQMouseEvent@@@Z
+14008d262	115	?moveCursor@QTableView@@MEAA?AVQModelIndex@@W4CursorAction@QAbstractItemView@@V?$QFlags@W4KeyboardModifier@Qt@@@@@Z
+14008d2d8	40	?nextCheckState@QAbstractButton@@MEAAXXZ
+14008d304	44	?paintEvent@QFrame@@MEAAXPEAVQPaintEvent@@@Z
+14008d334	49	?paintEvent@QPushButton@@MEAAXPEAVQPaintEvent@@@Z
+14008d368	48	?paintEvent@QTableView@@MEAAXPEAVQPaintEvent@@@Z
+14008d39c	59	?parent@QSortFilterProxyModel@@UEBA?AVQModelIndex@@AEBV2@@Z
+14008d3da	56	?qt_metacall@QFrame@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008d416	61	?qt_metacall@QGridLayout@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008d456	61	?qt_metacall@QPushButton@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008d496	61	?qt_metacall@QVBoxLayout@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008d4d6	35	?qt_metacast@QFrame@@UEAAPEAXPEBD@Z
+14008d4fc	40	?qt_metacast@QGridLayout@@UEAAPEAXPEBD@Z
+14008d528	40	?qt_metacast@QPushButton@@UEAAPEAXPEBD@Z
+14008d554	40	?qt_metacast@QVBoxLayout@@UEAAPEAXPEBD@Z
+14008d580	65	?removeColumns@QSortFilterProxyModel@@UEAA_NHHAEBVQModelIndex@@@Z
+14008d5c4	62	?removeRows@QSortFilterProxyModel@@UEAA_NHHAEBVQModelIndex@@@Z
+14008d606	33	?reset@QAbstractItemView@@UEAAXXZ
+14008d62a	57	?resizeEvent@QAbstractItemView@@MEAAXPEAVQResizeEvent@@@Z
+14008d666	36	?revert@QAbstractProxyModel@@UEAAXXZ
+14008d68e	57	?rowCount@QSortFilterProxyModel@@UEBAHAEBVQModelIndex@@@Z
+14008d6ca	67	?rowsAboutToBeRemoved@QAbstractItemView@@MEAAXAEBVQModelIndex@@HH@Z
+14008d710	59	?rowsInserted@QAbstractItemView@@MEAAXAEBVQModelIndex@@HH@Z
+14008d74e	39	?scrollContentsBy@QTableView@@MEAAXHH@Z
+14008d778	78	?scrollTo@QTableView@@UEAAXAEBVQModelIndex@@W4ScrollHint@QAbstractItemView@@@Z
+14008d7ca	37	?selectAll@QAbstractItemView@@UEAAXXZ
+14008d7f2	62	?selectedIndexes@QTableView@@MEBA?AV?$QList@VQModelIndex@@@@XZ
+14008d834	58	?selectionChanged@QTableView@@MEAAXAEBVQItemSelection@@0@Z
+14008d872	123	?selectionCommand@QAbstractItemView@@MEBA?AV?$QFlags@W4SelectionFlag@QItemSelectionModel@@@@AEBVQModelIndex@@PEBVQEvent@@@Z
+14008d8f0	72	?setData@QSortFilterProxyModel@@UEAA_NAEBVQModelIndex@@AEBVQVariant@@H@Z
+14008d93c	44	?setGeometry@QGridLayout@@UEAAXAEBVQRect@@@Z
+14008d96c	44	?setGeometry@QSpacerItem@@UEAAXAEBVQRect@@@Z
+14008d99c	80	?setHeaderData@QSortFilterProxyModel@@UEAA_NHW4Orientation@Qt@@AEBVQVariant@@H@Z
+14008d9f0	84	?setItemData@QAbstractProxyModel@@UEAA_NAEBVQModelIndex@@AEBV?$QMap@HVQVariant@@@@@Z
+14008da48	53	?setModel@QTableView@@UEAAXPEAVQAbstractItemModel@@@Z
+14008da80	50	?setRootIndex@QTableView@@UEAAXAEBVQModelIndex@@@Z
+14008dab6	93	?setSelection@QTableView@@MEAAXAEBVQRect@@V?$QFlags@W4SelectionFlag@QItemSelectionModel@@@@@Z
+14008db16	63	?setSelectionModel@QTableView@@UEAAXPEAVQItemSelectionModel@@@Z
+14008db58	70	?setSourceModel@QSortFilterProxyModel@@UEAAXPEAVQAbstractItemModel@@@Z
+14008dba2	47	?sizeHint@QAbstractScrollArea@@UEBA?AVQSize@@XZ
+14008dbd4	34	?sizeHint@QFrame@@UEBA?AVQSize@@XZ
+14008dbfa	39	?sizeHint@QGridLayout@@UEBA?AVQSize@@XZ
+14008dc24	39	?sizeHint@QPushButton@@UEBA?AVQSize@@XZ
+14008dc4e	39	?sizeHint@QSpacerItem@@UEBA?AVQSize@@XZ
+14008dc78	39	?sizeHintForColumn@QTableView@@MEBAHH@Z
+14008dca2	36	?sizeHintForRow@QTableView@@MEBAHH@Z
+14008dcca	37	?spacerItem@QSpacerItem@@UEAAPEAV1@XZ
+14008dcf2	62	?span@QSortFilterProxyModel@@UEBA?AVQSize@@AEBVQModelIndex@@@Z
+14008dd34	66	?startDrag@QAbstractItemView@@MEAAXV?$QFlags@W4DropAction@Qt@@@@@Z
+14008dd7a	37	?submit@QAbstractProxyModel@@UEAA_NXZ
+14008dda2	82	?supportedDropActions@QSortFilterProxyModel@@UEBA?AV?$QFlags@W4DropAction@Qt@@@@XZ
+14008ddf8	45	?takeAt@QGridLayout@@UEAAPEAVQLayoutItem@@H@Z
+14008de28	53	?timerEvent@QAbstractButton@@MEAAXPEAVQTimerEvent@@@Z
+14008de60	48	?timerEvent@QTableView@@MEAAXPEAVQTimerEvent@@@Z
+14008de94	44	?updateEditorData@QAbstractItemView@@MEAAXXZ
+14008dec4	50	?updateEditorGeometries@QAbstractItemView@@MEAAXXZ
+14008defa	37	?updateGeometries@QTableView@@MEAAXXZ
+14008df22	35	?verticalOffset@QTableView@@MEBAHXZ
+14008df48	45	?verticalScrollbarAction@QTableView@@MEAAXH@Z
+14008df78	58	?verticalScrollbarValueChanged@QAbstractItemView@@MEAAXH@Z
+14008dfb6	56	?viewOptions@QTableView@@MEBA?AVQStyleOptionViewItem@@XZ
+14008dff2	54	?viewportEvent@QAbstractItemView@@MEAA_NPEAVQEvent@@@Z
+14008e02c	57	?visualRect@QTableView@@UEBA?AVQRect@@AEBVQModelIndex@@@Z
+14008e068	76	?visualRegionForSelection@QTableView@@MEBA?AVQRegion@@AEBVQItemSelection@@@Z
+14008e0b8	57	?wheelEvent@QAbstractScrollArea@@MEAAXPEAVQWheelEvent@@@Z
+14008e0f4	43	?staticMetaObject@QWidget@@2UQMetaObject@@B
+14008e122	45	?staticMetaObject@QComboBox@@2UQMetaObject@@B
+14008e152	45	?staticMetaObject@QLineEdit@@2UQMetaObject@@B
+14008e182	34	??0QComboBox@@QEAA@PEAVQWidget@@@Z
+14008e1a8	21	??1QComboBox@@UEAA@XZ
+14008e1c0	25	?count@QComboBox@@QEBAHXZ
+14008e1dc	69	?insertItem@QComboBox@@QEAAXHAEBVQIcon@@AEBVQString@@AEBVQVariant@@@Z
+14008e224	25	?clear@QComboBox@@QEAAXXZ
+14008e240	43	?changeEvent@QComboBox@@MEAAXPEAVQEvent@@@Z
+14008e26e	59	?contextMenuEvent@QComboBox@@MEAAXPEAVQContextMenuEvent@@@Z
+14008e2ac	38	?event@QComboBox@@UEAA_NPEAVQEvent@@@Z
+14008e2d6	49	?focusInEvent@QComboBox@@MEAAXPEAVQFocusEvent@@@Z
+14008e30a	50	?focusOutEvent@QComboBox@@MEAAXPEAVQFocusEvent@@@Z
+14008e340	45	?hideEvent@QComboBox@@MEAAXPEAVQHideEvent@@@Z
+14008e370	29	?hidePopup@QComboBox@@UEAAXXZ
+14008e390	59	?inputMethodEvent@QComboBox@@MEAAXPEAVQInputMethodEvent@@@Z
+14008e3ce	71	?inputMethodQuery@QComboBox@@MEBA?AVQVariant@@W4InputMethodQuery@Qt@@@Z
+14008e418	48	?keyPressEvent@QComboBox@@MEAAXPEAVQKeyEvent@@@Z
+14008e44c	50	?keyReleaseEvent@QComboBox@@MEAAXPEAVQKeyEvent@@@Z
+14008e482	46	?metaObject@QComboBox@@UEBAPEBUQMetaObject@@XZ
+14008e4b4	44	?minimumSizeHint@QComboBox@@UEBA?AVQSize@@XZ
+14008e4e4	52	?mousePressEvent@QComboBox@@MEAAXPEAVQMouseEvent@@@Z
+14008e51c	54	?mouseReleaseEvent@QComboBox@@MEAAXPEAVQMouseEvent@@@Z
+14008e556	47	?paintEvent@QComboBox@@MEAAXPEAVQPaintEvent@@@Z
+14008e588	59	?qt_metacall@QComboBox@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008e5c6	38	?qt_metacast@QComboBox@@UEAAPEAXPEBD@Z
+14008e5f0	49	?resizeEvent@QComboBox@@MEAAXPEAVQResizeEvent@@@Z
+14008e624	45	?showEvent@QComboBox@@MEAAXPEAVQShowEvent@@@Z
+14008e654	29	?showPopup@QComboBox@@UEAAXXZ
+14008e674	37	?sizeHint@QComboBox@@UEBA?AVQSize@@XZ
+14008e69c	47	?wheelEvent@QComboBox@@MEAAXPEAVQWheelEvent@@@Z
+14008e6ce	62	?scaledToHeight@QPixmap@@QEBA?AV1@HW4TransformationMode@Qt@@@Z
+14008e710	20	??0QPalette@@QEAA@XZ
+14008e728	20	??1QPalette@@QEAA@XZ
+14008e740	40	?windowTitle@QWidget@@QEBA?AVQString@@XZ
+14008e76c	40	?setContentsMargins@QWidget@@QEAAXHHHH@Z
+14008e798	33	??0QToolBar@@QEAA@PEAVQWidget@@@Z
+14008e7bc	20	??1QToolBar@@UEAA@XZ
+14008e7d4	31	?setMovable@QToolBar@@QEAAX_N@Z
+14008e7f6	53	?addWidget@QToolBar@@QEAAPEAVQAction@@PEAVQWidget@@@Z
+14008e82e	48	?resizeEvent@QToolBar@@MEAAXPEAVQResizeEvent@@@Z
+14008e862	35	?setFloating@QDockWidget@@QEAAX_N@Z
+14008e888	33	?isFloating@QDockWidget@@QEBA_NXZ
+14008e8ac	30	??4QIcon@@QEAAAEAV0@$$QEAV0@@Z
+14008e8ce	36	??0QToolButton@@QEAA@PEAVQWidget@@@Z
+14008e8f6	23	??1QToolButton@@UEAA@XZ
+14008e910	48	?actionEvent@QToolBar@@MEAAXPEAVQActionEvent@@@Z
+14008e944	51	?actionEvent@QToolButton@@MEAAXPEAVQActionEvent@@@Z
+14008e97a	42	?changeEvent@QToolBar@@MEAAXPEAVQEvent@@@Z
+14008e9a8	45	?changeEvent@QToolButton@@MEAAXPEAVQEvent@@@Z
+14008e9d8	46	?childEvent@QToolBar@@MEAAXPEAVQChildEvent@@@Z
+14008ea0a	44	?enterEvent@QToolButton@@MEAAXPEAVQEvent@@@Z
+14008ea3a	37	?event@QToolBar@@MEAA_NPEAVQEvent@@@Z
+14008ea62	40	?event@QToolButton@@MEAA_NPEAVQEvent@@@Z
+14008ea8e	55	?focusInEvent@QAbstractButton@@MEAAXPEAVQFocusEvent@@@Z
+14008eac8	56	?focusOutEvent@QAbstractButton@@MEAAXPEAVQFocusEvent@@@Z
+14008eb04	44	?hitButton@QToolButton@@MEBA_NAEBVQPoint@@@Z
+14008eb34	54	?keyPressEvent@QAbstractButton@@MEAAXPEAVQKeyEvent@@@Z
+14008eb6e	44	?leaveEvent@QToolButton@@MEAAXPEAVQEvent@@@Z
+14008eb9e	48	?metaObject@QToolButton@@UEBAPEBUQMetaObject@@XZ
+14008ebd2	46	?minimumSizeHint@QToolButton@@UEBA?AVQSize@@XZ
+14008ec04	54	?mousePressEvent@QToolButton@@MEAAXPEAVQMouseEvent@@@Z
+14008ec3e	56	?mouseReleaseEvent@QToolButton@@MEAAXPEAVQMouseEvent@@@Z
+14008ec7a	36	?nextCheckState@QToolButton@@MEAAXXZ
+14008eca2	46	?paintEvent@QToolBar@@MEAAXPEAVQPaintEvent@@@Z
+14008ecd4	49	?paintEvent@QToolButton@@MEAAXPEAVQPaintEvent@@@Z
+14008ed08	61	?qt_metacall@QToolButton@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008ed48	40	?qt_metacast@QToolButton@@UEAAPEAXPEBD@Z
+14008ed74	39	?sizeHint@QToolButton@@UEBA?AVQSize@@XZ
+14008ed9e	49	?timerEvent@QToolButton@@MEAAXPEAVQTimerEvent@@@Z
+14008edd2	27	?setRgb@QColor@@QEAAXHHHH@Z
+14008edf0	29	??4QColor@@QEAAAEAV0@AEBV0@@Z
+14008ee10	27	?invalidate@QColor@@AEAAXXZ
+14008ee2e	47	??0QBrush@@QEAA@AEBVQColor@@W4BrushStyle@Qt@@@Z
+14008ee60	18	??1QBrush@@QEAA@XZ
+14008ee76	31	??4QPalette@@QEAAAEAV0@AEBV0@@Z
+14008ee98	68	?setBrush@QPalette@@QEAAXW4ColorGroup@1@W4ColorRole@1@AEBVQBrush@@@Z
+14008eee0	49	?color@QPalette@@QEBAAEBVQColor@@W4ColorRole@1@@Z
+14008ef14	29	?setPointSize@QFont@@QEAAXH@Z
+14008ef34	37	??0QKeySequence@@QEAA@AEBVQString@@@Z
+14008ef5c	34	?setMinimumSize@QWidget@@QEAAXHH@Z
+14008ef82	38	?palette@QWidget@@QEBAAEBVQPalette@@XZ
+14008efac	42	?setPalette@QWidget@@QEAAXAEBVQPalette@@@Z
+14008efda	50	?setFocusPolicy@QWidget@@QEAAXW4FocusPolicy@Qt@@@Z
+14008f010	24	?update@QWidget@@QEAAXXZ
+14008f02c	34	?move@QWidget@@QEAAXAEBVQPoint@@@Z
+14008f052	39	?ensureVisible@QScrollArea@@QEAAXHHHH@Z
+14008f07c	29	?selectAll@QLineEdit@@QEAAXXZ
+14008f09c	36	?setIcon@QAction@@QEAAXAEBVQIcon@@@Z
+14008f0c4	41	?setToolTip@QAction@@QEAAXAEBVQString@@@Z
+14008f0f0	30	?setVisible@QAction@@QEAAX_N@Z
+14008f112	40	?addSeparator@QMenu@@QEAAPEAVQAction@@XZ
+14008f13e	50	?exec@QMenu@@QEAAPEAVQAction@@AEBVQPoint@@PEAV2@@Z
+14008f174	79	??0QShortcut@@QEAA@AEBVQKeySequence@@PEAVQWidget@@PEBD2W4ShortcutContext@Qt@@@Z
+14008f1c6	21	??1QShortcut@@UEAA@XZ
+14008f1de	33	?minimum@QAbstractSlider@@QEBAHXZ
+14008f202	33	?maximum@QAbstractSlider@@QEBAHXZ
+14008f226	35	?setValue@QAbstractSlider@@QEAAXH@Z
+14008f24c	20	??1QPainter@@QEAA@XZ
+14008f264	23	?end@QPainter@@QEAA_NXZ
+14008f27e	37	?setPen@QPainter@@QEAAXAEBVQColor@@@Z
+14008f2a6	50	?setText@QClipboard@@QEAAXAEBVQString@@W4Mode@1@@Z
+14008f2dc	45	?clipboard@QApplication@@SAPEAVQClipboard@@XZ
+14008f30c	38	?event@QShortcut@@MEAA_NPEAVQEvent@@@Z
+14008f336	46	?metaObject@QShortcut@@UEBAPEBUQMetaObject@@XZ
+14008f368	45	?metaObject@QToolBar@@UEBAPEBUQMetaObject@@XZ
+14008f398	59	?qt_metacall@QShortcut@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008f3d6	58	?qt_metacall@QToolBar@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14008f414	38	?qt_metacast@QShortcut@@UEAAPEAXPEBD@Z
+14008f43e	37	?qt_metacast@QToolBar@@UEAAPEAXPEBD@Z
+14008f466	34	?style@QWidget@@QEBAPEAVQStyle@@XZ
+14008f48c	34	?setMinimumWidth@QWidget@@QEAAXH@Z
+14008f4b2	41	?text@QAbstractButton@@QEBA?AVQString@@XZ
+14008f4de	32	?text@QLabel@@QEBA?AVQString@@XZ
+14008f502	78	?setTextInteractionFlags@QLabel@@QEAAXV?$QFlags@W4TextInteractionFlag@Qt@@@@@Z
+14008f554	38	??0QTextDocument@@QEAA@PEAVQObject@@@Z
+14008f57e	25	??1QTextDocument@@UEAA@XZ
+14008f59a	44	?setHtml@QTextDocument@@QEAAXAEBVQString@@@Z
+14008f5ca	46	?toPlainText@QTextDocument@@QEBA?AVQString@@XZ
+14008f5fc	88	?standardIcon@QStyle@@QEBA?AVQIcon@@W4StandardPixmap@1@PEBVQStyleOption@@PEBVQWidget@@@Z
+14008f658	36	??0QColor@@QEAA@W4GlobalColor@Qt@@@Z
+14008f680	23	?width@QPixmap@@QEBAHXZ
+14008f69a	24	?height@QPixmap@@QEBAHXZ
+14008f6b6	37	?copy@QPixmap@@QEBA?AV1@AEBVQRect@@@Z
+14008f6de	42	?width@QFontMetrics@@QEBAHAEBVQString@@H@Z
+14008f70c	33	?setReadOnly@QLineEdit@@QEAAX_N@Z
+14008f730	60	??0QLabel@@QEAA@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z
+14008f770	18	??1QLabel@@UEAA@XZ
+14008f786	47	?setTextFormat@QLabel@@QEAAXW4TextFormat@Qt@@@Z
+14008f7b8	39	?setOpenExternalLinks@QLabel@@QEAAX_N@Z
+14008f7e2	63	?pixmap@QIcon@@QEBA?AVQPixmap@@AEBVQSize@@W4Mode@1@W4State@1@@Z
+14008f824	34	??0QCheckBox@@QEAA@PEAVQWidget@@@Z
+14008f84a	21	??1QCheckBox@@UEAA@XZ
+14008f862	34	??0QGroupBox@@QEAA@PEAVQWidget@@@Z
+14008f888	21	??1QGroupBox@@UEAA@XZ
+14008f8a0	41	?setTitle@QGroupBox@@QEAAXAEBVQString@@@Z
+14008f8cc	51	?setCentralWidget@QMainWindow@@QEAAXPEAVQWidget@@@Z
+14008f902	37	??0QRadioButton@@QEAA@PEAVQWidget@@@Z
+14008f92a	24	??1QRadioButton@@UEAA@XZ
+14008f946	33	?setEditable@QComboBox@@QEAAX_N@Z
+14008f96a	34	?setShowGrid@QTableView@@QEAAX_N@Z
+14008f990	42	??0QTableWidgetItem@@QEAA@AEBVQString@@H@Z
+14008f9be	28	??1QTableWidgetItem@@UEAA@XZ
+14008f9de	44	?setTextAlignment@QTableWidgetItem@@QEAAXH@Z
+14008fa0e	37	??0QTableWidget@@QEAA@PEAVQWidget@@@Z
+14008fa36	24	??1QTableWidget@@UEAA@XZ
+14008fa52	35	?setRowCount@QTableWidget@@QEAAXH@Z
+14008fa78	38	?setColumnCount@QTableWidget@@QEAAXH@Z
+14008faa2	65	?horizontalHeaderItem@QTableWidget@@QEBAPEAVQTableWidgetItem@@H@Z
+14008fae6	69	?setHorizontalHeaderItem@QTableWidget@@QEAAXHPEAVQTableWidgetItem@@@Z
+14008fb2e	34	??0QSplitter@@QEAA@PEAVQWidget@@@Z
+14008fb54	21	??1QSplitter@@UEAA@XZ
+14008fb6c	52	?setOrientation@QSplitter@@QEAAXW4Orientation@Qt@@@Z
+14008fba4	44	?setHighlightSections@QHeaderView@@QEAAX_N@Z
+14008fbd4	40	?minimumSectionSize@QHeaderView@@QEBAHXZ
+14008fc00	44	?setMinimumSectionSize@QHeaderView@@QEAAXH@Z
+14008fc30	26	??0QDesktopWidget@@QEAA@XZ
+14008fc4e	26	??1QDesktopWidget@@UEAA@XZ
+14008fc6c	50	?screenNumber@QDesktopWidget@@QEBAHPEBVQWidget@@@Z
+14008fca2	49	?screenGeometry@QDesktopWidget@@QEBA?BVQRect@@H@Z
+14008fcd6	43	?setFont@QApplication@@SAXAEBVQFont@@PEBD@Z
+14008fd04	107	?getOpenFileName@QFileDialog@@SA?AVQString@@PEAVQWidget@@AEBV2@11PEAV2@V?$QFlags@W4Option@QFileDialog@@@@@Z
+14008fd72	107	?getSaveFileName@QFileDialog@@SA?AVQString@@PEAVQWidget@@AEBV2@11PEAV2@V?$QFlags@W4Option@QFileDialog@@@@@Z
+14008fde0	43	?openUrl@QDesktopServices@@SA_NAEBVQUrl@@@Z
+14008fe0e	35	??MQTableWidgetItem@@UEBA_NAEBV0@@Z
+14008fe34	43	?changeEvent@QGroupBox@@MEAAXPEAVQEvent@@@Z
+14008fe62	40	?changeEvent@QLabel@@MEAAXPEAVQEvent@@@Z
+14008fe8e	43	?changeEvent@QSplitter@@MEAAXPEAVQEvent@@@Z
+14008febc	33	?checkStateSet@QCheckBox@@MEAAXXZ
+14008fee0	47	?childEvent@QGroupBox@@MEAAXPEAVQChildEvent@@@Z
+14008ff12	47	?childEvent@QSplitter@@MEAAXPEAVQChildEvent@@@Z
+14008ff44	37	?clone@QTableWidgetItem@@UEBAPEAV1@XZ
+14008ff6c	56	?contextMenuEvent@QLabel@@MEAAXPEAVQContextMenuEvent@@@Z
+14008ffa8	52	?createHandle@QSplitter@@MEAAPEAVQSplitterHandle@@XZ
+14008ffe0	44	?data@QTableWidgetItem@@UEBA?AVQVariant@@H@Z
+140090010	48	?dropEvent@QTableWidget@@MEAAXPEAVQDropEvent@@@Z
+140090044	70	?dropMimeData@QTableWidget@@MEAA_NHHPEBVQMimeData@@W4DropAction@Qt@@@Z
+14009008e	38	?event@QCheckBox@@MEAA_NPEAVQEvent@@@Z
+1400900b8	38	?event@QGroupBox@@MEAA_NPEAVQEvent@@@Z
+1400900e2	35	?event@QLabel@@MEAA_NPEAVQEvent@@@Z
+140090108	41	?event@QRadioButton@@MEAA_NPEAVQEvent@@@Z
+140090134	38	?event@QSplitter@@MEAA_NPEAVQEvent@@@Z
+14009015e	41	?event@QTableWidget@@MEAA_NPEAVQEvent@@@Z
+14009018a	49	?focusInEvent@QGroupBox@@MEAAXPEAVQFocusEvent@@@Z
+1400901be	46	?focusInEvent@QLabel@@MEAAXPEAVQFocusEvent@@@Z
+1400901f0	38	?focusNextPrevChild@QLabel@@MEAA_N_N@Z
+14009021a	47	?focusOutEvent@QLabel@@MEAAXPEAVQFocusEvent@@@Z
+14009024c	32	?heightForWidth@QLabel@@UEBAHH@Z
+140090270	42	?hitButton@QCheckBox@@MEBA_NAEBVQPoint@@@Z
+14009029e	45	?hitButton@QRadioButton@@MEBA_NAEBVQPoint@@@Z
+1400902ce	45	?keyPressEvent@QLabel@@MEAAXPEAVQKeyEvent@@@Z
+1400902fe	46	?metaObject@QCheckBox@@UEBAPEBUQMetaObject@@XZ
+140090330	46	?metaObject@QGroupBox@@UEBAPEBUQMetaObject@@XZ
+140090362	43	?metaObject@QLabel@@UEBAPEBUQMetaObject@@XZ
+140090390	49	?metaObject@QRadioButton@@UEBAPEBUQMetaObject@@XZ
+1400903c4	46	?metaObject@QSplitter@@UEBAPEBUQMetaObject@@XZ
+1400903f6	49	?metaObject@QTableWidget@@UEBAPEBUQMetaObject@@XZ
+14009042a	78	?mimeData@QTableWidget@@MEBAPEAVQMimeData@@V?$QList@PEAVQTableWidgetItem@@@@@Z
+14009047c	47	?mimeTypes@QTableWidget@@MEBA?AVQStringList@@XZ
+1400904ae	44	?minimumSizeHint@QCheckBox@@UEBA?AVQSize@@XZ
+1400904de	44	?minimumSizeHint@QGroupBox@@UEBA?AVQSize@@XZ
+14009050e	41	?minimumSizeHint@QLabel@@UEBA?AVQSize@@XZ
+14009053a	47	?minimumSizeHint@QRadioButton@@UEBA?AVQSize@@XZ
+14009056c	44	?minimumSizeHint@QSplitter@@UEBA?AVQSize@@XZ
+14009059c	51	?mouseMoveEvent@QCheckBox@@MEAAXPEAVQMouseEvent@@@Z
+1400905d2	51	?mouseMoveEvent@QGroupBox@@MEAAXPEAVQMouseEvent@@@Z
+140090608	48	?mouseMoveEvent@QLabel@@MEAAXPEAVQMouseEvent@@@Z
+14009063c	54	?mouseMoveEvent@QRadioButton@@MEAAXPEAVQMouseEvent@@@Z
+140090676	52	?mousePressEvent@QGroupBox@@MEAAXPEAVQMouseEvent@@@Z
+1400906ae	49	?mousePressEvent@QLabel@@MEAAXPEAVQMouseEvent@@@Z
+1400906e2	54	?mouseReleaseEvent@QGroupBox@@MEAAXPEAVQMouseEvent@@@Z
+14009071c	51	?mouseReleaseEvent@QLabel@@MEAAXPEAVQMouseEvent@@@Z
+140090752	34	?nextCheckState@QCheckBox@@MEAAXXZ
+140090778	47	?paintEvent@QCheckBox@@MEAAXPEAVQPaintEvent@@@Z
+1400907aa	47	?paintEvent@QGroupBox@@MEAAXPEAVQPaintEvent@@@Z
+1400907dc	44	?paintEvent@QLabel@@MEAAXPEAVQPaintEvent@@@Z
+14009080c	50	?paintEvent@QRadioButton@@MEAAXPEAVQPaintEvent@@@Z
+140090842	59	?qt_metacall@QCheckBox@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140090880	57	?qt_metacall@QDialog@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400908bc	59	?qt_metacall@QGroupBox@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400908fa	56	?qt_metacall@QLabel@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140090936	62	?qt_metacall@QRadioButton@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140090978	59	?qt_metacall@QSplitter@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400909b6	62	?qt_metacall@QTableWidget@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400909f8	38	?qt_metacast@QCheckBox@@UEAAPEAXPEBD@Z
+140090a22	36	?qt_metacast@QDialog@@UEAAPEAXPEBD@Z
+140090a4a	38	?qt_metacast@QGroupBox@@UEAAPEAXPEBD@Z
+140090a74	35	?qt_metacast@QLabel@@UEAAPEAXPEBD@Z
+140090a9a	41	?qt_metacast@QRadioButton@@UEAAPEAXPEBD@Z
+140090ac6	38	?qt_metacast@QSplitter@@UEAAPEAXPEBD@Z
+140090af0	41	?qt_metacast@QTableWidget@@UEAAPEAXPEBD@Z
+140090b1c	48	?read@QTableWidgetItem@@UEAAXAEAVQDataStream@@@Z
+140090b50	49	?resizeEvent@QGroupBox@@MEAAXPEAVQResizeEvent@@@Z
+140090b84	49	?resizeEvent@QSplitter@@MEAAXPEAVQResizeEvent@@@Z
+140090bb8	49	?setData@QTableWidgetItem@@UEAAXHAEBVQVariant@@@Z
+140090bec	55	?setModel@QTableWidget@@EEAAXPEAVQAbstractItemModel@@@Z
+140090c26	37	?sizeHint@QCheckBox@@UEBA?AVQSize@@XZ
+140090c4e	34	?sizeHint@QLabel@@UEBA?AVQSize@@XZ
+140090c74	40	?sizeHint@QRadioButton@@UEBA?AVQSize@@XZ
+140090ca0	37	?sizeHint@QSplitter@@UEBA?AVQSize@@XZ
+140090cc8	73	?supportedDropActions@QTableWidget@@MEBA?AV?$QFlags@W4DropAction@Qt@@@@XZ
+140090d14	49	?write@QTableWidgetItem@@UEBAXAEAVQDataStream@@@Z
+140090d48	28	?isEnabled@QWidget@@QEBA_NXZ
+140090d68	34	??0QLineEdit@@QEAA@PEAVQWidget@@@Z
+140090d8e	21	??1QLineEdit@@UEAA@XZ
+140090da6	43	?changeEvent@QLineEdit@@MEAAXPEAVQEvent@@@Z
+140090dd4	59	?contextMenuEvent@QLineEdit@@MEAAXPEAVQContextMenuEvent@@@Z
+140090e12	55	?dragEnterEvent@QLineEdit@@MEAAXPEAVQDragEnterEvent@@@Z
+140090e4c	55	?dragLeaveEvent@QLineEdit@@MEAAXPEAVQDragLeaveEvent@@@Z
+140090e86	53	?dragMoveEvent@QLineEdit@@MEAAXPEAVQDragMoveEvent@@@Z
+140090ebe	45	?dropEvent@QLineEdit@@MEAAXPEAVQDropEvent@@@Z
+140090eee	38	?event@QLineEdit@@UEAA_NPEAVQEvent@@@Z
+140090f18	49	?focusInEvent@QLineEdit@@MEAAXPEAVQFocusEvent@@@Z
+140090f4c	50	?focusOutEvent@QLineEdit@@MEAAXPEAVQFocusEvent@@@Z
+140090f82	59	?inputMethodEvent@QLineEdit@@MEAAXPEAVQInputMethodEvent@@@Z
+140090fc0	71	?inputMethodQuery@QLineEdit@@UEBA?AVQVariant@@W4InputMethodQuery@Qt@@@Z
+14009100a	48	?keyPressEvent@QLineEdit@@MEAAXPEAVQKeyEvent@@@Z
+14009103e	46	?metaObject@QLineEdit@@UEBAPEBUQMetaObject@@XZ
+140091070	44	?minimumSizeHint@QLineEdit@@UEBA?AVQSize@@XZ
+1400910a0	58	?mouseDoubleClickEvent@QLineEdit@@MEAAXPEAVQMouseEvent@@@Z
+1400910de	51	?mouseMoveEvent@QLineEdit@@MEAAXPEAVQMouseEvent@@@Z
+140091114	52	?mousePressEvent@QLineEdit@@MEAAXPEAVQMouseEvent@@@Z
+14009114c	54	?mouseReleaseEvent@QLineEdit@@MEAAXPEAVQMouseEvent@@@Z
+140091186	47	?paintEvent@QLineEdit@@MEAAXPEAVQPaintEvent@@@Z
+1400911b8	59	?qt_metacall@QLineEdit@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400911f6	38	?qt_metacast@QLineEdit@@UEAAPEAXPEBD@Z
+140091220	37	?sizeHint@QLineEdit@@UEBA?AVQSize@@XZ
+140091248	42	?lineEdit@QComboBox@@QEBAPEAVQLineEdit@@XZ
+140091276	34	?data@QAction@@QEBA?AVQVariant@@XZ
+14009129c	39	?setData@QAction@@QEAAXAEBVQVariant@@@Z
+1400912c6	64	?horizontalScrollBar@QAbstractScrollArea@@QEBAPEAVQScrollBar@@XZ
+14009130a	52	?setViewportMargins@QAbstractScrollArea@@IEAAXHHHH@Z
+140091342	39	?setAutoCompletion@QComboBox@@QEAAX_N@Z
+14009136c	49	?insertItems@QComboBox@@QEAAXHAEBVQStringList@@@Z
+1400913a0	46	?view@QComboBox@@QEBAPEAVQAbstractItemView@@XZ
+1400913d2	51	?setPlaceholderText@QLineEdit@@QEAAXAEBVQString@@@Z
+140091408	24	?isEmpty@QMenu@@QEBA_NXZ
+140091424	64	?setTextElideMode@QAbstractItemView@@QEAAXW4TextElideMode@Qt@@@Z
+140091468	54	??0QHeaderView@@QEAA@W4Orientation@Qt@@PEAVQWidget@@@Z
+1400914a2	23	??1QHeaderView@@UEAA@XZ
+1400914bc	28	?offset@QHeaderView@@QEBAHXZ
+1400914dc	39	?sizeHint@QHeaderView@@UEBA?AVQSize@@XZ
+140091506	38	?sectionPosition@QHeaderView@@QEBAHH@Z
+140091530	39	?isSectionHidden@QHeaderView@@QEBA_NH@Z
+14009155a	41	?setSectionHidden@QHeaderView@@QEAAXH_N@Z
+140091586	34	?visualIndex@QHeaderView@@QEBAHH@Z
+1400915ac	35	?logicalIndex@QHeaderView@@QEBAHH@Z
+1400915d2	41	?stretchLastSection@QHeaderView@@QEBA_NXZ
+1400915fe	39	?geometriesChanged@QHeaderView@@IEAAXXZ
+140091628	38	?updateGeometries@QHeaderView@@MEAAXXZ
+140091652	54	?currentChanged@QHeaderView@@MEAAXAEBVQModelIndex@@0@Z
+14009168c	51	?dataChanged@QHeaderView@@MEAAXAEBVQModelIndex@@0@Z
+1400916c2	35	?doItemsLayout@QHeaderView@@UEAAXXZ
+1400916e8	40	?event@QHeaderView@@MEAA_NPEAVQEvent@@@Z
+140091714	38	?horizontalOffset@QHeaderView@@MEBAHXZ
+14009173e	54	?horizontalScrollbarAction@QAbstractItemView@@MEAAXH@Z
+140091778	56	?indexAt@QHeaderView@@MEBA?AVQModelIndex@@AEBVQPoint@@@Z
+1400917b4	53	?isIndexHidden@QHeaderView@@MEBA_NAEBVQModelIndex@@@Z
+1400917ec	60	?mouseDoubleClickEvent@QHeaderView@@MEAAXPEAVQMouseEvent@@@Z
+14009182c	53	?mouseMoveEvent@QHeaderView@@MEAAXPEAVQMouseEvent@@@Z
+140091864	54	?mousePressEvent@QHeaderView@@MEAAXPEAVQMouseEvent@@@Z
+14009189e	56	?mouseReleaseEvent@QHeaderView@@MEAAXPEAVQMouseEvent@@@Z
+1400918da	116	?moveCursor@QHeaderView@@MEAA?AVQModelIndex@@W4CursorAction@QAbstractItemView@@V?$QFlags@W4KeyboardModifier@Qt@@@@@Z
+140091952	49	?paintEvent@QHeaderView@@MEAAXPEAVQPaintEvent@@@Z
+140091986	60	?paintSection@QHeaderView@@MEBAXPEAVQPainter@@AEBVQRect@@H@Z
+1400919c6	27	?reset@QHeaderView@@UEAAXXZ
+1400919e4	53	?rowsInserted@QHeaderView@@MEAAXAEBVQModelIndex@@HH@Z
+140091a1c	40	?scrollContentsBy@QHeaderView@@MEAAXHH@Z
+140091a48	79	?scrollTo@QHeaderView@@MEAAXAEBVQModelIndex@@W4ScrollHint@QAbstractItemView@@@Z
+140091a9a	55	?sectionSizeFromContents@QHeaderView@@MEBA?AVQSize@@H@Z
+140091ad4	69	?selectedIndexes@QAbstractItemView@@MEBA?AV?$QList@VQModelIndex@@@@XZ
+140091b1c	65	?selectionChanged@QAbstractItemView@@MEAAXAEBVQItemSelection@@0@Z
+140091b60	54	?setModel@QHeaderView@@UEAAXPEAVQAbstractItemModel@@@Z
+140091b9a	57	?setRootIndex@QAbstractItemView@@UEAAXAEBVQModelIndex@@@Z
+140091bd6	94	?setSelection@QHeaderView@@MEAAXAEBVQRect@@V?$QFlags@W4SelectionFlag@QItemSelectionModel@@@@@Z
+140091c38	70	?setSelectionModel@QAbstractItemView@@UEAAXPEAVQItemSelectionModel@@@Z
+140091c82	46	?sizeHintForColumn@QAbstractItemView@@UEBAHH@Z
+140091cb4	43	?sizeHintForRow@QAbstractItemView@@UEBAHH@Z
+140091ce2	55	?timerEvent@QAbstractItemView@@MEAAXPEAVQTimerEvent@@@Z
+140091d1c	36	?verticalOffset@QHeaderView@@MEBAHXZ
+140091d44	52	?verticalScrollbarAction@QAbstractItemView@@MEAAXH@Z
+140091d7c	63	?viewOptions@QAbstractItemView@@MEBA?AVQStyleOptionViewItem@@XZ
+140091dbe	48	?viewportEvent@QHeaderView@@MEAA_NPEAVQEvent@@@Z
+140091df2	58	?visualRect@QHeaderView@@MEBA?AVQRect@@AEBVQModelIndex@@@Z
+140091e30	77	?visualRegionForSelection@QHeaderView@@MEBA?AVQRegion@@AEBVQItemSelection@@@Z
+140091e80	43	?staticMetaObject@QDialog@@2UQMetaObject@@B
+140091eae	57	?staticMetaObject@QSortFilterProxyModel@@2UQMetaObject@@B
+140091eea	46	?staticMetaObject@QTableView@@2UQMetaObject@@B
+140091f1c	50	?qt_metacast@QSortFilterProxyModel@@UEAAPEAXPEBD@Z
+140091f52	71	?qt_metacall@QSortFilterProxyModel@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140091f9c	39	?qt_metacast@QTableView@@UEAAPEAXPEBD@Z
+140091fc6	60	?qt_metacall@QTableView@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140092006	44	?staticMetaObject@QToolBar@@2UQMetaObject@@B
+140092036	47	?staticMetaObject@QScrollArea@@2UQMetaObject@@B
+140092068	47	?staticMetaObject@QMainWindow@@2UQMetaObject@@B
+14009209a	40	?qt_metacast@QMainWindow@@UEAAPEAXPEBD@Z
+1400920c6	61	?qt_metacall@QMainWindow@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140092106	44	?staticMetaObject@QMenuBar@@2UQMetaObject@@B
+140092136	37	?qt_metacast@QMenuBar@@UEAAPEAXPEBD@Z
+14009215e	58	?qt_metacall@QMenuBar@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14009219c	46	?staticMetaObject@QStatusBar@@2UQMetaObject@@B
+1400921ce	39	?qt_metacast@QStatusBar@@UEAAPEAXPEBD@Z
+1400921f8	60	?qt_metacall@QStatusBar@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140092238	47	?staticMetaObject@QHeaderView@@2UQMetaObject@@B
+14009226a	40	?qt_metacast@QHeaderView@@UEAAPEAXPEBD@Z
+140092296	61	?qt_metacall@QHeaderView@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400922d6	20	?red@QColor@@QEBAHXZ
+1400922ee	22	?green@QColor@@QEBAHXZ
+140092308	21	?blue@QColor@@QEBAHXZ
+140092320	32	?name@QColor@@QEBA?AVQString@@XZ
+140092344	26	?dark@QColor@@QEBA?AV1@H@Z
+140092362	35	?setMaximumHeight@QWidget@@QEAAXH@Z
+140092388	33	?setFixedHeight@QWidget@@QEAAXH@Z
+1400923ac	45	?contentsMargins@QWidget@@QEBA?AVQMargins@@XZ
+1400923dc	73	??0QLabel@@QEAA@AEBVQString@@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z
+140092428	31	?setFlat@QPushButton@@QEAAX_N@Z
+14009244a	66	?setAlignment@QLayoutItem@@QEAAXV?$QFlags@W4AlignmentFlag@Qt@@@@@Z
+140092490	51	?addSpacerItem@QBoxLayout@@QEAAXPEAVQSpacerItem@@@Z
+1400924c6	23	??0QVBoxLayout@@QEAA@XZ
+1400924e0	37	?setMinimum@QAbstractSlider@@QEAAXH@Z
+140092508	37	?setMaximum@QAbstractSlider@@QEAAXH@Z
+140092530	40	?setSingleStep@QAbstractSlider@@QEAAXH@Z
+14009255c	49	??0QColorDialog@@QEAA@AEBVQColor@@PEAVQWidget@@@Z
+140092590	24	??1QColorDialog@@UEAA@XZ
+1400925ac	46	?selectedColor@QColorDialog@@QEBA?AVQColor@@XZ
+1400925de	53	??0QScrollBar@@QEAA@W4Orientation@Qt@@PEAVQWidget@@@Z
+140092616	22	??1QScrollBar@@UEAA@XZ
+140092630	49	?changeEvent@QAbstractSlider@@MEAAXPEAVQEvent@@@Z
+140092664	46	?changeEvent@QColorDialog@@MEAAXPEAVQEvent@@@Z
+140092696	60	?contextMenuEvent@QScrollBar@@MEAAXPEAVQContextMenuEvent@@@Z
+1400926d6	28	?done@QColorDialog@@MEAAXH@Z
+1400926f6	39	?event@QScrollBar@@UEAA_NPEAVQEvent@@@Z
+140092720	46	?hideEvent@QScrollBar@@MEAAXPEAVQHideEvent@@@Z
+140092752	54	?keyPressEvent@QAbstractSlider@@MEAAXPEAVQKeyEvent@@@Z
+14009278c	49	?metaObject@QColorDialog@@UEBAPEBUQMetaObject@@XZ
+1400927c0	47	?metaObject@QScrollBar@@UEBAPEBUQMetaObject@@XZ
+1400927f2	52	?mouseMoveEvent@QScrollBar@@MEAAXPEAVQMouseEvent@@@Z
+14009282a	53	?mousePressEvent@QScrollBar@@MEAAXPEAVQMouseEvent@@@Z
+140092862	55	?mouseReleaseEvent@QScrollBar@@MEAAXPEAVQMouseEvent@@@Z
+14009289c	48	?paintEvent@QScrollBar@@MEAAXPEAVQPaintEvent@@@Z
+1400928d0	62	?qt_metacall@QColorDialog@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140092912	60	?qt_metacall@QScrollBar@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+140092952	41	?qt_metacast@QColorDialog@@UEAAPEAXPEBD@Z
+14009297e	39	?qt_metacast@QScrollBar@@UEAAPEAXPEBD@Z
+1400929a8	35	?setVisible@QColorDialog@@UEAAX_N@Z
+1400929ce	38	?sizeHint@QScrollBar@@UEBA?AVQSize@@XZ
+1400929f8	65	?sliderChange@QScrollBar@@MEAAXW4SliderChange@QAbstractSlider@@@Z
+140092a3c	53	?timerEvent@QAbstractSlider@@MEAAXPEAVQTimerEvent@@@Z
+140092a74	53	?wheelEvent@QAbstractSlider@@MEAAXPEAVQWheelEvent@@@Z
+140092aac	19	??0QColor@@QEAA@I@Z
+140092ac2	24	??0QPainterPath@@QEAA@XZ
+140092ade	24	??1QPainterPath@@QEAA@XZ
+140092afa	42	?moveTo@QPainterPath@@QEAAXAEBVQPointF@@@Z
+140092b28	42	?lineTo@QPainterPath@@QEAAXAEBVQPointF@@@Z
+140092b56	35	??0QBrush@@QEAA@W4BrushStyle@Qt@@@Z
+140092b7c	47	?mapFromGlobal@QWidget@@QEBA?AVQPoint@@AEBV2@@Z
+140092bae	47	?mapFrom@QWidget@@QEBA?AVQPoint@@PEAV1@AEBV2@@Z
+140092be0	33	?isActiveWindow@QWidget@@QEBA_NXZ
+140092c04	28	??0QPen@@QEAA@AEBVQColor@@@Z
+140092c24	16	??1QPen@@QEAA@XZ
+140092c38	24	?setWidth@QPen@@QEAAXH@Z
+140092c54	35	?setColor@QPen@@QEAAXAEBVQColor@@@Z
+140092c7a	34	??0QShortcut@@QEAA@PEAVQWidget@@@Z
+140092ca0	44	?setKey@QShortcut@@QEAAXAEBVQKeySequence@@@Z
+140092cd0	38	??0QPainter@@QEAA@PEAVQPaintDevice@@@Z
+140092cfa	35	?setPen@QPainter@@QEAAXAEBVQPen@@@Z
+140092d20	39	?setBrush@QPainter@@QEAAXAEBVQBrush@@@Z
+140092d4a	35	?brush@QPainter@@QEBAAEBVQBrush@@XZ
+140092d70	57	?fillPath@QPainter@@QEAAXAEBVQPainterPath@@AEBVQBrush@@@Z
+140092dac	45	?drawPath@QPainter@@QEAAXAEBVQPainterPath@@@Z
+140092ddc	42	?drawPoints@QPainter@@QEAAXPEBVQPoint@@H@Z
+140092e0a	40	?drawLines@QPainter@@QEAAXPEBVQLine@@H@Z
+140092e36	51	?fillRect@QPainter@@QEAAXAEBVQRectF@@AEBVQBrush@@@Z
+140092e6c	49	?setRenderHint@QPainter@@QEAAXW4RenderHint@1@_N@Z
+140092ea0	63	?showText@QToolTip@@SAXAEBVQPoint@@AEBVQString@@PEAVQWidget@@@Z
+140092ee2	25	?hideText@QToolTip@@SAXXZ
+140092efe	36	??0QApplication@@QEAA@AEAHPEAPEADH@Z
+140092f26	24	??1QApplication@@UEAA@XZ
+140092f42	25	?exec@QApplication@@SAHXZ
+140092f5e	54	?commitData@QApplication@@UEAAXAEAVQSessionManager@@@Z
+140092f98	82	?compressEvent@QApplication@@MEAA_NPEAVQEvent@@PEAVQObject@@PEAVQPostEventList@@@Z
+140092fee	41	?event@QApplication@@MEAA_NPEAVQEvent@@@Z
+14009301a	49	?metaObject@QApplication@@UEBAPEBUQMetaObject@@XZ
+14009304e	55	?notify@QApplication@@UEAA_NPEAVQObject@@PEAVQEvent@@@Z
+140093088	62	?qt_metacall@QApplication@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400930ca	41	?qt_metacast@QApplication@@UEAAPEAXPEBD@Z
+1400930f6	53	?saveState@QApplication@@UEAAXAEAVQSessionManager@@@Z
+14009312e	56	?setWindowModality@QWidget@@QEAAXW4WindowModality@Qt@@@Z
+14009316a	49	??0QBoxLayout@@QEAA@W4Direction@0@PEAVQWidget@@@Z
+14009319e	22	??1QBoxLayout@@UEAA@XZ
+1400931b8	65	??0QMainWindow@@QEAA@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z
+1400931fc	23	??1QMainWindow@@UEAA@XZ
+140093216	46	?setMenuBar@QMainWindow@@QEAAXPEAVQMenuBar@@@Z
+140093248	46	?addToolBar@QMainWindow@@QEAAXPEAVQToolBar@@@Z
+14009327a	42	?addWidget@QSplitter@@QEAAXPEAVQWidget@@@Z
+1400932a8	69	??0QProgressDialog@@QEAA@PEAVQWidget@@V?$QFlags@W4WindowType@Qt@@@@@Z
+1400932f0	27	??1QProgressDialog@@UEAA@XZ
+14009330e	58	?setCancelButton@QProgressDialog@@QEAAXPEAVQPushButton@@@Z
+14009334c	37	?setMaximum@QProgressDialog@@QEAAXH@Z
+140093374	37	?setMinimum@QProgressDialog@@QEAAXH@Z
+14009339c	35	?setValue@QProgressDialog@@QEAAXH@Z
+1400933c2	51	?setLabelText@QProgressDialog@@QEAAXAEBVQString@@@Z
+1400933f8	49	?changeEvent@QProgressDialog@@MEAAXPEAVQEvent@@@Z
+14009342c	53	?closeEvent@QProgressDialog@@MEAAXPEAVQCloseEvent@@@Z
+140093464	61	?contextMenuEvent@QMainWindow@@MEAAXPEAVQContextMenuEvent@@@Z
+1400934a4	47	?createPopupMenu@QMainWindow@@UEAAPEAVQMenu@@XZ
+1400934d6	40	?event@QMainWindow@@MEAA_NPEAVQEvent@@@Z
+140093502	47	?metaObject@QBoxLayout@@UEBAPEBUQMetaObject@@XZ
+140093534	52	?metaObject@QProgressDialog@@UEBAPEBUQMetaObject@@XZ
+14009356c	60	?qt_metacall@QBoxLayout@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400935ac	65	?qt_metacall@QProgressDialog@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+1400935f0	39	?qt_metacast@QBoxLayout@@UEAAPEAXPEBD@Z
+14009361a	44	?qt_metacast@QProgressDialog@@UEAAPEAXPEBD@Z
+14009364a	55	?resizeEvent@QProgressDialog@@MEAAXPEAVQResizeEvent@@@Z
+140093684	51	?showEvent@QProgressDialog@@MEAAXPEAVQShowEvent@@@Z
+1400936ba	43	?sizeHint@QProgressDialog@@UEBA?AVQSize@@XZ
+1400936e8	35	??0QStatusBar@@QEAA@PEAVQWidget@@@Z
+14009370e	22	??1QStatusBar@@UEAA@XZ
+140093728	53	?addPermanentWidget@QStatusBar@@QEAAXPEAVQWidget@@H@Z
+140093760	41	?setSizeGripEnabled@QStatusBar@@QEAAX_N@Z
+14009378c	39	?event@QStatusBar@@MEAA_NPEAVQEvent@@@Z
+1400937b6	48	?paintEvent@QStatusBar@@MEAAXPEAVQPaintEvent@@@Z
+1400937ea	50	?resizeEvent@QStatusBar@@MEAAXPEAVQResizeEvent@@@Z
+140093820	46	?showEvent@QStatusBar@@MEAAXPEAVQShowEvent@@@Z
+140093852	42	?header@QTreeView@@QEBAPEAVQHeaderView@@XZ
+140093880	32	?columnWidth@QTreeView@@QEBAHH@Z
+1400938a4	36	?setColumnWidth@QTreeView@@QEAAXHH@Z
+1400938cc	43	?resizeColumnToContents@QTreeView@@QEAAXH@Z
+1400938fa	28	??0QTreeWidgetItem@@QEAA@H@Z
+14009391a	27	??1QTreeWidgetItem@@UEAA@XZ
+140093938	39	?setDisabled@QTreeWidgetItem@@QEAAX_N@Z
+140093962	42	?text@QTreeWidgetItem@@QEBA?AVQString@@H@Z
+140093990	47	?setText@QTreeWidgetItem@@QEAAXHAEBVQString@@@Z
+1400939c2	57	?setBackgroundColor@QTreeWidgetItem@@QEAAXHAEBVQColor@@@Z
+1400939fe	55	?checkState@QTreeWidgetItem@@QEBA?AW4CheckState@Qt@@H@Z
+140093a38	57	?setCheckState@QTreeWidgetItem@@QEAAXHW4CheckState@Qt@@@Z
+140093a74	72	?addChildren@QTreeWidgetItem@@QEAAXAEBV?$QList@PEAVQTreeWidgetItem@@@@@Z
+140093ac0	36	??0QTreeWidget@@QEAA@PEAVQWidget@@@Z
+140093ae8	23	??1QTreeWidget@@UEAA@XZ
+140093b02	33	?columnCount@QTreeWidget@@QEBAHXZ
+140093b26	37	?setColumnCount@QTreeWidget@@QEAAXH@Z
+140093b4e	59	?invisibleRootItem@QTreeWidget@@QEBAPEAVQTreeWidgetItem@@XZ
+140093b8c	54	?setHeaderLabels@QTreeWidget@@QEAAXAEBVQStringList@@@Z
+140093bc6	41	?setSortingEnabled@QTreeWidget@@QEAAX_N@Z
+140093bf2	52	?editItem@QTreeWidget@@QEAAXPEAVQTreeWidgetItem@@H@Z
+140093c2a	58	?setItemHidden@QTreeWidget@@QEAAXPEBVQTreeWidgetItem@@_N@Z
+140093c68	60	?setItemExpanded@QTreeWidget@@QEAAXPEBVQTreeWidgetItem@@_N@Z
+140093ca8	70	?setFirstItemColumnSpanned@QTreeWidget@@QEAAXPEBVQTreeWidgetItem@@_N@Z
+140093cf2	34	??MQTreeWidgetItem@@UEBA_NAEBV0@@Z
+140093d18	36	?clone@QTreeWidgetItem@@UEBAPEAV1@XZ
+140093d40	52	?currentChanged@QTreeView@@MEAAXAEBVQModelIndex@@0@Z
+140093d78	44	?data@QTreeWidgetItem@@UEBA?AVQVariant@@HH@Z
+140093da8	49	?dataChanged@QTreeView@@UEAAXAEBVQModelIndex@@0@Z
+140093ddc	33	?doItemsLayout@QTreeView@@UEAAXXZ
+140093e00	53	?dragMoveEvent@QTreeView@@MEAAXPEAVQDragMoveEvent@@@Z
+140093e38	74	?drawBranches@QTreeView@@MEBAXPEAVQPainter@@AEBVQRect@@AEBVQModelIndex@@@Z
+140093e86	84	?drawRow@QTreeView@@MEBAXPEAVQPainter@@AEBVQStyleOptionViewItem@@AEBVQModelIndex@@@Z
+140093ede	47	?dropEvent@QTreeWidget@@MEAAXPEAVQDropEvent@@@Z
+140093f10	89	?dropMimeData@QTreeWidget@@MEAA_NPEAVQTreeWidgetItem@@HPEBVQMimeData@@W4DropAction@Qt@@@Z
+140093f6c	40	?event@QTreeWidget@@MEAA_NPEAVQEvent@@@Z
+140093f98	36	?horizontalOffset@QTreeView@@MEBAHXZ
+140093fc0	46	?horizontalScrollbarAction@QTreeView@@MEAAXH@Z
+140093ff2	54	?indexAt@QTreeView@@UEBA?AVQModelIndex@@AEBVQPoint@@@Z
+14009402c	51	?isIndexHidden@QTreeView@@MEBA_NAEBVQModelIndex@@@Z
+140094062	48	?keyPressEvent@QTreeView@@MEAAXPEAVQKeyEvent@@@Z
+140094096	47	?keyboardSearch@QTreeView@@UEAAXAEBVQString@@@Z
+1400940c8	48	?metaObject@QTreeWidget@@UEBAPEBUQMetaObject@@XZ
+1400940fc	76	?mimeData@QTreeWidget@@MEBAPEAVQMimeData@@V?$QList@PEAVQTreeWidgetItem@@@@@Z
+14009414c	46	?mimeTypes@QTreeWidget@@MEBA?AVQStringList@@XZ
+14009417e	58	?mouseDoubleClickEvent@QTreeView@@MEAAXPEAVQMouseEvent@@@Z
+1400941bc	51	?mouseMoveEvent@QTreeView@@MEAAXPEAVQMouseEvent@@@Z
+1400941f2	52	?mousePressEvent@QTreeView@@MEAAXPEAVQMouseEvent@@@Z
+14009422a	54	?mouseReleaseEvent@QTreeView@@MEAAXPEAVQMouseEvent@@@Z
+140094264	114	?moveCursor@QTreeView@@MEAA?AVQModelIndex@@W4CursorAction@QAbstractItemView@@V?$QFlags@W4KeyboardModifier@Qt@@@@@Z
+1400942da	47	?paintEvent@QTreeView@@MEAAXPEAVQPaintEvent@@@Z
+14009430c	61	?qt_metacall@QTreeWidget@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14009434c	40	?qt_metacast@QTreeWidget@@UEAAPEAXPEBD@Z
+140094378	47	?read@QTreeWidgetItem@@UEAAXAEAVQDataStream@@@Z
+1400943aa	25	?reset@QTreeView@@UEAAXXZ
+1400943c6	59	?rowsAboutToBeRemoved@QTreeView@@MEAAXAEBVQModelIndex@@HH@Z
+140094404	51	?rowsInserted@QTreeView@@MEAAXAEBVQModelIndex@@HH@Z
+14009443a	38	?scrollContentsBy@QTreeView@@MEAAXHH@Z
+140094464	77	?scrollTo@QTreeView@@UEAAXAEBVQModelIndex@@W4ScrollHint@QAbstractItemView@@@Z
+1400944b4	29	?selectAll@QTreeView@@UEAAXXZ
+1400944d4	61	?selectedIndexes@QTreeView@@MEBA?AV?$QList@VQModelIndex@@@@XZ
+140094514	57	?selectionChanged@QTreeView@@MEAAXAEBVQItemSelection@@0@Z
+140094550	49	?setData@QTreeWidgetItem@@UEAAXHHAEBVQVariant@@@Z
+140094584	54	?setModel@QTreeWidget@@EEAAXPEAVQAbstractItemModel@@@Z
+1400945be	49	?setRootIndex@QTreeView@@UEAAXAEBVQModelIndex@@@Z
+1400945f2	92	?setSelection@QTreeView@@MEAAXAEBVQRect@@V?$QFlags@W4SelectionFlag@QItemSelectionModel@@@@@Z
+140094652	64	?setSelectionModel@QTreeWidget@@UEAAXPEAVQItemSelectionModel@@@Z
+140094696	38	?sizeHintForColumn@QTreeView@@MEBAHH@Z
+1400946c0	72	?supportedDropActions@QTreeWidget@@MEBA?AV?$QFlags@W4DropAction@Qt@@@@XZ
+14009470c	47	?timerEvent@QTreeView@@MEAAXPEAVQTimerEvent@@@Z
+14009473e	36	?updateGeometries@QTreeView@@MEAAXXZ
+140094766	34	?verticalOffset@QTreeView@@MEBAHXZ
+14009478c	46	?viewportEvent@QTreeView@@MEAA_NPEAVQEvent@@@Z
+1400947be	56	?visualRect@QTreeView@@UEBA?AVQRect@@AEBVQModelIndex@@@Z
+1400947fa	75	?visualRegionForSelection@QTreeView@@MEBA?AVQRegion@@AEBVQItemSelection@@@Z
+140094848	48	?write@QTreeWidgetItem@@UEBAXAEAVQDataStream@@@Z
+14009487c	21	??0QPixmap@@QEAA@HH@Z
+140094894	34	?fill@QPixmap@@QEAAXAEBVQColor@@@Z
+1400948ba	32	??0QPalette@@QEAA@AEBVQColor@@@Z
+1400948de	33	?setParent@QWidget@@QEAAXPEAV1@@Z
+140094902	49	??0QPushButton@@QEAA@AEBVQString@@PEAVQWidget@@@Z
+140094936	66	?itemDelegate@QAbstractItemView@@QEBAPEAVQAbstractItemDelegate@@XZ
+14009497c	37	?setColumnWidth@QTableView@@QEAAXHH@Z
+1400949a4	32	?hideColumn@QTableView@@QEAAXH@Z
+1400949c8	32	?showColumn@QTableView@@QEAAXH@Z
+1400949ec	29	??0QTableWidgetItem@@QEAA@H@Z
+140094a0c	60	?flags@QTableWidgetItem@@QEBA?AV?$QFlags@W4ItemFlag@Qt@@@@XZ
+140094a4c	62	?setFlags@QTableWidgetItem@@QEAAXV?$QFlags@W4ItemFlag@Qt@@@@@Z
+140094a8e	42	?text@QTableWidgetItem@@QEBA?AVQString@@XZ
+140094abc	47	?setText@QTableWidgetItem@@QEAAXAEBVQString@@@Z
+140094aee	45	?setIcon@QTableWidgetItem@@QEAAXAEBVQIcon@@@Z
+140094b1e	40	?font@QTableWidgetItem@@QEBA?AVQFont@@XZ
+140094b4a	55	?checkState@QTableWidgetItem@@QEBA?AW4CheckState@Qt@@XZ
+140094b84	57	?setCheckState@QTableWidgetItem@@QEAAXW4CheckState@Qt@@@Z
+140094bc0	48	?row@QTableWidget@@QEBAHPEBVQTableWidgetItem@@@Z
+140094bf4	51	?column@QTableWidget@@QEBAHPEBVQTableWidgetItem@@@Z
+140094c2a	50	?item@QTableWidget@@QEBAPEAVQTableWidgetItem@@HH@Z
+140094c60	54	?setItem@QTableWidget@@QEAAXHHPEAVQTableWidgetItem@@@Z
+140094c9a	42	?setSortingEnabled@QTableWidget@@QEAAX_N@Z
+140094cc8	47	?cellWidget@QTableWidget@@QEBAPEAVQWidget@@HH@Z
+140094cfa	51	?setCellWidget@QTableWidget@@QEAAXHHPEAVQWidget@@@Z
+140094d30	70	?selectedItems@QTableWidget@@QEAA?AV?$QList@PEAVQTableWidgetItem@@@@XZ
+140094d7a	36	?clearContents@QTableWidget@@QEAAXXZ
+140094da2	42	?sortIndicatorSection@QHeaderView@@QEBAHXZ
+140094dd0	57	?sortIndicatorOrder@QHeaderView@@QEBA?AW4SortOrder@Qt@@XZ
+140094e0c	73	?setDefaultAlignment@QHeaderView@@QEAAXV?$QFlags@W4AlignmentFlag@Qt@@@@@Z
+140094e58	40	?setPen@QPainter@@QEAAXW4PenStyle@Qt@@@Z
+140094e84	40	?drawRects@QPainter@@QEAAXPEBVQRect@@H@Z
+140094eb0	30	?setEnabled@QWidget@@QEAAX_N@Z
+140094ed2	50	?actions@QWidget@@QEBA?AV?$QList@PEAVQAction@@@@XZ
+140094f08	42	?itemData@QComboBox@@QEBA?AVQVariant@@HH@Z
+140094f36	28	?isVisible@QAction@@QEBA_NXZ
+140094f56	43	?addSeparator@QToolBar@@QEAAPEAVQAction@@XZ
+140094f84	40	?setMenu@QToolButton@@QEAAXPEAVQMenu@@@Z
+140094fb0	58	?setPopupMode@QToolButton@@QEAAXW4ToolButtonPopupMode@1@@Z
+140094fee	51	?setDefaultAction@QToolButton@@QEAAXPEAVQAction@@@Z
+140095024	41	??0QDoubleValidator@@QEAA@PEAVQObject@@@Z
+140095050	28	??1QDoubleValidator@@UEAA@XZ
+140095070	45	?setMinimumContentsLength@QComboBox@@QEAAXH@Z
+1400950a0	53	?metaObject@QDoubleValidator@@UEBAPEBUQMetaObject@@XZ
+1400950d8	66	?qt_metacall@QDoubleValidator@@UEAAHW4Call@QMetaObject@@HPEAPEAX@Z
+14009511e	45	?qt_metacast@QDoubleValidator@@UEAAPEAXPEBD@Z
+14009514e	38	?setRange@QDoubleValidator@@UEAAXNNH@Z
+140095178	73	?validate@QDoubleValidator@@UEBA?AW4State@QValidator@@AEAVQString@@AEAH@Z
+1400951c4	47	?setItemData@QComboBox@@QEAAXHAEBVQVariant@@H@Z
+1400951f6	28	?setResult@QDialog@@QEAAXH@Z
+140095214	10	QtGui4.dll
+140095222	12	VirtualQuery
+140095232	18	GetModuleFileNameA
+140095248	14	GetProcAddress
+14009525a	12	LoadLibraryA
+14009526a	11	CreateFileA
+140095278	18	GetFileAttributesA
+14009528e	11	GetFileSize
+14009529c	11	GetFileTime
+1400952aa	8	ReadFile
+1400952b6	14	SetFilePointer
+1400952c8	9	WriteFile
+1400952d4	11	CloseHandle
+1400952e2	12	GetLastError
+1400952f2	23	QueryPerformanceCounter
+14009530c	25	QueryPerformanceFrequency
+140095328	20	EnterCriticalSection
+140095340	20	LeaveCriticalSection
+140095358	37	InitializeCriticalSectionAndSpinCount
+140095380	23	TryEnterCriticalSection
+14009539a	21	DeleteCriticalSection
+1400953b2	8	SetEvent
+1400953be	12	ReleaseMutex
+1400953ce	19	WaitForSingleObject
+1400953e4	12	CreateMutexA
+1400953f4	12	CreateEventA
+140095404	5	Sleep
+14009540c	19	GetCurrentProcessId
+140095422	16	TerminateProcess
+140095436	12	CreateThread
+140095446	18	GetCurrentThreadId
+14009545c	15	UnmapViewOfFile
+14009546e	20	FileTimeToSystemTime
+140095484	12	KERNEL32.dll
+140095494	11	MessageBoxA
+1400954a0	10	USER32.dll
+1400954ae	11	RegCloseKey
+1400954bc	11	RegOpenKeyA
+1400954ca	16	RegQueryValueExA
+1400954de	13	RegCreateKeyA
+1400954ee	13	RegOpenKeyExA
+1400954fe	14	RegSetValueExA
+14009550e	12	ADVAPI32.dll
+14009551e	23	SHGetSpecialFolderPathA
+140095536	11	SHELL32.dll
+140095544	6	memcpy
+14009554e	7	memmove
+140095558	6	memset
+140095562	6	strchr
+14009556c	6	strstr
+140095576	6	memcmp
+140095580	18	__CxxFrameHandler4
+140095596	15	__std_terminate
+1400955a8	18	_CxxThrowException
+1400955be	7	strrchr
+1400955c8	19	__current_exception
+1400955de	27	__current_exception_context
+1400955fc	20	__C_specific_handler
+140095614	20	__std_exception_copy
+14009562c	23	__std_exception_destroy
+140095644	16	VCRUNTIME140.dll
+140095656	18	VCRUNTIME140_1.dll
+14009566c	6	calloc
+140095676	4	free
+14009567e	7	realloc
+140095688	7	bsearch
+140095692	6	fclose
+14009569c	5	fopen
+1400956a4	5	fread
+1400956ac	5	fseek
+1400956b4	5	ftell
+1400956bc	23	__stdio_common_vsprintf
+1400956d6	5	qsort
+1400956de	7	strncat
+1400956e8	5	clock
+1400956f0	7	strncpy
+1400956fa	10	_strtoui64
+140095708	6	malloc
+140095712	5	abort
+14009571a	7	strncmp
+140095724	6	strcmp
+14009572e	4	exit
+140095736	6	strtod
+140095740	4	atof
+140095748	4	atoi
+140095750	15	__acrt_iob_func
+140095762	23	__stdio_common_vfprintf
+14009577c	6	_errno
+140095786	10	mbstowcs_s
+140095794	11	_makepath_s
+1400957a2	12	_splitpath_s
+1400957b2	10	_stat64i32
+1400957c0	6	_mkdir
+1400957ca	7	fopen_s
+1400957d4	5	fputs
+1400957dc	6	fwrite
+1400957e6	7	setvbuf
+1400957f0	10	__p___argc
+1400957fe	10	__p___argv
+14009580c	9	terminate
+140095818	9	_callnewh
+140095824	22	_configure_narrow_argv
+14009583e	30	_initialize_narrow_environment
+140095860	24	_initialize_onexit_table
+14009587c	25	_register_onexit_function
+140095898	11	_crt_atexit
+1400958a6	6	_cexit
+1400958b0	15	_seh_filter_exe
+1400958c2	13	_set_app_type
+1400958d2	16	__setusermatherr
+1400958e6	32	_get_narrow_winmain_command_line
+14009590a	9	_initterm
+140095916	11	_initterm_e
+140095924	5	_exit
+14009592c	10	_set_fmode
+14009593a	7	_c_exit
+140095944	42	_register_thread_local_exe_atexit_callback
+140095972	19	_configthreadlocale
+140095988	13	_set_new_mode
+140095998	12	__p__commode
+1400959a6	30	api-ms-win-crt-heap-l1-1-0.dll
+1400959c6	33	api-ms-win-crt-utility-l1-1-0.dll
+1400959e8	31	api-ms-win-crt-stdio-l1-1-0.dll
+140095a08	32	api-ms-win-crt-string-l1-1-0.dll
+140095a2a	30	api-ms-win-crt-time-l1-1-0.dll
+140095a4a	33	api-ms-win-crt-convert-l1-1-0.dll
+140095a6c	33	api-ms-win-crt-runtime-l1-1-0.dll
+140095a8e	36	api-ms-win-crt-filesystem-l1-1-0.dll
+140095ab4	30	api-ms-win-crt-math-l1-1-0.dll
+140095ad4	32	api-ms-win-crt-locale-l1-1-0.dll
+140095af8	17	RtlCaptureContext
+140095b0c	22	RtlLookupFunctionEntry
+140095b26	16	RtlVirtualUnwind
+140095b3a	24	UnhandledExceptionFilter
+140095b56	27	SetUnhandledExceptionFilter
+140095b74	17	GetCurrentProcess
+140095b88	25	IsProcessorFeaturePresent
+140095ba4	17	IsDebuggerPresent
+140095bb8	15	GetStartupInfoW
+140095bca	16	GetModuleHandleW
+140095bde	23	GetSystemTimeAsFileTime
+140095bf8	19	InitializeSListHead
+140097028	19	.?AVbad_alloc@std@@
+140097050	19	.?AVexception@std@@
+140097078	30	.?AVbad_array_new_length@std@@
+1400970a8	13	.?AVQAction@@
+1400970c8	13	.?AVQObject@@
+1400970e8	11	.?AVQMenu@@
+140097108	13	.?AVQWidget@@
+140097128	18	.?AVQPaintDevice@@
+140097150	13	.?AVMenuBar@@
+140097170	14	.?AVQMenuBar@@
+140097190	18	.?AVQButtonGroup@@
+1400971b8	17	.?AVQHBoxLayout@@
+1400971e0	16	.?AVQBoxLayout@@
+140097208	13	.?AVQLayout@@
+140097228	17	.?AVQLayoutItem@@
+140097250	22	.?AVQRegExpValidator@@
+140097278	16	.?AVQValidator@@
+1400972a0	22	.?AVNewProjectDialog@@
+1400972c8	13	.?AVQDialog@@
+1400972e8	13	.?AVQPixmap@@
+140097308	17	.?AVAboutDialog@@
+140097330	17	.?AVQSpacerItem@@
+140097358	17	.?AVQGridLayout@@
+140097380	17	.?AVQVBoxLayout@@
+1400973a8	12	.?AVQFrame@@
+1400973c8	17	.?AVQPushButton@@
+1400973f0	21	.?AVQAbstractButton@@
+140097418	16	.?AVCTableView@@
+140097440	16	.?AVQTableView@@
+140097468	23	.?AVQAbstractItemView@@
+140097490	25	.?AVQAbstractScrollArea@@
+1400974c0	28	.?AVCDeviceSelectionDialog@@
+1400974f0	27	.?AVCDeviceDataProxyModel@@
+140097520	27	.?AVQSortFilterProxyModel@@
+140097550	25	.?AVQAbstractProxyModel@@
+140097580	24	.?AVQAbstractItemModel@@
+1400975b0	22	.?AVCDeviceDataModel@@
+1400975d8	18	.?AVCustComboBox@@
+140097600	15	.?AVQComboBox@@
+140097620	17	.?AVQToolButton@@
+140097648	14	.?AVQToolBar@@
+140097668	15	.?AVQShortcut@@
+140097688	12	.?AVQTimer@@
+1400976a8	23	.?AVDIALOG_CustMsgBox@@
+1400976d0	12	.?AVQLabel@@
+1400976f0	15	.?AVQCheckBox@@
+140097710	15	.?AVQGroupBox@@
+140097730	18	.?AVQRadioButton@@
+140097758	18	.?AVQTableWidget@@
+140097780	22	.?AVQTableWidgetItem@@
+1400977a8	15	.?AVQSplitter@@
+1400977c8	18	.?AVCustLineEdit@@
+1400977f0	15	.?AVQLineEdit@@
+140097810	22	.?AVTIFSpeedComboBox@@
+140097838	22	.?AVUtilFilterHeader@@
+140097860	17	.?AVQHeaderView@@
+140097888	16	.?AVQScrollBar@@
+1400978b0	21	.?AVQAbstractSlider@@
+1400978d8	18	.?AVQColorDialog@@
+140097900	20	.?AVGraphContainer@@
+140097928	17	.?AVGraphWidget@@
+140097950	18	.?AVQApplication@@
+140097978	22	.?AVQCoreApplication@@
+1400979a0	16	.?AVMainWindow@@
+1400979c8	17	.?AVQMainWindow@@
+1400979f0	21	.?AVQProgressDialog@@
+140097a18	15	.?AVStatusBar@@
+140097a38	16	.?AVQStatusBar@@
+140097a60	17	.?AVQTreeWidget@@
+140097a88	15	.?AVQTreeView@@
+140097aa8	21	.?AVQTreeWidgetItem@@
+140097ad0	21	.?AVSymbolSelection@@
+140097af8	17	.?AVTableWidget@@
+140097b20	13	.?AVToolBar@@
+140097b40	22	.?AVQDoubleValidator@@
+140097b68	19	.?AVTriggerWidget@@
+140097b90	19	.?AVWelcomeDialog@@
+140097bb8	15	.?AVtype_info@@
+1428790d8	9	GroupIcon
+14287918a	14	StringFileInfo
+1428791ae	8	040904E4
+1428791c6	11	CompanyName
+1428791e0	27	SEGGER Microcontroller GmbH
+14287921e	15	FileDescription
+142879240	7	J-Scope
+142879256	11	FileVersion
+14287927e	14	ProductVersion
+14287929c	4	9.66
+1428792ae	12	InternalName
+1428792c8	10	JScope.exe
+1428792e6	16	OriginalFilename
+142879308	10	JScope.exe
+142879326	11	ProductName
+142879340	7	J-Scope
+142879356	11	VarFileInfo
+142879376	11	Translation
+142879398	381	<?xml version='1.0' encoding='UTF-8' standalone='yes'?>\n<assembly xmlns='urn:schemas-microsoft-com:asm.v1' manifestVersion='1.0'>\n  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">\n    <security>\n      <requestedPrivileges>\n        <requestedExecutionLevel level='asInvoker' uiAccess='false' />\n      </requestedPrivileges>\n    </security>\n  </trustInfo>\n</assembly>\n
+ff00001710	36	00000000-0000-0000-0000-000000000000

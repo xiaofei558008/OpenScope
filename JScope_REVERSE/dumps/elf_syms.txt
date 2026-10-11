@@ -1,0 +1,317 @@
+=== strings matching /Symbol type is not supported|Preparing Symbols|Finishing Symbols|parsing subkey|size of selected/ referenced by 3 functions ===
+
+--- FUN_14004f0c0 @ 14004f0c0  size=281
+      "Error while parsing subkey "%s" in settings file. Syntax error."
+
+--- FUN_1400507f0 @ 1400507f0  size=1085
+      "Preparing Symbols ..."
+      "Finishing Symbols ..."
+
+--- FUN_1400504d0 @ 1400504d0  size=655
+      "Symbol type is not supported"
+
+
+################ DECOMP: FUN_14004f0c0 @ 14004f0c0 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+undefined8 FUN_14004f0c0(undefined8 param_1,longlong param_2,undefined1 *param_3,undefined4 param_4)
+
+{
+  int iVar1;
+  undefined8 uVar2;
+  undefined1 auStack_168 [32];
+  longlong local_148 [2];
+  char local_138 [256];
+  ulonglong local_38;
+  
+  local_38 = DAT_140096fe8 ^ (ulonglong)auStack_168;
+  uVar2 = 0xffffffff;
+  iVar1 = FUN_14004f2f0();
+  if (iVar1 == 0) {
+    local_138[0] = '\0';
+    FUN_14004f6a0();
+    *param_3 = 0;
+    local_148[0] = FUN_14004f470(param_1,param_2);
+    if (local_148[0] != 0) {
+      iVar1 = FUN_1400277b0(param_2);
+      local_148[0] = local_148[0] + iVar1;
+      FUN_1400448c0(local_148);
+      FUN_140044840(local_138,0x100,local_148,0x3d);
+      FUN_1400448c0(local_148);
+      FUN_140044a20(local_138,local_148,param_3,param_4);
+      if (local_138[0] == '\0') {
+        uVar2 = 0;
+      }
+      else if (param_2 == 0) {
+        FUN_14003f430("Error while parsing settings file. Syntax error.");
+      }
+      else {
+        FUN_140028380(local_138,0x100,
+                      "Error while parsing subkey \"%s\" in settings file. Syntax error.",param_2);
+        FUN_14003f430(local_138);
+      }
+    }
+    FUN_14004f7e0();
+  }
+  return uVar2;
+}
+
+
+
+
+################ DECOMP: FUN_1400507f0 @ 1400507f0 ################
+
+void FUN_1400507f0(QWidget *param_1)
+
+{
+  QString *pQVar1;
+  code *pcVar2;
+  int iVar3;
+  int iVar4;
+  QTreeWidget *this;
+  undefined8 uVar5;
+  QTreeWidgetItem *pQVar6;
+  QHeaderView *pQVar7;
+  QString *this_00;
+  longlong lVar8;
+  longlong lVar9;
+  uint uVar10;
+  undefined **ppuVar11;
+  uint uVar13;
+  int local_res8;
+  QTreeWidget *local_res10;
+  undefined4 local_res18 [2];
+  code *local_res20;
+  code *local_68;
+  Data *local_60;
+  int local_58;
+  int local_54;
+  longlong local_50 [2];
+  QTreeWidget *pQVar12;
+  QTreeWidget *pQVar14;
+  
+  local_68 = shared_null_exref;
+  LOCK();
+  *(int *)shared_null_exref = *(int *)shared_null_exref + 1;
+  UNLOCK();
+  local_res20 = shared_null_exref;
+  LOCK();
+  *(int *)shared_null_exref = *(int *)shared_null_exref + 1;
+  UNLOCK();
+  local_res8 = 0x3c;
+  this = (QTreeWidget *)FUN_140058d94(0x28);
+  pQVar14 = (QTreeWidget *)0x0;
+  pQVar12 = pQVar14;
+  local_res10 = this;
+  if (this != (QTreeWidget *)0x0) {
+    QTreeWidget::QTreeWidget(this,param_1);
+    *(undefined ***)this = QTreeWidget::vftable;
+    *(undefined ***)(this + 0x10) = QTreeWidget::vftable;
+    pQVar12 = this;
+  }
+  *(QTreeWidget **)(param_1 + 0x30) = pQVar12;
+  ppuVar11 = &PTR_DAT_140077690;
+  lVar8 = 5;
+  do {
+    local_60 = QString::fromAscii_helper(*ppuVar11,-1);
+    FUN_140030840(&local_68,&local_60);
+    QString::~QString((QString *)&local_60);
+    ppuVar11 = ppuVar11 + 2;
+    lVar8 = lVar8 + -1;
+  } while (lVar8 != 0);
+  QTreeWidget::setColumnCount(*(QTreeWidget **)(param_1 + 0x30),5);
+  QTreeWidget::setHeaderLabels(*(QTreeWidget **)(param_1 + 0x30),(QStringList *)&local_68);
+  QTreeWidget::setSortingEnabled(*(QTreeWidget **)(param_1 + 0x30),true);
+  uVar10 = 0;
+  local_res10 = (QTreeWidget *)((ulonglong)local_res10 & 0xffffffff00000000);
+  QAbstractItemView::setEditTriggers(*(QAbstractItemView **)(param_1 + 0x30),&local_res10);
+  lVar9 = DAT_14286d3b0;
+  pQVar12 = pQVar14;
+  for (lVar8 = DAT_14286d3b0; lVar8 != 0; lVar8 = *(longlong *)(lVar8 + 0x3e0)) {
+    uVar10 = (int)pQVar12 + 1;
+    pQVar12 = (QTreeWidget *)(ulonglong)uVar10;
+  }
+  uVar5 = FUN_14004d170(*(undefined8 *)(param_1 + 0x58),0,"Preparing Symbols ...",uVar10,0);
+  if (uVar10 != 0) {
+    do {
+      FUN_14004d170(*(undefined8 *)(param_1 + 0x58),uVar5,0,uVar10,(int)pQVar14);
+      lVar8 = FUN_1400504d0(param_1,lVar9);
+      local_50[0] = lVar8;
+      if (lVar8 != 0) {
+        FUN_140051740(&local_res20,local_50);
+      }
+      FUN_140050c30(param_1,lVar8);
+      lVar9 = *(longlong *)(lVar9 + 0x3e0);
+      uVar13 = (int)pQVar14 + 1;
+      pQVar14 = (QTreeWidget *)(ulonglong)uVar13;
+    } while (uVar13 < uVar10);
+  }
+  uVar13 = 0;
+  if (*(int *)(local_res20 + 0xc) != *(int *)(local_res20 + 8)) {
+    pQVar6 = QTreeWidget::invisibleRootItem(*(QTreeWidget **)(param_1 + 0x30));
+    QTreeWidgetItem::addChildren(pQVar6,(QList<QTreeWidgetItem*___ptr64> *)&local_res20);
+  }
+  FUN_14004d170(*(undefined8 *)(param_1 + 0x58),uVar5,0,uVar10,0xffffffff);
+  lVar8 = DAT_14286d3b0;
+  uVar5 = FUN_14004d170(*(undefined8 *)(param_1 + 0x58),0,"Finishing Symbols ...",uVar10,0);
+  if (uVar10 != 0) {
+    do {
+      FUN_14004d170(*(undefined8 *)(param_1 + 0x58),uVar5,0,uVar10,uVar13);
+      pQVar6 = *(QTreeWidgetItem **)(lVar8 + 0x360);
+      if (((*(char *)(lVar8 + 4) == '\0') && (*(char *)(lVar8 + 0x210) != '\0')) &&
+         (*(QTreeWidget **)(pQVar6 + 0x18) != (QTreeWidget *)0x0)) {
+        QTreeWidget::setFirstItemColumnSpanned(*(QTreeWidget **)(pQVar6 + 0x18),pQVar6,true);
+        if (*(QTreeWidget **)(pQVar6 + 0x18) != (QTreeWidget *)0x0) {
+          QTreeWidget::setItemExpanded(*(QTreeWidget **)(pQVar6 + 0x18),pQVar6,true);
+        }
+      }
+      FUN_1400510a0(param_1,*(undefined8 *)(lVar8 + 0x3d8));
+      lVar8 = *(longlong *)(lVar8 + 0x3e0);
+      uVar13 = uVar13 + 1;
+    } while (uVar13 < uVar10);
+  }
+  FUN_14004d170(*(undefined8 *)(param_1 + 0x58),uVar5,0,uVar10,0xffffffff);
+  uVar10 = 0;
+  iVar3 = QTreeWidget::columnCount(*(QTreeWidget **)(param_1 + 0x30));
+  if (iVar3 != 0) {
+    local_res8 = 0x3c;
+    do {
+      QTreeView::resizeColumnToContents(*(QTreeView **)(param_1 + 0x30),uVar10);
+      iVar3 = *(int *)(&DAT_140077698 + (ulonglong)uVar10 * 0x10);
+      iVar4 = QTreeView::columnWidth(*(QTreeView **)(param_1 + 0x30),uVar10);
+      if (iVar3 < iVar4) {
+        QTreeView::setColumnWidth(*(QTreeView **)(param_1 + 0x30),uVar10,iVar3);
+      }
+      iVar3 = QTreeView::columnWidth(*(QTreeView **)(param_1 + 0x30),uVar10);
+      local_res8 = local_res8 + iVar3;
+      uVar10 = uVar10 + 1;
+      uVar13 = QTreeWidget::columnCount(*(QTreeWidget **)(param_1 + 0x30));
+    } while (uVar10 < uVar13);
+  }
+  QObject::connect(*(QObject **)(param_1 + 0x30),"2itemChanged(QTreeWidgetItem*, int)",
+                   (QObject *)param_1,"1_SlotOnTreeItemChanged(QTreeWidgetItem*, int)",0);
+  QObject::connect(*(QObject **)(param_1 + 0x30),"2itemDoubleClicked(QTreeWidgetItem*, int)",
+                   (QObject *)param_1,"1_SlotOnTreeWidgetItemDoubleClicked(QTreeWidgetItem*, int)",0
+                  );
+  local_res18[0] = 0;
+  QGridLayout::addWidget
+            (*(QGridLayout **)(param_1 + 0x28),*(undefined8 *)(param_1 + 0x30),1,0,1,5,local_res18);
+  pQVar7 = QTreeView::header(*(QTreeView **)(param_1 + 0x30));
+  local_54 = ((*(int *)(*(longlong *)(pQVar7 + 0x20) + 0x20) -
+              *(int *)(*(longlong *)(pQVar7 + 0x20) + 0x18)) + 1) * 0x14;
+  local_58 = local_res8;
+  QWidget::resize(param_1,(QSize *)&local_58);
+  LOCK();
+  iVar3 = *(int *)local_res20;
+  *(int *)local_res20 = *(int *)local_res20 + -1;
+  UNLOCK();
+  if (iVar3 == 1) {
+    qFree(local_res20);
+  }
+  pcVar2 = local_68;
+  LOCK();
+  iVar3 = *(int *)local_68;
+  *(int *)local_68 = *(int *)local_68 + -1;
+  UNLOCK();
+  if (iVar3 == 1) {
+    pQVar1 = (QString *)(local_68 + ((longlong)*(int *)(local_68 + 8) + 3) * 8);
+    this_00 = (QString *)(local_68 + ((longlong)*(int *)(local_68 + 0xc) + 3) * 8);
+    while (this_00 != pQVar1) {
+      this_00 = this_00 + -8;
+      QString::~QString(this_00);
+    }
+    qFree(pcVar2);
+  }
+  return;
+}
+
+
+
+
+################ DECOMP: FUN_1400504d0 @ 1400504d0 ################
+
+/* WARNING: Function: __security_check_cookie replaced with injection: security_check_cookie */
+
+QTreeWidgetItem * FUN_1400504d0(undefined8 param_1,longlong param_2)
+
+{
+  int iVar1;
+  QTreeWidgetItem *pQVar2;
+  CheckState CVar3;
+  undefined1 auStack_58 [32];
+  QTreeWidgetItem *local_38 [2];
+  char local_28 [16];
+  ulonglong local_18;
+  
+  local_18 = DAT_140096fe8 ^ (ulonglong)auStack_58;
+  if (param_2 == 0) {
+LAB_140050740:
+    pQVar2 = (QTreeWidgetItem *)0x0;
+  }
+  else {
+    pQVar2 = (QTreeWidgetItem *)FUN_140058d94(0x40);
+    local_38[0] = pQVar2;
+    if (pQVar2 == (QTreeWidgetItem *)0x0) {
+      pQVar2 = (QTreeWidgetItem *)0x0;
+    }
+    else {
+      QTreeWidgetItem::QTreeWidgetItem(pQVar2,0);
+      *(undefined ***)pQVar2 = QTreeWidgetItem::vftable;
+    }
+    if (*(QTreeWidget **)(pQVar2 + 0x18) != (QTreeWidget *)0x0) {
+      QTreeWidget::setItemExpanded(*(QTreeWidget **)(pQVar2 + 0x18),pQVar2,false);
+    }
+    if (*(char *)(param_2 + 4) == '\0') {
+      if (*(char *)(param_2 + 0x210) == '\0') goto LAB_140050740;
+      local_38[0] = (QTreeWidgetItem *)QString::fromAscii_helper((char *)(param_2 + 0x210),-1);
+      QTreeWidgetItem::setText(pQVar2,0,(QString *)local_38);
+      QString::~QString((QString *)local_38);
+      QColor::QColor((QColor *)local_38,6);
+      QTreeWidgetItem::setBackgroundColor(pQVar2,0,(QColor *)local_38);
+    }
+    else {
+      local_38[0] = (QTreeWidgetItem *)QString::fromAscii_helper((char *)(param_2 + 4),-1);
+      QTreeWidgetItem::setText(pQVar2,0,(QString *)local_38);
+      QString::~QString((QString *)local_38);
+    }
+    if (*(char *)(param_2 + 0x110) != '\0') {
+      local_38[0] = (QTreeWidgetItem *)QString::fromAscii_helper((char *)(param_2 + 0x110),-1);
+      QTreeWidgetItem::setText(pQVar2,1,(QString *)local_38);
+      QString::~QString((QString *)local_38);
+    }
+    if (*(uint *)(param_2 + 0x31c) != 0) {
+      QVariant::QVariant((QVariant *)local_38,*(uint *)(param_2 + 0x31c));
+      (**(code **)(*(longlong *)pQVar2 + 0x18))(pQVar2,2,0,local_38);
+      QVariant::~QVariant((QVariant *)local_38);
+    }
+    if (*(int *)(param_2 + 0x318) != 0) {
+      FUN_140028380(local_28,0x10,&DAT_140071900);
+      local_38[0] = (QTreeWidgetItem *)QString::fromAscii_helper(local_28,-1);
+      QTreeWidgetItem::setText(pQVar2,3,(QString *)local_38);
+      QString::~QString((QString *)local_38);
+    }
+    if (*(char *)(param_2 + 0x35f) != '\0') {
+      iVar1 = FUN_1400512f0(param_1,param_2);
+      if (iVar1 == 0) {
+        CVar3 = 0;
+      }
+      else {
+        FUN_140050760(param_1,param_2);
+        CVar3 = 2;
+      }
+      QTreeWidgetItem::setCheckState(pQVar2,4,CVar3);
+    }
+    iVar1 = *(int *)(param_2 + 0x314);
+    if ((((iVar1 == 3) || (iVar1 == 4)) || (iVar1 == 9)) || (iVar1 == 0xd)) {
+      QTreeWidgetItem::setDisabled(pQVar2,true);
+      local_38[0] = (QTreeWidgetItem *)QString::fromAscii_helper("Symbol type is not supported",-1);
+      QTreeWidgetItem::setText(pQVar2,4,(QString *)local_38);
+      QString::~QString((QString *)local_38);
+    }
+    *(QTreeWidgetItem **)(param_2 + 0x360) = pQVar2;
+  }
+  return pQVar2;
+}
+
+
