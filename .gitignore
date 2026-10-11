@@ -31,3 +31,6 @@ packaging/wizard_sidebar3.bmp
 
 # network E2E test artifacts (regenerated per run)
 tests/out/
+
+# npm cache (local only)
+.npm-cache/
