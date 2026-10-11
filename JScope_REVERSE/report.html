@@ -1,0 +1,1264 @@
+<title>J-Scope 逆向分析</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+
+<style>
+/* ─────────────────────────────────────────────────────────────
+   J-Scope 逆向分析 — 技术档案页
+   配色取自示波器四通道惯例 (CH1 琥珀 / CH2 青 / CH3 品红 / CH4 绿)，
+   用作「证据等级」的语义色 —— 这是本页唯一的结构性装饰。
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --bg:        #F6F8FA;
+  --surface:   #FFFFFF;
+  --surface-2: #EEF2F6;
+  --fg:        #131820;
+  --fg-muted:  #5A6675;
+  --fg-faint:  #8A95A3;
+  --border:    #DDE3EA;
+  --border-2:  #C6D0DA;
+
+  --accent:    #0A6C8A;   /* CH2 青 —— 主强调 */
+  --accent-bg: #E4F2F7;
+  --ch1:       #A9610A;   /* CH1 琥珀 */
+  --ch1-bg:    #FBF0DF;
+  --ch3:       #9B1F8E;   /* CH3 品红 */
+  --ch3-bg:    #FAE9F7;
+  --ch4:       #1F7A45;   /* CH4 绿 */
+  --ch4-bg:    #E5F4EA;
+  --warn:      #A9610A;
+  --warn-bg:   #FBF0DF;
+
+  --f-display: 'IBM Plex Sans Condensed', 'Noto Sans SC', system-ui, sans-serif;
+  --f-body:    'IBM Plex Sans', 'Noto Sans SC', system-ui, sans-serif;
+  --f-mono:    'IBM Plex Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+
+  --col: 74ch;
+  --radius: 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0D1116;
+    --surface:   #151B22;
+    --surface-2: #1C242D;
+    --fg:        #E3E9F0;
+    --fg-muted:  #98A5B4;
+    --fg-faint:  #6C7A89;
+    --border:    #242E38;
+    --border-2:  #33404C;
+
+    --accent:    #52C6E4;
+    --accent-bg: #10303C;
+    --ch1:       #E8A544;
+    --ch1-bg:    #3A2B12;
+    --ch3:       #E07BD4;
+    --ch3-bg:    #37173A;
+    --ch4:       #5ECB84;
+    --ch4-bg:    #12301E;
+    --warn:      #E8A544;
+    --warn-bg:   #3A2B12;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:        #0D1116;
+  --surface:   #151B22;
+  --surface-2: #1C242D;
+  --fg:        #E3E9F0;
+  --fg-muted:  #98A5B4;
+  --fg-faint:  #6C7A89;
+  --border:    #242E38;
+  --border-2:  #33404C;
+
+  --accent:    #52C6E4;
+  --accent-bg: #10303C;
+  --ch1:       #E8A544;
+  --ch1-bg:    #3A2B12;
+  --ch3:       #E07BD4;
+  --ch3-bg:    #37173A;
+  --ch4:       #5ECB84;
+  --ch4-bg:    #12301E;
+  --warn:      #E8A544;
+  --warn-bg:   #3A2B12;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.65;
+  padding-inline: 20px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── 页头 ───────────────────────────────────────────── */
+.masthead {
+  max-width: 1180px;
+  margin-inline: auto;
+  padding-block: 40px 22px;
+  border-bottom: 1px solid var(--border-2);
+}
+.eyebrow {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 14px;
+}
+h1 {
+  font-family: var(--f-display);
+  font-weight: 700;
+  font-size: clamp(2rem, 5.2vw, 3.1rem);
+  line-height: 1.05;
+  letter-spacing: -.015em;
+  margin: 0 0 16px;
+  text-wrap: balance;
+}
+.standfirst {
+  font-size: 1.03rem;
+  color: var(--fg-muted);
+  max-width: 62ch;
+  margin: 0 0 26px;
+}
+.factbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface);
+}
+.fact {
+  flex: 1 1 150px;
+  min-width: 0;
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+}
+.fact:last-child { border-right: 0; }
+.fact dt {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 0 0 3px;
+}
+.fact dd {
+  margin: 0;
+  font-family: var(--f-mono);
+  font-size: 12.5px;
+  color: var(--fg);
+  overflow-wrap: anywhere;
+}
+
+/* ── 布局 ───────────────────────────────────────────── */
+.shell {
+  max-width: 1180px;
+  margin-inline: auto;
+  padding-block: 34px 90px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 44px 52px;
+  align-items: start;
+}
+@media (min-width: 1040px) {
+  .shell { grid-template-columns: 216px minmax(0, 1fr); }
+}
+
+nav.toc {
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 14px 6px;
+}
+@media (min-width: 1040px) {
+  nav.toc {
+    position: sticky;
+    top: env(safe-area-inset-top, 0px);
+    max-height: calc(100vh - 28px);
+    overflow-y: auto;
+  }
+}
+nav.toc ol { list-style: none; margin: 0; padding: 0; }
+nav.toc a {
+  display: flex;
+  gap: 9px;
+  padding: 5px 10px;
+  color: var(--fg-muted);
+  text-decoration: none;
+  border-radius: 3px;
+  line-height: 1.35;
+}
+nav.toc a:hover { background: var(--surface-2); color: var(--fg); }
+nav.toc a:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+nav.toc .n {
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--fg-faint);
+  flex: none;
+  padding-top: 1px;
+}
+
+main { min-width: 0; display: flex; flex-direction: column; gap: 52px; }
+
+section { scroll-margin-top: 24px; display: flex; flex-direction: column; gap: 18px; }
+
+h2 {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-size: 1.62rem;
+  line-height: 1.2;
+  letter-spacing: -.01em;
+  margin: 0;
+  padding-bottom: 9px;
+  border-bottom: 2px solid var(--fg);
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  text-wrap: balance;
+}
+h2 .sec-n {
+  font-family: var(--f-mono);
+  font-size: .74rem;
+  font-weight: 500;
+  color: var(--accent);
+  flex: none;
+  letter-spacing: .02em;
+}
+h3 {
+  font-family: var(--f-display);
+  font-weight: 600;
+  font-size: 1.12rem;
+  margin: 6px 0 0;
+  letter-spacing: -.005em;
+}
+h4 {
+  font-family: var(--f-mono);
+  font-weight: 600;
+  font-size: .78rem;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin: 8px 0 0;
+}
+p { margin: 0; max-width: var(--col); }
+.lead { color: var(--fg-muted); }
+
+ul, ol.body { margin: 0; padding-left: 1.3em; max-width: var(--col); }
+li { margin-block: 5px; }
+
+a { color: var(--accent); text-underline-offset: 2px; }
+
+code {
+  font-family: var(--f-mono);
+  font-size: .87em;
+  background: var(--surface-2);
+  padding: .1em .34em;
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+
+/* ── 证据等级徽章 ───────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: .05em;
+  padding: 1px 6px 2px;
+  border-radius: 3px;
+  white-space: nowrap;
+  vertical-align: baseline;
+  border: 1px solid transparent;
+}
+.b-obs  { color: var(--accent); background: var(--accent-bg); border-color: color-mix(in srgb, var(--accent) 26%, transparent); }
+.b-der  { color: var(--ch1);    background: var(--ch1-bg);    border-color: color-mix(in srgb, var(--ch1) 26%, transparent); }
+.b-inf  { color: var(--ch3);    background: var(--ch3-bg);    border-color: color-mix(in srgb, var(--ch3) 26%, transparent); }
+.b-unk  { color: var(--fg-muted); background: var(--surface-2); border-color: var(--border-2); }
+
+/* ── 代码块 ─────────────────────────────────────────── */
+.code {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  padding: 14px 16px;
+}
+.code pre {
+  margin: 0;
+  font-family: var(--f-mono);
+  font-size: 12.3px;
+  line-height: 1.62;
+  white-space: pre;
+  color: var(--fg);
+}
+.code pre code { background: none; padding: 0; font-size: inherit; }
+.code .cap {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+  margin: 0 0 10px;
+}
+.k { color: var(--accent); font-weight: 500; }
+.c { color: var(--fg-faint); font-style: italic; }
+.n { color: var(--ch1); }
+
+/* ── 表格 ───────────────────────────────────────────── */
+.tw { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  text-align: left;
+  font-weight: 500;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border-2);
+  white-space: nowrap;
+}
+td {
+  padding: 8px 13px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+tr:last-child td { border-bottom: 0; }
+td.m, th.m { font-family: var(--f-mono); font-size: 12.2px; font-variant-numeric: tabular-nums; }
+td.mono-sm { font-family: var(--f-mono); font-size: 11.6px; }
+tbody tr:hover { background: var(--surface-2); }
+.ok  { color: var(--ch4); font-weight: 600; }
+.no  { color: var(--ch3); font-weight: 600; }
+
+/* ── 采样包字节布局图 ───────────────────────────────── */
+.packet { display: flex; flex-direction: column; gap: 10px; }
+.pkt-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.pkt {
+  border: 1px solid var(--border-2);
+  border-radius: 3px;
+  background: var(--surface);
+  padding: 8px 11px;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.pkt .off {
+  font-family: var(--f-mono);
+  font-size: 10px;
+  letter-spacing: .05em;
+  color: var(--fg-faint);
+  display: block;
+}
+.pkt .nm {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  display: block;
+  margin-top: 1px;
+  white-space: nowrap;
+}
+.pkt .sz {
+  font-family: var(--f-mono);
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  display: block;
+}
+.pkt.ts  { border-left: 3px solid var(--ch1); background: var(--ch1-bg); }
+.pkt.v   { border-left: 3px solid var(--accent); }
+.pkt.v2  { border-left: 3px solid var(--ch4); }
+.pkt.v3  { border-left: 3px solid var(--ch3); }
+
+/* ── 双环内存图 ─────────────────────────────────────── */
+.rings { display: flex; flex-direction: column; gap: 14px; }
+.ring {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  overflow: hidden;
+}
+.ring-h {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  align-items: baseline;
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.ring-h .t { font-family: var(--f-display); font-weight: 600; font-size: .95rem; }
+.ring-h .s { font-family: var(--f-mono); font-size: 11px; color: var(--fg-muted); margin-left: auto; }
+.ring-b { padding: 12px 13px; font-size: 13px; color: var(--fg-muted); }
+.strip { display: flex; gap: 2px; margin-bottom: 9px; }
+.cell {
+  height: 26px;
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 2px;
+}
+.cell.ts { background: var(--ch1); opacity: .78; }
+.cell.v  { background: var(--accent); opacity: .6; }
+.cell.v2 { background: var(--ch4); opacity: .6; }
+.strip-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 16px;
+  font-family: var(--f-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.strip-key span { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 11px; height: 11px; border-radius: 2px; flex: none; }
+
+/* ── 标注卡片 ───────────────────────────────────────── */
+.callout {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ch1);
+  background: var(--warn-bg);
+  border-radius: var(--radius);
+  padding: 13px 16px;
+  max-width: var(--col);
+  font-size: 14px;
+}
+.callout.key { border-left-color: var(--accent); background: var(--accent-bg); }
+.callout p + p { margin-top: 9px; }
+.callout strong { font-weight: 600; }
+
+/* ── 列表：抄/不抄 ──────────────────────────────────── */
+.verdict { font-family: var(--f-mono); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.v-yes { color: var(--ch4); }
+.v-no  { color: var(--ch3); }
+.v-opt { color: var(--fg-muted); }
+
+/* ── 页脚 ───────────────────────────────────────────── */
+footer {
+  max-width: 1180px;
+  margin-inline: auto;
+  padding-block: 26px 44px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  color: var(--fg-faint);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+footer code { font-size: .95em; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
+</style>
+
+<header class="masthead">
+  <p class="eyebrow">静态逆向分析 · Ghidra 12.1.4 headless</p>
+  <h1>SEGGER J-Scope 逆向分析</h1>
+  <p class="standfirst">
+    J-Scope 如何在 J-Link 上做到微秒级变量采样？这份档案给出了两条采集路径
+    —— HSS 与 RTT —— 的完整调用契约、数据模型与工程文件格式，
+    全部来自反汇编，可直接用于 OpenScope 的重实现。
+  </p>
+  <dl class="factbar">
+    <div class="fact"><dt>分析对象</dt><dd>JScope.exe</dd></div>
+    <div class="fact"><dt>来源</dt><dd>JLink_V966</dd></div>
+    <div class="fact"><dt>架构</dt><dd>x64 PE · Qt4</dd></div>
+    <div class="fact"><dt>函数 / 字符串</dt><dd>2,712 / 3,035</dd></div>
+    <div class="fact"><dt>日期</dt><dd>2026-10-11</dd></div>
+  </dl>
+</header>
+
+<div class="shell">
+
+  <nav class="toc" aria-label="目录">
+    <ol>
+      <li><a href="#s0"><span class="n">00</span><span>证据等级</span></a></li>
+      <li><a href="#s1"><span class="n">01</span><span>二进制基本面</span></a></li>
+      <li><a href="#s2"><span class="n">02</span><span>总体架构</span></a></li>
+      <li><a href="#s3"><span class="n">03</span><span>J-Link API 清单</span></a></li>
+      <li><a href="#s4"><span class="n">04</span><span>连接序列</span></a></li>
+      <li><a href="#s5"><span class="n">05</span><span>HSS 高速采样</span></a></li>
+      <li><a href="#s6"><span class="n">06</span><span>双环数据模型</span></a></li>
+      <li><a href="#s7"><span class="n">07</span><span>RTT 与 VarFormat</span></a></li>
+      <li><a href="#s8"><span class="n">08</span><span>类型系统</span></a></li>
+      <li><a href="#s9"><span class="n">09</span><span>变量记录布局</span></a></li>
+      <li><a href="#s10"><span class="n">10</span><span>文件格式</span></a></li>
+      <li><a href="#s11"><span class="n">11</span><span>命令行接口</span></a></li>
+      <li><a href="#s12"><span class="n">12</span><span>对 OpenScope 的启示</span></a></li>
+      <li><a href="#s13"><span class="n">13</span><span>产出物与复现</span></a></li>
+    </ol>
+  </nav>
+
+  <main>
+
+    <!-- ══ 00 ══ -->
+    <section id="s0">
+      <h2><span class="sec-n">00</span>证据等级</h2>
+      <p class="lead">
+        本页按 REA 方法论标注每一条结论的来源。徽章出现在标题与表格中，
+        标出该条目的可信度；未标注处默认为 <span class="badge b-obs">观测</span>。
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:130px">标记</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><span class="badge b-obs">观测</span></td><td>直接来自反汇编 / 字符串 / PE 结构，可复核</td></tr>
+            <tr><td><span class="badge b-der">推导</span></td><td>由观测经确定性推理得到（如结构体字段偏移）</td></tr>
+            <tr><td><span class="badge b-inf">推断</span></td><td>合理但未完全证实的解释</td></tr>
+            <tr><td><span class="badge b-unk">未知</span></td><td>本轮未解决，重实现时需实测确认</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>全部地址为镜像基址 <code>0x140000000</code> 下的虚拟地址（VA）。分析全程为静态，未运行 J-Scope，未连接任何调试探针。</p>
+    </section>
+
+    <!-- ══ 01 ══ -->
+    <section id="s1">
+      <h2><span class="sec-n">01</span>二进制基本面</h2>
+      <div class="tw">
+        <table>
+          <tbody>
+            <tr><td>格式</td><td class="m">PE32+ x86-64</td></tr>
+            <tr><td>链接器</td><td class="m">MSVC 14.29（VS2019 工具链）</td></tr>
+            <tr><td>编译时间戳</td><td class="m">2026-08-05 10:18:02 UTC</td></tr>
+            <tr><td>体积</td><td class="m">679,920 B（.text 371,712）</td></tr>
+            <tr><td>GUI 框架</td><td><strong>Qt4</strong> — QtCore4.dll 141 导入 / QtGui4.dll 1034 导入</td></tr>
+            <tr><td>调试器后端</td><td><strong>动态加载</strong> <code>JLink_x64.dll</code>，<strong>无静态导入</strong></td></tr>
+            <tr><td>ELF 解析</td><td>静态链接 <strong>libdwarf</strong></td></tr>
+            <tr><td>版本资源</td><td class="m">ProductVersion = 9.66；FileVersion 字段损坏（内容为 <code>\tB</code>）</td></tr>
+            <tr><td>PDB 路径残留</td><td class="m">D:\Work\JLink\Output\Release\x64\JScope.pdb</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout key">
+        <p><strong>关键结构发现 ——</strong> <code>.data</code> 段虚拟大小 <strong>41,776,096 字节（≈39.8 MB）</strong>，远超常规。
+        原因是其中静态驻留了一个 <strong>32 MB 时间戳环</strong>（见 <a href="#s6">§06</a>）。这是理解 J-Scope 内存策略的入口。</p>
+      </div>
+    </section>
+
+    <!-- ══ 02 ══ -->
+    <section id="s2">
+      <h2><span class="sec-n">02</span>总体架构</h2>
+      <div class="code">
+        <p class="cap">进程与线程模型</p>
+<pre><code>┌──────────────────────────────────────────────────────────────┐
+│  JScope.exe   (Qt4 GUI，单进程)                                │
+│                                                               │
+│   MainWindow ──┬── GraphContainer / GraphWidget               │
+│                ├── SymbolSelection   (变量树)                  │
+│                ├── TableWidget       (数值窗口)                │
+│                ├── TriggerWidget                               │
+│                └── DIALOG_CustMsgBox                           │
+│                                                               │
+│   异步 Job 队列（命名 Job，工作线程执行）                        │
+│     ├ APP: &lt;CreateProject&gt; / &lt;Init&gt; / &lt;Exit&gt;                 │
+│     ├ APP: &lt;ParseELFFile&gt;                                     │
+│     ├ APP: &lt;ReadStart&gt; / &lt;ReadPause&gt; / &lt;ReadStop&gt;             │
+│     ├ APP: &lt;ReadPeriodic&gt;   ◀── 10 ms 周期采样泵               │
+│     ├ APP: &lt;CheckELFModifications&gt;                            │
+│     └ APP: &lt;UpdateProjSettings&gt; / &lt;SetAppStartAction&gt;         │
+│                                                               │
+│   自研带守卫的堆分配器                                          │
+│     "Wrong alloc signature in memory block !"                 │
+│     "Buffer overflow in memory block. %d bytes overflowed."   │
+└──────────────────┬───────────────────────────────────────────┘
+                   │ GetProcAddress —— 按字符串名解析 29 个 API
+                   ▼
+          JLink_x64.dll ──USB / TCP──▶ J-Link 探针 ──SWD/JTAG──▶ MCU</code></pre>
+      </div>
+
+      <h3>DLL 查找顺序</h3>
+      <p>由字符串 <code>JLink_x64.dll</code>、<code>bin_x64\JLink_x64.dll</code> 与注册表键确认：</p>
+      <ol class="body">
+        <li><code>JLink_x64.dll</code>（当前目录 / 搜索路径）</li>
+        <li><code>bin_x64\JLink_x64.dll</code></li>
+        <li>注册表 <code>HKLM\Software\SEGGER\J-Link\InstallPath</code>、<code>HKLM\Software\SEGGER\Flasher\InstallPath</code></li>
+      </ol>
+      <div class="callout">
+        <p><strong>对 OpenScope 的意义 ——</strong> J-Scope 不静态链接 JLinkARM，而是运行时按名解析：
+        同一个 exe 因此能适配任意 J-Link 版本。若 OpenScope 要同时支持 J-Link 与 ST-Link，
+        应沿用「后端抽象 + 运行时加载」这一模式。</p>
+      </div>
+    </section>
+
+    <!-- ══ 03 ══ -->
+    <section id="s3">
+      <h2><span class="sec-n">03</span>J-Link API 清单（29 个）</h2>
+      <p class="lead">
+        全部通过 <code>GetProcAddress</code> 按字符串名解析，并由懒加载 thunk 缓存。
+        每个 thunk 形如：
+      </p>
+      <div class="code">
+<pre><code><span class="k">if</span> (!pFn) pFn = GetProcAddress(h, <span class="n">"JLINK_HSS_Start"</span>);
+<span class="k">if</span> (!pFn) <span class="k">return</span>;
+pFn(...);</code></pre>
+      </div>
+
+      <h4>连接与配置（22）</h4>
+      <div class="code">
+<pre><code>JLINKARM_OpenEx              JLINKARM_Close
+JLINKARM_EMU_SelectByUSBSN   JLINK_EMU_SelectByUSBNickname
+JLINKARM_SelectIP
+JLINKARM_DEVICE_SelectDialog JLINKARM_DEVICE_GetInfo
+JLINKARM_TIF_Select          JLINKARM_SetSpeed        JLINKARM_ConfigJTAG
+JLINKARM_ExecCommand         JLINK_ExecCommand
+JLINKARM_Connect             JLINKARM_Reset
+JLINKARM_Halt                JLINKARM_Go              JLINK_Go
+JLINKARM_IsHalted            JLINK_IsHalted
+JLINKARM_EMU_HasCapEx
+JLINKARM_GetDLLVersion       JLINKARM_GetCompileDateTime</code></pre>
+      </div>
+
+      <h4>采集（7）—— 核心</h4>
+      <div class="code">
+<pre><code>JLINK_HSS_GetCaps   JLINK_HSS_Start   JLINK_HSS_Read   JLINK_HSS_Stop      <span class="c">// 高速采样(异步)</span>
+JLINK_RTTERMINAL_Read   JLINK_RTTERMINAL_Write   JLINK_RTTERMINAL_Control    <span class="c">// RTT(同步)</span></code></pre>
+      </div>
+
+      <div class="callout">
+        <p><strong>注意 ——</strong> <code>JLINK_HSS_*</code> 属于 <strong>J-Link SDK 功能，SEGGER 未公开文档化</strong>。
+        KB 仅说明它是 SDK 的一部分，J-Scope / Ozone / Embedded Studio 使用它。
+        但函数确实从 <code>JLinkARM.dll</code> 导出，第三方可调用 ——
+        <a href="#s5">§05</a> 即为其真实调用契约。</p>
+      </div>
+    </section>
+
+    <!-- ══ 04 ══ -->
+    <section id="s4">
+      <h2><span class="sec-n">04</span>连接序列</h2>
+      <p class="lead">函数 <code>FUN_1400419f0</code>。这是完整且有序的建链配方。</p>
+      <div class="code">
+        <p class="cap">建链 · 按序执行</p>
+<pre><code><span class="n">1)</span> <span class="k">if</span> ((TIF == 0 <span class="c">/*JTAG*/</span> || TIF == 7) &amp;&amp; JTAG_IRPre &gt;= 0)
+       JLINKARM_ConfigJTAG(JTAG_IRPre)
+
+<span class="n">2)</span> JLINKARM_ExecCommand(<span class="n">"SetSkipInitECCRAMOnConnect = 1"</span>, NULL, 0)
+
+<span class="n">3)</span> <span class="k">if</span> (设备名为空 || 设备查找失败):
+       idx = JLINKARM_DEVICE_SelectDialog(parent, 0, 0)   <span class="c">// 弹窗选型</span>
+       JLINKARM_DEVICE_GetInfo(idx, &amp;info)                <span class="c">// 0x978 B 结构</span>
+   <span class="k">else</span>:
+       JLINKARM_ExecCommand(<span class="n">"device = %s"</span>, errbuf, 0x400)
+
+<span class="n">4)</span> 若有脚本: JLINKARM_ExecCommand(<span class="n">"ScriptFile = %s"</span>, errbuf, 0x400)
+
+<span class="n">5)</span> JLINKARM_TIF_Select(TIF)
+<span class="n">6)</span> JLINKARM_SetSpeed(speed_khz)
+
+<span class="n">7)</span> 若命令行给了 -RTTSearchRanges:
+       JLINK_ExecCommand(<span class="n">"SetRTTSearchRanges &lt;addr&gt;,&lt;size&gt;[,...]"</span>, 0, 0)
+
+<span class="n">8)</span> rc = JLINKARM_Connect();   rc &lt; 0 → 失败</code></pre>
+      </div>
+
+      <h3>HSS 能力探测与时间基</h3>
+      <div class="code">
+<pre><code><span class="k">if</span> (mode == HSS) {
+    <span class="k">if</span> (!JLINKARM_EMU_HasCapEx(<span class="n">0x35</span>)) {          <span class="c">// 0x35 = HSS 能力位</span>
+        period_us = <span class="n">20000</span>;                        <span class="c">// 回退 20 ms 轮询</span>
+    } <span class="k">else</span> {
+        <span class="k">if</span> (JLINKARM_GetDLLVersion() &gt; <span class="n">0xc79b</span>) {   <span class="c">// DLL 版本门限 [推断]</span>
+            JLINK_HSS_GetCaps(&amp;caps);
+            TimeResUs = <span class="n">1000000</span> / caps.field_at_4;
+        } <span class="k">else</span> {
+            period_us = <span class="n">10</span>;
+        }
+    }
+}</code></pre>
+      </div>
+
+      <div class="callout">
+        <p><span class="badge b-inf">推断</span> <code>caps.field_at_4</code> 应为 HSS 时间戳频率（Hz），
+        故 <code>1e6 / freq = µs/tick</code>。若它是「ns/tick」，此式量纲不符。
+        <strong>这是重实现时最需要实测确认的一处。</strong></p>
+      </div>
+
+      <div class="callout key">
+        <p><strong>重要修正</strong> <span class="badge b-obs">观测</span> ——
+        该全局（<code>_DAT_14285da90</code>）经 Ghidra 全量交叉引用确认
+        <strong>只有 2 处写入、0 处读取</strong>（写入点：caps 换算、以及一个纯 setter <code>FUN_14003f400</code>）。即：</p>
+        <p>· 本版本中「时间分辨率」是<strong>写后即弃的残留状态</strong>；<br>
+           · 更关键的是 —— <strong>样本里的时间戳是原样存储的</strong>
+           （<code>FUN_14003ff40</code> 直接 <code>tsRing[i] = sample[0]</code>，无任何缩放）。</p>
+        <p><strong>结论：HSS 探针给出的时间戳本身就是 µs，主机侧无需换算。</strong>
+        这大幅简化了 OpenScope 的重实现。</p>
+      </div>
+    </section>
+
+    <!-- ══ 05 ══ -->
+    <section id="s5">
+      <h2><span class="sec-n">05</span>HSS 高速采样协议（异步）</h2>
+
+      <h3>5.1 变量描述符数组</h3>
+      <p class="lead"><code>FUN_140041f30</code> 构造并下发给探针。</p>
+      <div class="code">
+<pre><code><span class="c">// 每个变量 16 字节；末尾追加一个 {addr=0,size=0} 终止项</span>
+<span class="k">struct</span> HssVar {          <span class="c">// 16 bytes</span>
+    <span class="k">uint32_t</span> addr;       <span class="c">// +0x00  变量绝对地址</span>
+    <span class="k">uint32_t</span> size;       <span class="c">// +0x04  字节数</span>
+    <span class="k">uint32_t</span> reserved0;  <span class="c">// +0x08  = 0</span>
+    <span class="k">uint32_t</span> reserved1;  <span class="c">// +0x0C  = 0</span>
+};
+
+<span class="k">uint32_t</span> n = 0;
+HssVar *list = malloc((n + <span class="n">1</span>) * <span class="n">16</span>);   <span class="c">// +1 给终止项</span>
+memset(list, <span class="n">0</span>, (n+<span class="n">1</span>) * <span class="n">16</span>);
+
+<span class="k">uint32_t</span> off = <span class="n">4</span>;                    <span class="c">// ★ 从 4 开始：前 4 字节是时间戳</span>
+<span class="k">for</span> (每个被选中的变量 v) {
+    v-&gt;sampleOffset = off;           <span class="c">// 记在 v+0x38C</span>
+    off += v-&gt;size;                  <span class="c">// v+0x31C</span>
+    list[i].addr = v-&gt;addr;          <span class="c">// v+0x318</span>
+    list[i].size = v-&gt;size;
+    <span class="c">/* 同时复位统计量：</span>
+<span class="c">       v-&gt;yMaxSampled(+0x398) = -DBL_MAX   (0xFFEFFFFFFFFFFFFF)</span>
+<span class="c">       v-&gt;yMinSampled(+0x3A0) = +DBL_MAX   (0x7FEFFFFFFFFFFFFF)</span>
+<span class="c">       v-&gt;writePtr(+0x3C8) = v-&gt;dataBuf(+0x3D0) = 0   */</span>
+}
+list[n].size = <span class="n">0</span>;                    <span class="c">// 终止项</span>
+
+rc = JLINK_HSS_Start(list, n, samplingPeriod_us <span class="c">/*config+0x5A8*/</span>, <span class="n">1</span> <span class="c">/*flags*/</span>);</code></pre>
+      </div>
+
+      <h4>返回码（错误串逐字来自二进制）</h4>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:80px">rc</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">-2</td><td class="m">Failed to allocate memory on debug probe</td></tr>
+            <tr><td class="m">-3</td><td class="m">Too many variables specified</td></tr>
+            <tr><td class="m">-4</td><td class="m">Target hardware does not support HSS</td></tr>
+            <tr><td class="m">其它 &lt;0</td><td class="m">Failed to inititalize HSS. <span style="color:var(--fg-faint)">（原文拼写错误 inititalize）</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>启动成功后立即让目标跑起来：</p>
+      <div class="code">
+<pre><code><span class="k">if</span> (JLINK_IsHalted()) JLINK_Go();</code></pre>
+      </div>
+
+      <h3>5.2 采样包格式</h3>
+      <p class="lead">
+        <code>JLINK_HSS_Read(buf, size)</code> 返回本次读到的<strong>字节数</strong>，
+        缓冲区内容为紧密排列的定长样本。变量在样本内的偏移在
+        <code>JLINK_HSS_Start</code> 之前就固定算好，读取后直接按偏移切片。
+      </p>
+
+      <div class="packet">
+        <p class="cap" style="font-family:var(--f-mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-faint);margin:0">
+          实例：3 个变量 g_speed(float32) · g_state(uint8) · g_count(int16) → 样本 = 4+4+1+2 = 11 字节
+        </p>
+        <div class="pkt-row">
+          <div class="pkt ts"><span class="off">offset 0</span><span class="nm">timestamp</span><span class="sz">uint32 · µs</span></div>
+          <div class="pkt v"><span class="off">offset 4</span><span class="nm">g_speed</span><span class="sz">float32 · 4 B</span></div>
+          <div class="pkt v2"><span class="off">offset 8</span><span class="nm">g_state</span><span class="sz">uint8 · 1 B</span></div>
+          <div class="pkt v3"><span class="off">offset 9</span><span class="nm">g_count</span><span class="sz">int16 · 2 B</span></div>
+        </div>
+        <div class="strip" aria-hidden="true">
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+          <div class="cell ts" style="flex-grow:4"></div>
+          <div class="cell v" style="flex-grow:4"></div>
+          <div class="cell v2" style="flex-grow:1"></div>
+          <div class="cell v3" style="flex-grow:2"></div>
+        </div>
+        <div class="strip-key">
+          <span><i class="swatch" style="background:var(--ch1)"></i>ts (µs)</span>
+          <span><i class="swatch" style="background:var(--accent)"></i>g_speed</span>
+          <span><i class="swatch" style="background:var(--ch4)"></i>g_state</span>
+          <span><i class="swatch" style="background:var(--ch3)"></i>g_count</span>
+          <span style="color:var(--fg-faint)">→ 样本按此长度首尾相接填满整个读缓冲</span>
+        </div>
+      </div>
+
+      <h3>5.3 读取泵</h3>
+      <div class="code">
+        <p class="cap">FUN_140040fa0</p>
+<pre><code><span class="k">int</span> bufSize = <span class="n">0x200000</span> - (<span class="n">0x200000</span> % (sampleSize * numVars));  <span class="c">// ≈2 MB 对齐</span>
+<span class="k">void</span> *buf = malloc(bufSize);
+<span class="k">int</span> n = JLINK_HSS_Read(buf, bufSize);      <span class="c">// 返回字节数</span>
+<span class="k">if</span> (n &gt;= <span class="n">0</span>) UnpackSamples(n, buf);
+free(buf);</code></pre>
+      </div>
+      <div class="callout key">
+        <p>由 <strong>10 ms 周期 Job</strong>（<code>APP: &lt;ReadPeriodic&gt;</code>，<code>job-&gt;period = 10</code>）驱动 ——
+        探针在后台以设定周期<strong>自主采样并缓存</strong>，主机每 10 ms 批量取走积压数据。
+        <strong>采样率与主机轮询频率彻底解耦</strong>，这正是 HSS 能到 µs 级的原因。</p>
+      </div>
+    </section>
+
+    <!-- ══ 06 ══ -->
+    <section id="s6">
+      <h2><span class="sec-n">06</span>双环数据模型</h2>
+      <p class="lead">这是 J-Scope 高性能绘图的核心设计。两个环都是 <strong>8,388,608 样本</strong> 深，索引取模 <code>0x7FFFFF</code>。</p>
+
+      <div class="rings">
+        <div class="ring">
+          <div class="ring-h">
+            <span class="t">时间戳环</span>
+            <span class="s">静态 · 8,388,608 × uint32 = 32 MB</span>
+          </div>
+          <div class="ring-b">
+            <div class="strip">
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div><div class="cell ts"></div><div class="cell ts"></div>
+              <div class="cell ts"></div>
+            </div>
+            <code>tsRing[i] = sample[0]</code> · 写指针 <code>DAT_14285da80</code>，绕回标志 <code>DAT_14285da78</code>
+          </div>
+        </div>
+
+        <div class="ring">
+          <div class="ring-h">
+            <span class="t">每变量数据环</span>
+            <span class="s">堆 · 8,388,608 × 8 B = 64 MB / 变量</span>
+          </div>
+          <div class="ring-b">
+            <div class="strip">
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div><div class="cell v"></div><div class="cell v"></div>
+              <div class="cell v"></div>
+            </div>
+            <code>memcpy(v-&gt;dataBuf + idx*8, sample + v-&gt;sampleOffset, v-&gt;size)</code><br>
+            分配处 <code>memset(v-&gt;dataBuf, 0, 0x4000000)</code>。
+            <strong>无论变量是 1/2/4/8 字节，都占 8 字节槽位</strong> —— 用内存换 O(1) 均匀索引。
+          </div>
+        </div>
+      </div>
+
+      <h3>时间戳语义</h3>
+      <p class="lead">函数 <code>FUN_14003ff40</code> —— 三种模式分支：</p>
+      <div class="code">
+<pre><code><span class="k">if</span> (mode == HSS)            tsRing[i] = sample[<span class="n">0</span>];      <span class="c">// 探针给的 µs</span>
+<span class="k">else if</span> (rttWithTimestamp)  tsRing[i] = sample[<span class="n">0</span>];      <span class="c">// 目标给的 µs</span>
+<span class="k">else</span> {                      <span class="c">// RTT 无时间戳 → 合成 100 µs 均匀栅格</span>
+    <span class="k">if</span> (i != <span class="n">0</span>)         tsRing[i] = tsRing[last] + <span class="n">100</span>;
+    <span class="k">else if</span> (wrapped)  tsRing[<span class="n">0</span>] = tsRing[last] + <span class="n">100</span>;
+    <span class="k">else</span>              tsRing[<span class="n">0</span>] = <span class="n">0</span>;              <span class="c">// 首个样本 t=0</span>
+}</code></pre>
+      </div>
+      <p>与二进制中告警串逐字吻合：</p>
+      <div class="code">
+<pre><code>RTT channel is set up to provide no timestamp!
+Without timestamp J-Scope will assume that data points are uniformly
+distributed with a gap of 100 [us] each.</code></pre>
+      </div>
+
+      <h3>样本解包与采样率</h3>
+      <div class="code">
+        <p class="cap">FUN_14003fa70 —— HSS 与 RTT 共用</p>
+<pre><code>numSamples = nBytes / sampleSize;              <span class="c">// DAT_14085d1ec</span>
+<span class="k">for</span> (每个样本) {
+    StoreTimestamp(p);                          <span class="c">// 写时间戳环</span>
+    <span class="k">for</span> (每个变量 v) {
+        StoreVarSample(v, p);                   <span class="c">// memcpy 到 v 的环</span>
+        <span class="c">/* 触发判定 FUN_1400415a0(...) → 0/1/2/3；命中则 FUN_140042ac0(v) */</span>
+    }
+    p += sampleSize;
+    writeIdx = (writeIdx + <span class="n">1</span>) &amp; <span class="n">0x7FFFFF</span>;
+}</code></pre>
+      </div>
+      <div class="code">
+        <p class="cap">FUN_140041710 尾部 —— 状态栏速率</p>
+<pre><code>elapsed = timer_ticks();                                  <span class="c">// 100 ns 单位 [推断]</span>
+samplesPerSec = (uint)(numSamples * <span class="n">10000000</span> / elapsed);</code></pre>
+      </div>
+      <p>对应 UI 字符串 <code>kSamples/s</code>、<code>Samples/s</code>、<code>FPS: </code>、<code>Buffer: </code>。</p>
+
+      <div class="callout">
+        <p><strong>代价与启示 ——</strong> 4 变量 = 256 MB，8 变量 = 512 MB。
+        OpenScope 若要做长时间记录，应改为<strong>按类型宽度紧凑存储</strong>（1/2/4/8 B），或分段 / 落盘。
+        这是 J-Scope 一个明显的可优化点。</p>
+      </div>
+    </section>
+
+    <!-- ══ 07 ══ -->
+    <section id="s7">
+      <h2><span class="sec-n">07</span>RTT 同步模式</h2>
+
+      <h3>7.1 两种子模式</h3>
+      <p class="lead">函数 <code>FUN_140042100</code>。启动时先 <code>JLINK_RTTERMINAL_Control(0, 0)</code>。</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th>子模式</th><th>条件</th><th>上行通道</th><th>下行通道</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>RTT-Plus / Data</strong></td>
+              <td class="m">config+0x5A6 != 0</td>
+              <td class="m">JScope_Data<br>+ 可选 JScope_Data_t</td>
+              <td class="m">JScope_Config</td>
+            </tr>
+            <tr>
+              <td><strong>RTT / VarFormat</strong></td>
+              <td class="m">config+0x5A6 == 0</td>
+              <td class="m">前缀 JScope_ 的任意上行通道</td>
+              <td class="m">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>7.2 VarFormat 编码 —— 本次逆向的关键成果</h3>
+      <p class="lead">
+        上行通道名形如 <code>JScope_&lt;VarFormat&gt;</code>，
+        其中 <code>VarFormat</code> 是<strong>「类型字符 + 尺寸数字」严格成对</strong>的串：
+      </p>
+      <div class="code">
+<pre><code>JScope_t4i4f4     →  时间戳 + int32 + float32
+JScope_u2i2u4     →  uint16 + int16 + uint32
+JScope_t4f4f4f4   →  时间戳 + 3 个 float32</code></pre>
+      </div>
+      <p>解析逻辑（<code>FUN_14003fc90</code>）：跳过首个 <code>_</code> 之前的内容，之后每次固定取 2 个字符（含 <code>t</code>，它同样消耗一位）。</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:70px">类型字符</th><th style="width:120px">尺寸数字</th><th style="width:80px">TypeID</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">t</td><td class="m" style="color:var(--fg-faint)">（占位，值忽略）</td><td class="m">—</td><td><strong>时间戳标志</strong>（置 <code>IsRTTWithTimeStamp</code>）</td></tr>
+            <tr><td class="m">b</td><td class="m">1</td><td class="m">5</td><td>bool</td></tr>
+            <tr><td class="m">f</td><td class="m">4</td><td class="m">1</td><td>float32</td></tr>
+            <tr><td class="m">f</td><td class="m">8</td><td class="m">2</td><td>float64</td></tr>
+            <tr><td class="m">u</td><td class="m">1 / 2 / 4 / 8</td><td class="m">6 / 7 / 8 / 9</td><td>uint8 / 16 / 32 / 64</td></tr>
+            <tr><td class="m">i</td><td class="m">1 / 2 / 4 / 8</td><td class="m">10 / 11 / 12 / 13</td><td>int8 / 16 / 32 / 64</td></tr>
+            <tr><td class="m" style="color:var(--fg-faint)">其它</td><td class="m">—</td><td class="m">—</td><td style="color:var(--fg-muted)">忽略</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>解析出的类型用于 <code>AddSymbolFromFormat(size, typeID, 0, desc)</code>，描述串即二进制中的：</p>
+      <div class="code">
+<pre><code><span class="n">"%d Byte bool RTT Data %d"</span>      <span class="n">"%d Byte float RTT Data %d"</span>
+<span class="n">"%d Byte unsigned RTT Data %d"</span>  <span class="n">"%d Byte signed RTT Data %d"</span></code></pre>
+      </div>
+      <p>失败路径的两条原文：</p>
+      <div class="code">
+<pre><code>No RTT Up-Channel named "JScope_%Format%" found
+The first RTT Channel named JScope_... found did not contain a valid VarFormat</code></pre>
+      </div>
+      <div class="callout key">
+        <p><strong>注意 ——</strong> RTT-VarFormat 模式下<strong>目标端无需 ELF</strong>：通道名自带完整布局。
+        这是与 HSS 模式的本质差异。</p>
+      </div>
+
+      <h3>7.3 跨读取的样本拼接</h3>
+      <p class="lead">
+        RTT 无「整样本」保证，读取会在样本中间截断。J-Scope 用
+        <strong>≤64 字节的残留缓冲</strong>拼接跨读取的半个样本（<code>FUN_140042260</code>）：
+      </p>
+      <div class="code">
+<pre><code><span class="k">if</span> (targetErrorPending()) { partialLen = <span class="n">0</span>; <span class="c">/* 清状态 */</span> }
+<span class="k">else</span> partialLen = carryLen;                       <span class="c">// 上次残留</span>
+
+memcpy(buf, carry, partialLen);                    <span class="c">// 先补上残留</span>
+n = JLINK_RTTERMINAL_Read(ch, buf + partialLen,
+                          min(readBufSize, <span class="n">0x200000</span>) - partialLen);
+
+total     = n + partialLen;
+remainder = total % sampleSize;
+UnpackSamples(total - remainder, buf);             <span class="c">// 只解完整样本</span>
+<span class="k">if</span> (remainder == <span class="n">0</span>) carryLen = <span class="n">0</span>;
+<span class="k">else</span> { carryLen = min(remainder, <span class="n">0x40</span>);             <span class="c">// ★ 上限 64 字节</span>
+       memcpy(carry, buf + (total - remainder), carryLen); }</code></pre>
+      </div>
+      <p>RTT 读缓冲：<code>readBufSize = min(0x2000, channelBufSize)</code>，分配标签 <code>"RTT read buffer allocation"</code>。</p>
+
+      <h3>7.4 控制通道</h3>
+      <div class="code">
+        <p class="cap">FUN_140040ed0 —— 最多 101 次重试</p>
+<pre><code>循环最多 <span class="n">101</span> 次：
+    n = JLINK_RTTERMINAL_Read(ch, tmp, <span class="n">256</span>)
+    累计满 <span class="n">256</span> 字节 →
+        若 tmp[<span class="n">0</span>] != <span class="n">0</span> → 报 <span class="n">"Target Error: %s"</span> 并返回失败
+        否则返回成功
+    Sleep(<span class="n">1</span>)
+超时 → 返回 <span class="n">0xFFFFFFFE</span></code></pre>
+      </div>
+
+      <div class="callout key">
+        <p><strong>架构亮点 ——</strong> HSS 与 RTT <strong>共用同一个 <code>UnpackSamples</code></strong>
+        （<code>FUN_14003fa70</code>）：上层数据模型完全统一，只有「字节从哪来」不同。
+        这是非常干净的抽象。</p>
+      </div>
+    </section>
+
+    <!-- ══ 08 ══ -->
+    <section id="s8">
+      <h2><span class="sec-n">08</span>类型系统（TypeID）</h2>
+      <p class="lead">
+        <code>TypeID</code> 存于变量记录 <code>+0x314</code>，写入 <code>.jscope</code> 的 <code>TypeID</code> 属性。
+      </p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:90px">TypeID</th><th>类型</th><th style="width:110px">树中可选</th><th>备注</th></tr></thead>
+          <tbody>
+            <tr><td class="m">1</td><td>float32</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">2</td><td>float64</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">3</td><td>？（16 字节，疑似 long double / float128）</td><td class="no">✘</td><td rowspan="2"><code>FUN_1400504d0</code> 判为不支持 <span class="badge b-inf">推断</span></td></tr>
+            <tr><td class="m">4</td><td>？（疑似 half / float16）</td><td class="no">✘</td></tr>
+            <tr><td class="m">5</td><td>bool</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">6 / 7 / 8</td><td>uint8 / 16 / 32</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">9</td><td>uint64</td><td class="no">✘</td><td>树中禁用</td></tr>
+            <tr><td class="m">10 / 11 / 12</td><td>int8 / 16 / 32</td><td class="ok">✔</td><td></td></tr>
+            <tr><td class="m">13</td><td>int64</td><td class="no">✘</td><td>树中禁用</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        不支持时的 UI 行为：<code>QTreeWidgetItem::setDisabled(true)</code> +
+        第 4 列文本 <code>"Symbol type is not supported"</code>。
+      </p>
+      <div class="callout">
+        <p><span class="badge b-inf">推断</span> TypeID 3/4 的确切语义未在本轮确证；
+        结合 demangler 类型表中出现的 <code>half</code> 与 <code>__float128</code>，
+        推测为 128 位浮点与 16 位浮点。</p>
+      </div>
+    </section>
+
+    <!-- ══ 09 ══ -->
+    <section id="s9">
+      <h2><span class="sec-n">09</span>变量记录布局 <span class="badge b-der">推导</span></h2>
+      <p class="lead">由 <code>.jscope</code> 写出函数 <code>FUN_1400468c0</code> 的字段访问顺序还原。</p>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:90px">偏移</th><th style="width:130px">类型</th><th style="width:180px">XML 属性</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x004</td><td class="m">char[]</td><td class="m">Name</td><td>叶名</td></tr>
+            <tr><td class="m">+0x108</td><td class="m">char[]</td><td class="m">NameWithParents</td><td>全路径名</td></tr>
+            <tr><td class="m">+0x110</td><td class="m">char[]</td><td class="m">Type</td><td>类型名</td></tr>
+            <tr><td class="m">+0x210</td><td class="m">char[]</td><td class="m">File</td><td>来源文件</td></tr>
+            <tr><td class="m">+0x314</td><td class="m">int</td><td class="m">TypeID</td><td>见 §08</td></tr>
+            <tr><td class="m">+0x318</td><td class="m">uint32</td><td class="m">Address</td><td>绝对地址</td></tr>
+            <tr><td class="m">+0x31C</td><td class="m">int</td><td class="m">Size</td><td>字节数</td></tr>
+            <tr><td class="m">+0x348</td><td class="m">int</td><td class="m">DrawStyle</td><td>Line / Points / Line&amp;Points / Rectangle</td></tr>
+            <tr><td class="m">+0x350</td><td class="m">double</td><td class="m">YOffset</td><td></td></tr>
+            <tr><td class="m">+0x358</td><td class="m">int</td><td class="m">YResolution</td><td></td></tr>
+            <tr><td class="m">+0x35D</td><td class="m">bool</td><td class="m">IsAutoConfig</td><td></td></tr>
+            <tr><td class="m">+0x35E</td><td class="m">bool</td><td class="m">ShowInGraph</td><td></td></tr>
+            <tr><td class="m">+0x35F</td><td class="m">bool</td><td class="m">—</td><td>树中是否显示勾选框</td></tr>
+            <tr><td class="m">+0x378</td><td class="m">QColor*</td><td class="m">GraphColorRed/Green/Blue</td><td>曲线颜色</td></tr>
+            <tr><td class="m">+0x388</td><td class="m">bool</td><td class="m">—</td><td>本周期是否有数据</td></tr>
+            <tr><td class="m">+0x38C</td><td class="m">uint32</td><td class="m">Offset</td><td><strong>样本内字节偏移</strong></td></tr>
+            <tr><td class="m">+0x398</td><td class="m">double</td><td class="m">YMaxSampled</td><td>初值 -DBL_MAX</td></tr>
+            <tr><td class="m">+0x3A0</td><td class="m">double</td><td class="m">YMinSampled</td><td>初值 +DBL_MAX</td></tr>
+            <tr><td class="m">+0x3A8</td><td class="m">double</td><td class="m">YAvgSampled</td><td></td></tr>
+            <tr><td class="m">+0x3B0</td><td class="m">double</td><td class="m">MaxValue</td><td></td></tr>
+            <tr><td class="m">+0x3C8</td><td class="m">long long</td><td class="m">—</td><td>数据环写指针</td></tr>
+            <tr><td class="m">+0x3D0</td><td class="m">void*</td><td class="m">—</td><td>64 MB 数据环基址</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>配置结构（0x5BC 字节）关键字段</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:100px">偏移</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td class="m">+0x38C</td><td class="m">ScriptFile</td></tr>
+            <tr><td class="m">+0x59C</td><td class="m">TargetInterface　<span class="badge b-inf">推断</span> 0=JTAG, 1=SWD, 7=?</td></tr>
+            <tr><td class="m">+0x5A0</td><td class="m">InterfaceSpeed (kHz)</td></tr>
+            <tr><td class="m">+0x5A4</td><td class="m">模式：0 = HSS，1 = RTT</td></tr>
+            <tr><td class="m">+0x5A5</td><td class="m">IsRTTWithTimeStamp</td></tr>
+            <tr><td class="m">+0x5A6</td><td class="m">RTT 子模式（Data / Plus）</td></tr>
+            <tr><td class="m">+0x5A8</td><td class="m">SamplingPeriod (µs)</td></tr>
+            <tr><td class="m">+0x5B0 / +0x5B4</td><td class="m">JTAG_IRPre / JTAG 配置值</td></tr>
+            <tr><td class="m">+0x5B8</td><td class="m">停止时是否跳过 HSS_Stop</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ══ 10 ══ -->
+    <section id="s10">
+      <h2><span class="sec-n">10</span>文件格式</h2>
+
+      <h3>10.1 工程文件 .jscope（XML）</h3>
+      <p class="lead">
+        由 <code>FUN_140047020</code>（读）/ <code>FUN_1400471d0</code>（写）确认的层次与属性名。
+      </p>
+      <div class="code">
+<pre><code>&lt;<span class="k">JScopeProject</span>&gt;
+  &lt;<span class="k">FileVersion</span> major=<span class="n">".."</span> minor=<span class="n">".."</span>/&gt;
+  &lt;<span class="k">Project</span>&gt;
+    &lt;<span class="k">Configuration</span>&gt;
+      &lt;<span class="k">Connection</span>&gt;
+        &lt;TargetInterface/&gt; &lt;InterfaceSpeed/&gt;
+        &lt;SerialNo/&gt; &lt;Nickname/&gt;
+        &lt;JTAG_IRPre/&gt; &lt;JTAG_DRPre/&gt; &lt;ScriptFile/&gt;
+      &lt;/Connection&gt;
+      &lt;TimeResolutionUs/&gt;  &lt;SamplingPeriod/&gt;
+      &lt;IsRTTSession/&gt;  &lt;IsRTTWithTimeStamp/&gt;  &lt;IsRTTPlus/&gt;
+      &lt;ElfFile/&gt;  &lt;JLink/&gt;  &lt;Scope/&gt;  &lt;Trigger&gt;
+        &lt;Level/&gt; &lt;Auto/&gt; &lt;Rise/&gt; &lt;Fall/&gt;
+      &lt;/Trigger&gt;
+    &lt;/Configuration&gt;
+    &lt;<span class="k">SelectedSymbols</span>&gt;
+      &lt;<span class="k">Symbol</span>&gt;
+        &lt;<span class="k">Options</span> Name=<span class="n">".."</span> Type=<span class="n">".."</span> Size=<span class="n">".."</span> Address=<span class="n">".."</span> TypeID=<span class="n">".."</span>
+                 GraphColorRed=<span class="n">".."</span> GraphColorGreen=<span class="n">".."</span> GraphColorBlue=<span class="n">".."</span>
+                 YMinSampled=<span class="n">".."</span> YMaxSampled=<span class="n">".."</span> YAvgSampled=<span class="n">".."</span>
+                 Offset=<span class="n">".."</span> ShowInGraph=<span class="n">".."</span> YOffset=<span class="n">".."</span> IsAutoConfig=<span class="n">".."</span>
+                 YResolution=<span class="n">".."</span> MaxValue=<span class="n">".."</span> File=<span class="n">".."</span> DrawStyle=<span class="n">".."</span>
+                 NameWithParents=<span class="n">".."</span>/&gt;
+      &lt;/Symbol&gt;
+    &lt;/SelectedSymbols&gt;
+    &lt;DataFile/&gt;  &lt;RawFile/&gt;  &lt;Timestamp/&gt;
+  &lt;/Project&gt;
+&lt;/JScopeProject&gt;</code></pre>
+      </div>
+      <div class="callout">
+        <p>读入时<strong>强依赖层次</strong>：
+        <code>JScopeProject → FileVersion → Project → Configuration/SelectedSymbols</code>，缺失任一层即失败。</p>
+      </div>
+
+      <h3>10.2 设置文件</h3>
+      <p><code>JScopeSettings.ini</code> 段落：<code>DataFiles</code> / <code>ProjectFiles</code> / <code>ELFFiles</code> /
+      <code>LogLevel</code> / <code>Current</code> / <code>PROJECT</code>，键 <code>PATH</code>；
+      MRU 列表格式 <code>%sRecent File List %d\</code>、条目 <code>[%d]: %s</code>。</p>
+      <p>注册表：<code>Software\SEGGER\%s\</code>（<code>%s</code> = "J-Scope"）。
+      解析错误串：<code>Error while parsing subkey "%s" in settings file. Syntax error.</code></p>
+
+      <h3>10.3 数据导出</h3>
+      <p>支持 <code>.raw</code>（<code>Binary file (*.raw)</code>，另有 <code>Import Raw</code> 反向导入）、
+      <code>.elf</code>、<code>DataFile</code>。
+      文件大小上限检查：<code>File too large - maximum file size (%d bytes) exceeded!</code></p>
+    </section>
+
+    <!-- ══ 11 ══ -->
+    <section id="s11">
+      <h2><span class="sec-n">11</span>命令行接口</h2>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:260px">选项</th><th>说明</th></tr></thead>
+          <tbody>
+            <tr><td class="m">-openprj &lt;FILENAME&gt;</td><td>打开已有工程</td></tr>
+            <tr><td class="m">-USB &lt;SN/nickname&gt;</td><td>按序列号 / 昵称选择 USB 探针<br><strong>仅可与 <code>-openprj</code> 同用</strong></td></tr>
+            <tr><td class="m">-IP &lt;hostname/SN&gt;</td><td>选择 TCP/IP 探针（同样仅配 <code>-openprj</code>）</td></tr>
+            <tr><td class="m">-RTTSearchRanges &lt;A&gt;,&lt;S&gt;[,…]</td><td>定义 RTT 搜索范围；转为 <code>SetRTTSearchRanges</code> 下发给 DLL</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><code>SuppressGUI = 1/0</code> 会作为 ExecCommand 下发。</p>
+    </section>
+
+    <!-- ══ 12 ══ -->
+    <section id="s12">
+      <h2><span class="sec-n">12</span>对 OpenScope 的启示</h2>
+
+      <h3>12.1 三条最有价值的结论</h3>
+      <ol class="body">
+        <li>
+          <strong>HSS 是 OpenScope 高速采样的现成答案。</strong>
+          <code>JLINK_HSS_Start(变量表, 数量, 周期µs, 1)</code> + 周期 <code>JLINK_HSS_Read</code> 到 2 MB 缓冲。
+          探针<strong>自主</strong>按周期采样并缓存、带 µs 时间戳、主机批量取走 —— 采样率与 USB 往返解耦。
+          这正对应 request.md 第 15 条「第二步：真 µs 采样（片上缓冲，XCP 式）」，
+          且<strong>不需要在 MCU 上跑采样代码</strong>（HSS 走 AHB-AP 后台访问，不占用 DWT/SWO）。
+          <br><span style="color:var(--fg-muted);font-size:13.5px">注意：HSS 属 J-Link SDK 功能，无公开文档；§05 是可直接使用的调用契约。</span>
+        </li>
+        <li>
+          <strong>HSS 与 RTT 可以共用同一数据模型。</strong>
+          J-Scope 把两者的字节流都喂给同一个 <code>UnpackSamples</code>，
+          统一成「定长样本 + 首 4 字节 µs 时间戳」。
+          OpenScope 的网络模块（request.md 第 14 条）应当照搬这个抽象：
+          <strong>采集后端只负责产出「带时间戳的定长样本流」，压缩 / 传输 / 绘图全部复用</strong>。
+          这也直接解决「本地 ST-Link/J-Link 采集 → 网络传给远端」的接口设计。
+        </li>
+        <li>
+          <strong>RTT VarFormat 让目标端零 ELF 依赖。</strong>
+          通道名 <code>JScope_t4i4f4</code> 自带完整布局。OpenScope 若要在网络对端（无 ELF）显示波形，
+          这是最省事的方案 —— 发送方把变量布局编码进通道名 / 握手包即可。
+        </li>
+      </ol>
+
+      <h3>12.2 建议抄 / 不抄</h3>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:280px">项</th><th style="width:110px">建议</th><th>理由</th></tr></thead>
+          <tbody>
+            <tr><td>运行时按名解析后端 DLL</td><td><span class="verdict v-yes">抄</span></td><td>已在 OpenScope 网络模块验证过的模式；同时兼容 J-Link / ST-Link</td></tr>
+            <tr><td>双环数据模型（时间戳环 + 每变量环）</td><td><span class="verdict v-yes">抄，改进</span></td><td>索引 O(1)、绘图简单；但 8 B/样本固定槽位太浪费</td></tr>
+            <tr><td>8,388,608 样本固定深度</td><td><span class="verdict v-no">不抄</span></td><td>应改为可配置深度或分段落盘（OpenScope 已有历史回传需求）</td></tr>
+            <tr><td>每变量 64 MB 预分配</td><td><span class="verdict v-no">不抄</span></td><td>8 变量即 512 MB；应按类型宽度紧凑存储（1/2/4/8 B）</td></tr>
+            <tr><td>时间戳统一为 µs、uint32</td><td><span class="verdict v-yes">抄</span></td><td>与 J-Scope 对齐便于互操作；注意 2³² µs ≈ 71.6 分钟后回绕</td></tr>
+            <tr><td>无时间戳时合成 100 µs 栅格</td><td><span class="verdict v-yes">抄</span></td><td>低成本兜底，避免绘图断链</td></tr>
+            <tr><td>RTT 跨读取 ≤64 B 残留拼接</td><td><span class="verdict v-yes">抄</span></td><td>流式协议必备；比「丢弃半样本」健壮得多</td></tr>
+            <tr><td>10 ms 采样泵 + 2 MB 批读</td><td><span class="verdict v-yes">抄</span></td><td>让探针 / 目标做缓冲，主机不与采样率耦合</td></tr>
+            <tr><td>带守卫的自研堆分配器</td><td><span class="verdict v-opt">可选</span></td><td>调试期价值高（能抓越界 / 野指针），发布期有开销</td></tr>
+            <tr><td><code>JLINKARM_DEVICE_SelectDialog</code> 选型弹窗</td><td><span class="verdict v-no">不抄</span></td><td>与 request.md 第 17 / 21 条「不要弹窗选芯片」直接冲突</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>12.3 已知坑</h3>
+      <ul class="body">
+        <li><code>JLINK_HSS_Start</code> 第 4 参数为 <code>1</code>（flags）<span class="badge b-obs">观测</span>，语义<span class="badge b-unk">未知</span>。</li>
+        <li><code>caps.field_at_4</code> 的单位需实测确认（§04 末）。</li>
+        <li>TypeID 3/4 语义未确证（§08）。</li>
+        <li><code>-USB</code> / <code>-IP</code> 选项<strong>必须</strong>与 <code>-openprj</code> 同用，否则报错 —— 因连接参数来自工程文件。</li>
+        <li>RTT 模式<strong>强制要求</strong>指定目标器件：<code>In RTT mode specifying the target device is mandatory.</code></li>
+      </ul>
+    </section>
+
+    <!-- ══ 13 ══ -->
+    <section id="s13">
+      <h2><span class="sec-n">13</span>产出物与复现</h2>
+      <div class="tw">
+        <table>
+          <thead><tr><th style="width:300px">路径</th><th>内容</th></tr></thead>
+          <tbody>
+            <tr><td class="m">JSCOPE_ANALYSIS.md</td><td>完整报告（本页的 Markdown 源）</td></tr>
+            <tr><td class="m">tools/ghidra_scripts/*.java</td><td>5 个 Ghidra 脚本：概览导出 / 字符串交叉引用反编译 / 调用者反编译 / 按字符串自动重命名 / 引用查询</td></tr>
+            <tr><td class="m">tools/run_*.bat</td><td>Ghidra headless 调用封装</td></tr>
+            <tr><td class="m">dumps/decomp_hss.txt</td><td>HSS 全路径反编译</td></tr>
+            <tr><td class="m">dumps/decomp_rtt.txt</td><td>RTT 全路径反编译（含 VarFormat 解析器）</td></tr>
+            <tr><td class="m">dumps/datapath.txt</td><td>样本存储 / 时间戳逻辑</td></tr>
+            <tr><td class="m">dumps/xml_fmt.txt</td><td>工程文件读写</td></tr>
+            <tr><td class="m">dumps/elf_syms.txt</td><td>ELF 符号树与类型判定</td></tr>
+            <tr><td class="m">dumps/functions.txt</td><td>2,712 个函数清单</td></tr>
+            <tr><td class="m">ghidra_proj/</td><td>Ghidra 工程（可直接打开继续分析）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="code">
+        <p class="cap">复现方法</p>
+<pre><code>tools\run_ghidra.bat                  <span class="c"># 导入 + 全量分析（约 65 s）</span>
+tools\run_script.bat DumpOverview.java
+tools\run_hss.bat                     <span class="c"># 或 run_rtt.bat / run_b.bat ...</span></code></pre>
+      </div>
+
+      <h3>外部佐证</h3>
+      <ul class="body">
+        <li><a href="https://kb.segger.com/J-Link_High-Speed_Sampling">SEGGER KB — J-Link High-Speed Sampling</a> —— 确认 HSS 属 J-Link SDK，J-Scope / Ozone / Embedded Studio 使用；无 API 细节</li>
+        <li><a href="https://www.segger.cn/products/debug-probes/j-link/tools/j-link-sdk/">SEGGER J-Link SDK</a> —— HSS 函数签名与结构体的权威出处为 SDK 内 <code>UM08002_JLinkDLL.pdf</code></li>
+        <li><a href="https://github.com/Marus/cortex-debug/issues/1004">cortex-debug issue #1004</a> —— 确认 <code>JLINK_HSS_*</code> 由 libjlinkarm 导出，GDB Server 不暴露该能力</li>
+        <li><a href="https://github.com/klonyyy/STMViewer/commit/c190a25a69a6c1849387093d75ff91d9b2c60775">STMViewer HSS 实现提交</a> —— 开源 HSS 集成实践</li>
+      </ul>
+    </section>
+
+  </main>
+</div>
+
+<footer>
+  <p>静态逆向分析 · 全程未运行 J-Scope、未连接任何调试探针。</p>
+  <p>工具链：Ghidra 12.1.4 headless（自建 JDK 21）· pefile · capstone ｜ 方法论：REA（<code>morluto/rea</code>）</p>
+</footer>
