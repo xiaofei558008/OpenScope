@@ -70,7 +70,7 @@ ip地址和端口号可以在软件界面上配置；
 21、避免弹窗设置芯片型号，只是读取变量，不需要知道具体芯片型号，“Device Selection”或者“Target device setting” 弹窗请不要触发；
 22、elf 解析后的变量列表窗口需要实现抽屉缩起来和弹出；类似vscode 各个子窗口都可以调整，下面的消息窗口也是类似，需要能全部调整缩起来和拉出；
 23、仔细实现：波形窗口鼠标缩放功能存在跳变，保持现有功能情况下，需要实现更丝滑和连续的拉伸、拖拽波形，新增鼠标框选局部区域放大功能，方便调试；
-
+24、请自动操作界面，并截图逐个测试功能实现是否正确；并一一修复；
 
 ## Bug:
 1、添加2个变量后App异常退出；
@@ -162,5 +162,3 @@ https://cloud.tencent.com/developer/article/2232891
 3、Jlink驱动安装目录：C:\Program Files\SEGGER\JLink_V966
 
 
-## 逆向工程github 参考：git@github.com:morluto/rea.git
-请用这个工程分析 J-Scope 软件
