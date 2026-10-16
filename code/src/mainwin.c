@@ -1113,11 +1113,15 @@ static int load_elf_path(const wchar_t* path)
     OS_ElfFile* elf;
     wchar_t wmsg[2048];
     int i;
+    int was_running = (g_app.acq_state == OS_ACQ_RUNNING);
+    /* 采集线程直接读 g_app.leaves。重载会整表重建，必须先停采集，否则地址/下标会被撕开。 */
+    if (was_running) os_ds_stop();
     os_wide_to_utf8_buf(path, utf8, MAX_PATH);
     elf = os_elf_open(utf8, err, sizeof(err));
     if (!elf) {
         /* 不弹窗：只在下方日志窗口警告（用户删除/改名 ELF 后启动不再打扰） */
         os_log(OS_LOG_WARN, "ELF 加载失败: %s", err);
+        if (was_running && g_app.connected && g_app.watch_count > 0) os_ds_start();
         return -1;
     }
     if (g_app.elf) os_elf_close(g_app.elf);
@@ -1159,6 +1163,10 @@ static int load_elf_path(const wchar_t* path)
     }
     os_log(OS_LOG_INFO, "已加载 ELF: %ls (%d 位, %s)",
            path, os_elf_bits(g_app.elf), os_elf_arch_name(g_app.elf));
+    if (was_running && g_app.connected && g_app.watch_count > 0) {
+        if (os_ds_start() == 0)
+            os_log(OS_LOG_INFO, "ELF 重载后已恢复采集");
+    }
     refresh_status();
     os_mainwin_update_buttons();
     /* 用户需求：记住本次 ELF——立即持久化，中途崩溃下次启动也能自动加载 */
@@ -1288,6 +1296,9 @@ static void cmd_disconnect(void)
         cmd_net_action(OS_CMD_NET_STOP);
         return;
     }
+    /* 先停采集再拆会话。否则采集线程下一圈看到未连接就报“MCU 连接已断开”并退出，
+     * 和用户主动断开混在同一条错误日志里。 */
+    if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
     if (g_app.driver && g_app.driver->command) {
         g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
     }

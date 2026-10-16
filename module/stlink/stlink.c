@@ -355,18 +355,24 @@ static int mod_disconnect(void)
 static int mod_read(OS_MemReq* req)
 {
     unsigned char* p = NULL;
-    int r, retried = 0;
+    int r, retried = 0, attempt;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
     if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
     for (;;) {
-        EnterCriticalSection(&g_ctx.cs);
-        /* readMemory 双重指针：DLL 分配缓冲回填，成功返回 0 */
-        r = g_ctx.api.read_memory((unsigned int)req->address, &p, req->size);
-        LeaveCriticalSection(&g_ctx.cs);
-        if (r == 0 && p) {
-            memcpy(req->data, p, req->size);
-            if (g_stlink_free) g_stlink_free(p); /* 用 msvcrt 的 free 释放，避免跨 CRT 崩溃/泄漏 */
-            return (int)req->size;
+        r = -1;
+        p = NULL;
+        for (attempt = 0; attempt < 3; attempt++) {
+            EnterCriticalSection(&g_ctx.cs);
+            /* readMemory 双重指针：DLL 分配缓冲回填，成功返回 0 */
+            r = g_ctx.api.read_memory((unsigned int)req->address, &p, req->size);
+            LeaveCriticalSection(&g_ctx.cs);
+            if (r == 0 && p) {
+                memcpy(req->data, p, req->size);
+                if (g_stlink_free) g_stlink_free(p); /* 用 msvcrt 的 free 释放，避免跨 CRT 崩溃/泄漏 */
+                return (int)req->size;
+            }
+            if (p && g_stlink_free) g_stlink_free(p);
+            p = NULL;
         }
         if (retried) break;
         if (g_ctx.api.check_device_connection && !g_ctx.api.check_device_connection() &&

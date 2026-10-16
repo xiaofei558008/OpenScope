@@ -4,6 +4,7 @@
 #include "chartwin.h"
 #include "numwin.h"
 #include "vartree.h"
+#include "batchplan.h"
 #include <string.h>
 
 /* Bug10: 边缘目标高速下连接瞬时掉线（mod_read 重连节流 500ms 内读失败累积）。
@@ -14,37 +15,18 @@
 #define OS_POLL_STALL_MS 3000
 
 /* F21/Step1 高速采集：自由运行 + 连续地址块读 + UI 刷新节流。
- * 瓶颈分析（J-Link Pro V4 实测）：每次 JLINKARM_ReadMem 事务固定开销 ~240µs（USB 往返
- * + DLL 协议），线上传输时间 = 字节数×10bits/速度。SWD 时钟只影响后者——小尺寸读时
- * 线上时间仅几 µs，所以 4MHz→12MHz 对单事务几乎无感；真正决定周期的是【事务次数】。
- *
- * 速度感知合并（成本模型）：两叶间隔 G 字节，合并 = 1 次事务 + 多读 G 字节垃圾；
- * 拆分 = 2 次事务。合并划算条件：G×10/speed_khz ≤ 事务开销。
- *   gap_limit = speed_khz × 25（事务开销按 250µs 计）
- *   4MHz → 100B；12MHz → 300B；50MHz → 1250B（上限 4096）。
- * 块读总长上限同理按线上时间预算：run_limit = speed_khz × 25（250µs 线上预算，下限 256）。 */
-#define OS_TX_OVERHEAD_US  250    /* 实测单事务开销（USB 往返 + DLL 协议） */
-#define OS_MERGE_WIRE_BIT  10     /* 每字节线上位成本（含协议开销，约 10bit/字节） */
-#define OS_BATCH_RUN_MIN   256    /* 块读长度下限（过小失去合并意义） */
-#define OS_BATCH_RUN_MAX   4096   /* 块读长度硬上限（跨无效内存风险） */
+ * 合并预算在 batchplan.h（kHz 时钟，4MHz 空隙 100 字节）。旧公式把 kHz 当成
+ * MHz，4MHz 以上一律合并到 4096 字节，空洞读失败会让整块变量一起变成 ret=-5。 */
 #define OS_UI_THROTTLE_MS  16
 
 static int os_batch_gap_limit(void)
 {
-    int s = g_app.speed_khz > 0 ? g_app.speed_khz : 4000;
-    int lim = s * OS_TX_OVERHEAD_US / OS_MERGE_WIRE_BIT;
-    if (lim < 64) lim = 64;
-    if (lim > OS_BATCH_RUN_MAX) lim = OS_BATCH_RUN_MAX;
-    return lim;
+    return os_bp_gap_limit(g_app.speed_khz);
 }
 
 static int os_batch_run_limit(void)
 {
-    int s = g_app.speed_khz > 0 ? g_app.speed_khz : 4000;
-    int lim = s * OS_TX_OVERHEAD_US / OS_MERGE_WIRE_BIT;
-    if (lim < OS_BATCH_RUN_MIN) lim = OS_BATCH_RUN_MIN;
-    if (lim > OS_BATCH_RUN_MAX) lim = OS_BATCH_RUN_MAX;
-    return lim;
+    return os_bp_run_limit(g_app.speed_khz);
 }
 
 /* 观测叶按地址排序后的批次项（高速模式收集表） */
@@ -101,8 +83,16 @@ static void read_run(WatchLeaf* wl, int first, int count, uint8_t* buf,
     OS_MemReq req;
     int k, r;
     for (k = first; k < first + count; k++) {
-        uint32_t end = (uint32_t)(wl[k].addr - run_addr + wl[k].size);
-        if (end > run_sz) run_sz = end;
+        uint64_t end64;
+        if (wl[k].addr < run_addr) continue;
+        end64 = wl[k].addr - run_addr + wl[k].size;
+        if (end64 > run_sz) run_sz = (uint32_t)end64;
+    }
+    if (run_sz == 0 || run_sz > OS_BATCH_RUN_MAX) {
+        if ((*fail_count)++ < 3)
+            os_log(OS_LOG_ERROR, "块读长度非法 @0x%llX (%u 字节, %d 变量)",
+                   (unsigned long long)run_addr, run_sz, count);
+        return;
     }
     memset(buf, 0, run_sz);
     req.address = run_addr;
@@ -167,7 +157,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
         if (g_app.driver && g_app.driver->command) {
             g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &connected);
         }
-        if (!connected) {
+        if (!connected && GetTickCount64() - last_ok_ms > OS_POLL_STALL_MS) {
             os_log(OS_LOG_ERROR, "采集停止：MCU 连接已断开");
             break;
         }
@@ -177,9 +167,14 @@ static DWORD WINAPI poll_thread(LPVOID p)
             break;
         }
         /* 收集观测叶并按地址排序，把连续叶合并成块读（一次读事务）。
-         * 合并判定用速度感知成本模型（os_batch_gap_limit/run_limit）：
-         * 50MHz 时跨 1KB 空隙合并仍划算，4MHz 时 100B 以上就拆分为妙。 */
-        for (i = 0; i < g_app.leaf_count; i++) {
+         * 合并判定用速度感知成本模型（batchplan.h）：
+         * 4MHz 空隙约 100B 就拆分，50MHz 约 1250B。连接暂时丢失时仍走读路径，
+         * 驱动会按节流重连；只有连续 OS_POLL_STALL_MS 无成功样本才停线程。 */
+        {
+            int lc = g_app.leaf_count;
+            if (lc < 0) lc = 0;
+            if (lc > OS_MAX_LEAVES) lc = OS_MAX_LEAVES;
+        for (i = 0; i < lc; i++) {
             OS_Leaf* L = &g_app.leaves[i];
             uint32_t sz;
             if (!L->watched) continue;
@@ -190,6 +185,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
             wl[nw].addr = L->address;
             wl[nw].size = sz;
             nw++;
+        }
         }
         tx_count = 0;
         if (nw > 0) {
@@ -202,8 +198,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
             for (i = 1; i < nw; i++) {
                 uint64_t a = wl[i].addr;
                 uint64_t end = a + wl[i].size;
-                if (a > run_end + (uint64_t)gap_lim ||
-                    end - run_addr > (uint64_t)run_lim) {
+                if (os_bp_should_split(run_addr, run_end, a, wl[i].size, gap_lim, run_lim)) {
                     read_run(wl, run_first, i - run_first, buf, batch, &n,
                              &fail_count, &last_ok_ms);
                     tx_count++;
@@ -236,8 +231,10 @@ static DWORD WINAPI poll_thread(LPVOID p)
             ULONGLONG want = (ULONGLONG)g_app.poll_interval_ms * 1000;
             if (now - cycle_us < want)
                 Sleep((DWORD)((want - (now - cycle_us)) / 1000));
-        } else if (nw == 0) {
-            Sleep(20); /* 全部取消勾选时避免忙等空转 */
+        } else if (nw == 0 || (n == 0 && !connected)) {
+            /* 无观测变量，或本轮没读到样本且连接仍掉：避免忙等空转。
+             * 重连节流在驱动里（约 500ms），这里只让出 CPU。 */
+            Sleep(20);
         }
         /* 速率统计（约每秒一条） */
         {

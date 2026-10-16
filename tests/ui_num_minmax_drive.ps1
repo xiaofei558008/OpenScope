@@ -131,8 +131,8 @@ try {
     Check ($num -ne [IntPtr]::Zero) "数值窗口已创建"
 
     if ($num -ne [IntPtr]::Zero) {
-        # WM_OS_NUM_TEST_DUMP = WM_APP+44 = 0x802C：逐行日志输出 min/max
-        [OsNumMmUi]::SendMessage($num, 0x802C, [IntPtr]0, [IntPtr]0) | Out-Null
+        # WM_OS_NUM_TEST_DUMP = WM_APP+46 = 0x802E：逐行日志输出 min/max
+        [OsNumMmUi]::SendMessage($num, 0x802E, [IntPtr]0, [IntPtr]0) | Out-Null
         Start-Sleep -Milliseconds 400
         $mm = Log-LastMm '数值minmax: 行0 '
         if ($mm -ne $null) {
@@ -160,7 +160,7 @@ try {
                 Start-Sleep -Milliseconds 400
             }
             Check (Log-Has '数值窗口手工设置最小值 行0: 2.5') "手工设置最小值日志（2.5）"
-            [OsNumMmUi]::SendMessage($num, 0x802C, [IntPtr]0, [IntPtr]0) | Out-Null
+            [OsNumMmUi]::SendMessage($num, 0x802E, [IntPtr]0, [IntPtr]0) | Out-Null
             Start-Sleep -Milliseconds 400
             $mm2 = Log-LastMm '数值minmax: 行0 '
             if ($mm2 -ne $null) {
@@ -181,7 +181,7 @@ try {
                 Start-Sleep -Milliseconds 400
             }
             Check (Log-Has '数值窗口手工设置最大值 行0: 1.5') "手工设置最大值日志（1.5）"
-            [OsNumMmUi]::SendMessage($num, 0x802C, [IntPtr]0, [IntPtr]0) | Out-Null
+            [OsNumMmUi]::SendMessage($num, 0x802E, [IntPtr]0, [IntPtr]0) | Out-Null
             Start-Sleep -Milliseconds 400
             $mm3 = Log-LastMm '数值minmax: 行0 '
             if ($mm3 -ne $null) {

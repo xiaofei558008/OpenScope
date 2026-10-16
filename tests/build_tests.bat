@@ -106,6 +106,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\batchplan_smoke.c ^
+    /Fe:tests\bin\batchplan_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] batchplan_smoke build failed
+  exit /b 1
+)
+
+echo Running batchplan smoke...
+tests\bin\batchplan_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] batchplan_smoke FAILED
+  exit /b 1
+)
+
 echo Running jlink smoke...
 tests\bin\jlink_smoke.exe
 if errorlevel 1 (

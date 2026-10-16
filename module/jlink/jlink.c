@@ -141,6 +141,25 @@ static int jlink_reload(void)
 
 /* ---------------- 连接/读写实现 ---------------- */
 
+/* 仿真器选择必须发生在 JLINKARM_Open 之前。DLL 重载后选择失效，调用方每次 open 前都要再调。 */
+static void jlink_select_probe(OS_JLinkApi* a, const OS_ConnectCfg* cfg)
+{
+    int rc = 0;
+    if (!a || !cfg) return;
+    if (cfg->serial[0]) {
+        unsigned long sn = strtoul(cfg->serial, NULL, 10);
+        if (a->emu_select_by_usbsn) {
+            rc = a->emu_select_by_usbsn((uint32_t)sn);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByUSBSN(%lu) rc=%d", sn, rc);
+        }
+    } else if (cfg->probe_index >= 0 && a->emu_select_by_index) {
+        rc = a->emu_select_by_index(cfg->probe_index);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByIndex(%d) rc=%d",
+                            cfg->probe_index, rc);
+    }
+    (void)rc;
+}
+
 static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
 {
     OS_JLinkApi* a = &g_ctx.api;
@@ -175,26 +194,16 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
     /* Bug16(新)+需求21：仿真器选择必须在 JLINKARM_Open 之前调用（J-Link SDK 契约）。
      * 原实现 open 之后才 EMU_SelectByIndex——DLL 内部会话状态不一致，实测该调用返回 -1
      * 后 DLL 内部 AV 崩溃（JLink_x64.dll+0x18C36E，连接即闪退，与变量个数无关）。
-     * 移到 open 前可正确选中仿真器（rc=0），同时避免 DLL 弹出"Device Selection"设备选择框。 */
-    if (cfg->serial[0]) {
-        unsigned long sn = strtoul(cfg->serial, NULL, 10);
-        if (a->emu_select_by_usbsn) {
-            rc = a->emu_select_by_usbsn((uint32_t)sn);
-            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByUSBSN(%lu) rc=%d", sn, rc);
-        }
-    } else if (cfg->probe_index >= 0) {
-        if (a->emu_select_by_index) {
-            rc = a->emu_select_by_index(cfg->probe_index);
-            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: EMU_SelectByIndex(%d) rc=%d",
-                                cfg->probe_index, rc);
-        }
-    }
+     * 移到 open 前可正确选中仿真器（rc=0），同时避免 DLL 弹出"Device Selection"设备选择框。
+     * 重载 DLL 会丢掉这次选择，所以每次 open 前都要再选一次。 */
+    jlink_select_probe(a, cfg);
     rc = a->open(NULL);
     if (rc != 0) {
         /* 兜底：首连失败或重载后仍失败（硬件/USB 级问题），再重载重试一次 */
         if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 连接: JLINKARM_Open 失败 rc=%d，重载 JLink DLL 后重试", rc);
         if (jlink_reload() == OS_ERR_OK) {
             a = &g_ctx.api; /* 重载后符号指针已重绑 */
+            jlink_select_probe(a, cfg);
             rc = a->open(NULL);
             if (rc != 0 && g_fw)
                 g_fw->log(OS_LOG_ERROR, "J-Link 连接: 重载 DLL 后 JLINKARM_Open 仍失败 rc=%d", rc);
@@ -352,43 +361,65 @@ static int mod_disconnect(void)
  * 若每次打日志会 2 条/秒刷屏；采集线程已改为时间基停摆判定，无需每次重连都提醒。 */
 #define OS_JLINK_RECONNECT_LOG_MS 5000
 
+/* 掉线后重连。失败也记下节流时间，避免 Open 返回垃圾值时采集线程空转狂重连。
+ * 返回 1 表示已经重新连上。 */
+static int jlink_try_reconnect(void)
+{
+    int attempt;
+    ULONGLONG now = (ULONGLONG)GetTickCount64();
+    if (now - g_ctx.last_reconnect_ms < OS_JLINK_RECONNECT_MIN_MS)
+        return 0;
+    g_ctx.last_reconnect_ms = now;
+    if (g_fw && now - g_ctx.last_reconnect_log_ms >= OS_JLINK_RECONNECT_LOG_MS) {
+        g_ctx.last_reconnect_log_ms = now;
+        g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
+    }
+    if (g_ctx.connected)
+        mod_disconnect();
+    /* Bug16：高速掉线后 DLL/USB 会话短暂损坏，open 可能返回垃圾值（-488389840）。
+     * 连接路径会整库重载；这里再给 USB 层几次恢复机会。间隔 400ms，三次合计仍落在
+     * 采集线程 3 秒停摆窗口内，避免一次重连就把线程拖死。 */
+    for (attempt = 0; attempt < 3; attempt++) {
+        if (mod_connect_ex(NULL, 0) == OS_ERR_OK)
+            return 1;
+        if (attempt < 2) Sleep(400);
+    }
+    return 0;
+}
+
 static int mod_read(OS_MemReq* req)
 {
     OS_JLinkApi* a = &g_ctx.api;
-    int r, retried = 0;
+    int r, attempt, retried = 0;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
-    if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    if (!a->h) return OS_ERR_NOT_CONNECTED;
+    if (!g_ctx.connected) {
+        /* 采集线程在停摆窗口内会继续调用读。连接标志已清时主动重连，而不是立刻失败。 */
+        if (!jlink_try_reconnect()) return OS_ERR_NOT_CONNECTED;
+        a = &g_ctx.api;
+    }
     for (;;) {
-        EnterCriticalSection(&g_ctx.cs);
-        r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
-        LeaveCriticalSection(&g_ctx.cs);
-        /* JLINKARM_ReadMem 成功返回 0；失败返回正值（未能读取的字节数）或负错误码。
-         * 严禁用 r>=0 判定成功——失败返回 1 会被当成成功，零缓冲被推为有效样本（Bug 9）。 */
-        if (r == 0) return (int)req->size;
+        r = 1;
+        for (attempt = 0; attempt < 3; attempt++) {
+            EnterCriticalSection(&g_ctx.cs);
+            if (a->h && a->read_mem)
+                r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
+            else
+                r = -1;
+            LeaveCriticalSection(&g_ctx.cs);
+            /* JLINKARM_ReadMem 成功返回 0；失败返回正值（未能读取的字节数）或负错误码。
+             * 严禁用 r>=0 判定成功——失败返回 1 会被当成成功，零缓冲被推为有效样本（Bug 9）。 */
+            if (r == 0) return (int)req->size;
+        }
         if (retried) break; /* 已重连重试过，不再重试 */
-        /* 掉线（IsConnected=0）时自动重连一次恢复采集（Bug 9：避免永久全 0） */
-        if (a->is_connected && !a->is_connected() &&
-            (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_ms >= OS_JLINK_RECONNECT_MIN_MS) {
-            if (g_fw && (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_log_ms >= OS_JLINK_RECONNECT_LOG_MS) {
-                g_ctx.last_reconnect_log_ms = (ULONGLONG)GetTickCount64();
-                g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
-            }
-            mod_disconnect();
-            /* Bug16：高速掉线后 DLL/USB 会话短暂损坏，open 可能返回垃圾值（-488389840）；
-             * 重载已给全新会话，但 USB 层恢复仍需时间——重试数次（间隔 1.5s），
-             * 任一成功即恢复采集，不轻易让采集线程退出。 */
-            {
-                int attempt;
-                for (attempt = 0; attempt < 3; attempt++) {
-                    if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
-                        g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
-                        retried = 1;
-                        break;
-                    }
-                    if (attempt < 2) Sleep(1500);
-                }
-            }
-            if (retried) continue;
+        /* 探针仍报告已连接时，失败多半是这个地址本身读不了，拆掉会话只会更糟。
+         * 只有 IsConnected==0（或查询函数缺失）才重连。 */
+        if (a->is_connected && a->is_connected())
+            break;
+        if (jlink_try_reconnect()) {
+            a = &g_ctx.api;
+            retried = 1;
+            continue;
         }
         break;
     }
