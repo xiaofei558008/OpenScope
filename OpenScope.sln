@@ -10,6 +10,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "stlink", "module\stlink\stl
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "network", "module\network\network.vcxproj", "{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "xcp", "module\xcp\xcp.vcxproj", "{C4E8A1B2-6D3F-4E5A-9B7C-2D1E0F3A4B5C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -32,6 +34,10 @@ Global
 		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Debug|x64.Build.0 = Debug|x64
 		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Release|x64.ActiveCfg = Release|x64
 		{9D2B3C4E-5F6A-7B8C-9D0E-1F2A3B4C5D6E}.Release|x64.Build.0 = Release|x64
+		{C4E8A1B2-6D3F-4E5A-9B7C-2D1E0F3A4B5C}.Debug|x64.ActiveCfg = Debug|x64
+		{C4E8A1B2-6D3F-4E5A-9B7C-2D1E0F3A4B5C}.Debug|x64.Build.0 = Debug|x64
+		{C4E8A1B2-6D3F-4E5A-9B7C-2D1E0F3A4B5C}.Release|x64.ActiveCfg = Release|x64
+		{C4E8A1B2-6D3F-4E5A-9B7C-2D1E0F3A4B5C}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

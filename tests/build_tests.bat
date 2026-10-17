@@ -120,6 +120,21 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I module\xcp module\xcp\tests\xcp_smoke.c ^
+    module\xcp\xcp_slave.c module\xcp\xcp_master.c module\xcp\xcp_eth.c ^
+    /Fe:tests\bin\xcp_smoke.exe /link ws2_32.lib
+if errorlevel 1 (
+  echo [ERROR] xcp_smoke build failed
+  exit /b 1
+)
+
+echo Running xcp smoke...
+tests\bin\xcp_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] xcp_smoke FAILED
+  exit /b 1
+)
+
 echo Running jlink smoke...
 tests\bin\jlink_smoke.exe
 if errorlevel 1 (

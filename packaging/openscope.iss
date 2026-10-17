@@ -4,8 +4,8 @@
 [Setup]
 AppId={{7D3E1A05-8B2C-4A9F-9D46-OpenScope-2026}
 AppName=OpenScope
-AppVersion=1.22.3.0
-AppVerName=OpenScope 1.22.3
+AppVersion=1.23.0.0
+AppVerName=OpenScope 1.23.0
 AppPublisher=OpenScope
 AppCopyright=Copyright (C) 2026 OpenScope
 DefaultDirName={autopf}\OpenScope
@@ -15,19 +15,19 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 OutputDir=..\dist
-OutputBaseFilename=OpenScope-Setup-1.22.3
+OutputBaseFilename=OpenScope-Setup-1.23.0
 SetupIconFile=..\assets\openscope.ico
 WizardImageFile=wizard_sidebar.bmp
 UninstallDisplayIcon={app}\OpenScope.exe
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-VersionInfoVersion=1.22.3.0
+VersionInfoVersion=1.23.0.0
 VersionInfoCompany=OpenScope
 VersionInfoDescription=OpenScope - MCU Variable Acquisition and Calibration
 VersionInfoProductName=OpenScope
-VersionInfoProductVersion=1.22.3.0
-VersionInfoOriginalFileName=OpenScope-Setup-1.22.3.exe
+VersionInfoProductVersion=1.23.0.0
+VersionInfoOriginalFileName=OpenScope-Setup-1.23.0.exe
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -52,6 +52,7 @@ Source: "..\bin\Release\OpenScope.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dll\jlink.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 Source: "..\dll\stlink.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 Source: "..\dll\network.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
+Source: "..\dll\xcp.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 Source: "..\dll\JLink_x64.dll"; DestDir: "{app}\dll"; Flags: ignoreversion
 ; ST-Link 自含运行时：CubeProgrammer_API.dll + 依赖 DLL + FlashLoader（目标机无需安装 STM32CubeProgrammer）
 Source: "..\dll\stlink\*"; DestDir: "{app}\dll\stlink"; Flags: ignoreversion recursesubdirs createallsubdirs

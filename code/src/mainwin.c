@@ -1260,6 +1260,20 @@ static void cmd_connect(void)
         if (cfg.speed_khz < 0) cfg.speed_khz = 0;
         g_app.speed_khz = cfg.speed_khz; /* 采集线程块读合并成本模型按实际速度计算 */
     }
+    /* XCP 通道：工具栏 IP/端口就是从机地址。speed_khz 只在这一次连接请求里充当端口，
+     * 不写进采集合并模型（那是 SWD 时钟）。 */
+    if (strcmp(drv_name(), "xcp") == 0) {
+        wchar_t wip[64], wport[16];
+        HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
+        HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+        if (hip) GetWindowTextW(hip, wip, 64); else wip[0] = 0;
+        if (hport) GetWindowTextW(hport, wport, 16); else wport[0] = 0;
+        os_wide_to_utf8_buf(wip, cfg.serial, (int)sizeof(cfg.serial));
+        cfg.speed_khz = _wtoi(wport);
+        if (cfg.speed_khz <= 0) cfg.speed_khz = 5555;
+        g_app.speed_khz = 4000;
+        os_log(OS_LOG_INFO, "XCP 目标 %s:%d", cfg.serial, cfg.speed_khz);
+    }
     emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
     /* 芯片核心：从界面下拉读取（F17 核心名列表，默认 Cortex-M4；纯内存读写无需具体型号） */
