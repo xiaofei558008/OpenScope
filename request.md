@@ -74,6 +74,7 @@ ip地址和端口号可以在软件界面上配置；
 
 25、新增一个子功能，在xcp文件夹下开发xcp 协议；参考：github vector官方代码 https://github.com/vectorgrp/XCPlite 和手册ASAM_AE_MCD-1-XCP_BS_Protocol-Layer-Specification_V1-3-0.pdf，编译成.dll 供主程序加载；
 完成全部功能、单元测试、回归测试、冒烟测试；
+XCP 与网络功能独立：网络功能是把一台电脑上 OpenScope 抓到的数据传给另一台电脑上的 OpenScope。XCP 不走 TCP，也不复用网络工具栏的 IP/端口。后续 XCP 经 CAN 设备实现，例如周立功、Kvaser。
 
 ## Bug:
 1、添加2个变量后App异常退出；

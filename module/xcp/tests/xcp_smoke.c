@@ -1,9 +1,8 @@
-/* XCP 1.3 协议冒烟：进程内主从回环 + 本机 TCP。 */
+/* XCP 1.3 协议冒烟：进程内主从回环。传输不走 TCP。 */
 #include "xcp_master.h"
 #include "xcp_slave.h"
-#include "xcp_eth.h"
+#include "xcp_can.h"
 
-#include <windows.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -160,48 +159,13 @@ static void test_loop(void)
     (void)rc;
 }
 
-static void test_tcp(void)
-{
-    XcpSlave* s = xcp_slave_create(0x20000000, 1024);
-    XcpEthServer* sv;
-    XcpEthClient* cli;
-    XcpIo io;
-    XcpMaster m;
-    uint8_t* p;
-    uint8_t buf[8];
-    int i;
-
-    p = xcp_slave_ptr(s, 0x20000000, 4);
-    p[0] = 0xDE; p[1] = 0xAD; p[2] = 0xBE; p[3] = 0xEF;
-    sv = xcp_eth_serve(s, 0);
-    expect(sv && xcp_eth_port(sv) > 0, "TCP 从机监听");
-    cli = NULL;
-    for (i = 0; i < 50 && !cli; i++) {
-        Sleep(20);
-        cli = xcp_eth_connect("127.0.0.1", xcp_eth_port(sv));
-    }
-    expect(cli != NULL, "TCP 主机连上从机");
-    if (cli) {
-        xcp_eth_io(cli, &io);
-        xcp_master_init(&m, &io);
-        expect(xcp_master_connect(&m) == 0, "TCP CONNECT");
-        expect(xcp_master_upload(&m, 0x20000000, buf, 4) == 0, "TCP UPLOAD");
-        expect(buf[0] == 0xDE && buf[3] == 0xEF, "TCP 载荷");
-        expect(xcp_master_download(&m, 0x20000004, "WXYZ", 4) == 0, "TCP DOWNLOAD");
-        expect(p[4] == 'W' && p[7] == 'Z', "TCP 写入从机内存");
-        xcp_master_disconnect(&m);
-        xcp_eth_close(cli);
-    }
-    xcp_eth_serve_stop(sv);
-    xcp_slave_destroy(s);
-}
-
 int main(void)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     printf("xcp smoke\n");
+    expect(xcp_can_backend_count() == 0 && xcp_can_backend(0) == 0,
+           "CAN 后端尚未接入（周立功、Kvaser）");
     test_loop();
-    test_tcp();
     if (g_fail) {
         printf("XCP SMOKE FAIL (%d)\n", g_fail);
         return 1;

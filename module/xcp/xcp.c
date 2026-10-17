@@ -1,7 +1,8 @@
-/* XCP 驱动模块：通道下拉里的 "xcp"。
- * 连接用工具栏上的 IP/端口（主程序在 OS_ConnectCfg.serial / speed_khz 里传入），
- * 读写走 SHORT_UPLOAD / DOWNLOAD。传输是 XCP on Ethernet（TCP）。 */
-#include "xcp_eth.h"
+/* XCP 驱动：通道下拉里的 "xcp"。
+ * 与网络模块无关。网络模块在两台 OpenScope 之间传样本。
+ * 本驱动的传输是 CAN（周立功、Kvaser 等），协议层走 XcpIo。
+ * 后端还没接入时，扫描结果为空，连接返回没有设备。 */
+#include "xcp_can.h"
 #include "module_api.h"
 
 #include <stdio.h>
@@ -9,26 +10,31 @@
 
 typedef struct XcpCtx {
     CRITICAL_SECTION cs;
-    XcpEthClient* cli;
+    const XcpCanBackend* be;
+    void* can;
     XcpMaster master;
     int connected;
-    char host[64];
-    int port;
     OS_DriverInfo info;
 } XcpCtx;
 
+typedef struct CanMap {
+    const XcpCanBackend* be;
+    int local;
+} CanMap;
+
 static XcpCtx g_ctx;
 static const OS_Framework* g_fw;
+static CanMap g_map[16];
+static int g_map_n;
 
 static void fill_info(void)
 {
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     _snprintf(g_ctx.info.name, sizeof(g_ctx.info.name), "xcp");
-    _snprintf(g_ctx.info.version, sizeof(g_ctx.info.version), "1.23.0");
+    _snprintf(g_ctx.info.version, sizeof(g_ctx.info.version), "1.23.1");
     _snprintf(g_ctx.info.dll_version, sizeof(g_ctx.info.dll_version), "1.3");
-    if (g_ctx.connected)
-        _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator),
-                  "XCP %s:%d", g_ctx.host, g_ctx.port);
+    if (g_ctx.connected && g_ctx.be)
+        _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator), "XCP CAN %s", g_ctx.be->name);
     else
         _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator), "未连接");
     g_ctx.info.connected = g_ctx.connected;
@@ -36,13 +42,33 @@ static void fill_info(void)
 
 static int mod_scan(OS_ScanReq* req)
 {
+    int n = 0, b, i;
     if (!req || !req->items || req->capacity <= 0) return OS_ERR_INVALID_ARG;
-    memset(&req->items[0], 0, sizeof(req->items[0]));
-    req->items[0].index = 0;
-    _snprintf(req->items[0].name, sizeof(req->items[0].name), "XCP Ethernet");
-    _snprintf(req->items[0].serial, sizeof(req->items[0].serial), "tcp");
-    req->count = 1;
-    if (g_fw) g_fw->log(OS_LOG_INFO, "XCP 扫描: 以太网从机通道（用工具栏 IP/端口连接）");
+    g_map_n = 0;
+    for (b = 0; b < xcp_can_backend_count() && n < req->capacity; b++) {
+        const XcpCanBackend* be = xcp_can_backend(b);
+        char names[8][64];
+        int found;
+        if (!be || !be->scan) continue;
+        found = be->scan(names, 8);
+        for (i = 0; i < found && n < req->capacity && g_map_n < 16; i++) {
+            memset(&req->items[n], 0, sizeof(req->items[n]));
+            req->items[n].index = n;
+            _snprintf(req->items[n].name, sizeof(req->items[n].name), "%s", names[i]);
+            _snprintf(req->items[n].serial, sizeof(req->items[n].serial), "%s", be->name);
+            g_map[g_map_n].be = be;
+            g_map[g_map_n].local = i;
+            g_map_n++;
+            n++;
+        }
+    }
+    req->count = n;
+    if (g_fw) {
+        if (n == 0)
+            g_fw->log(OS_LOG_INFO, "XCP 扫描: 没有 CAN 接口。后续接入周立功、Kvaser；不走 OpenScope 网络");
+        else
+            g_fw->log(OS_LOG_INFO, "XCP 扫描: %d 个 CAN 接口", n);
+    }
     return OS_ERR_OK;
 }
 
@@ -50,8 +76,9 @@ static int mod_disconnect(void)
 {
     EnterCriticalSection(&g_ctx.cs);
     if (g_ctx.connected) xcp_master_disconnect(&g_ctx.master);
-    xcp_eth_close(g_ctx.cli);
-    g_ctx.cli = NULL;
+    if (g_ctx.be && g_ctx.be->close && g_ctx.can) g_ctx.be->close(g_ctx.can);
+    g_ctx.can = NULL;
+    g_ctx.be = NULL;
     g_ctx.connected = 0;
     LeaveCriticalSection(&g_ctx.cs);
     if (g_fw) g_fw->log(OS_LOG_INFO, "XCP 已断开");
@@ -60,36 +87,45 @@ static int mod_disconnect(void)
 
 static int mod_connect(const OS_ConnectCfg* cfg)
 {
+    const XcpCanBackend* be;
     XcpIo io;
-    const char* host;
-    int port, rc;
+    void* can = NULL;
+    int idx, rc;
     EnterCriticalSection(&g_ctx.cs);
     if (g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_OK; }
-    host = (cfg && cfg->serial[0]) ? cfg->serial : "127.0.0.1";
-    port = (cfg && cfg->speed_khz > 0 && cfg->speed_khz <= 65535) ? cfg->speed_khz : 5555;
-    _snprintf(g_ctx.host, sizeof(g_ctx.host), "%s", host);
-    g_ctx.port = port;
-    if (g_fw) g_fw->log(OS_LOG_INFO, "XCP 连接 %s:%d", g_ctx.host, g_ctx.port);
-    g_ctx.cli = xcp_eth_connect(g_ctx.host, g_ctx.port);
-    if (!g_ctx.cli) {
-        if (g_fw) g_fw->log(OS_LOG_ERROR, "XCP TCP 连接失败 %s:%d", g_ctx.host, g_ctx.port);
+    idx = (cfg && cfg->probe_index >= 0) ? cfg->probe_index : 0;
+    if (idx < 0 || idx >= g_map_n || !g_map[idx].be) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "XCP 连接失败: 没有 CAN 接口（后续接入周立功、Kvaser）");
         LeaveCriticalSection(&g_ctx.cs);
         return OS_ERR_NO_DEVICE;
     }
-    xcp_eth_io(g_ctx.cli, &io);
+    be = g_map[idx].be;
+    idx = g_map[idx].local;
+    if (!be->open || !be->bind) {
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_NO_DEVICE;
+    }
+    rc = be->open(&can, idx);
+    if (rc != 0 || !can) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "XCP 打开 CAN 失败 (%s)", be->name);
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_NO_DEVICE;
+    }
+    be->bind(can, &io);
     xcp_master_init(&g_ctx.master, &io);
     rc = xcp_master_connect(&g_ctx.master);
     if (rc != 0) {
         if (g_fw) g_fw->log(OS_LOG_ERROR, "XCP CONNECT 失败 rc=%d err=%d", rc, g_ctx.master.last_err);
-        xcp_eth_close(g_ctx.cli);
-        g_ctx.cli = NULL;
+        if (be->close) be->close(can);
         LeaveCriticalSection(&g_ctx.cs);
         return OS_ERR_FAIL;
     }
+    g_ctx.be = be;
+    g_ctx.can = can;
     g_ctx.connected = 1;
     LeaveCriticalSection(&g_ctx.cs);
-    if (g_fw) g_fw->log(OS_LOG_INFO, "XCP 已连接 resource=0x%02X max_cto=%u",
-                        g_ctx.master.resource, g_ctx.master.max_cto);
+    if (g_fw) g_fw->log(OS_LOG_INFO, "XCP 已连接 %s resource=0x%02X max_cto=%u",
+                        be->name, g_ctx.master.resource, g_ctx.master.max_cto);
     return OS_ERR_OK;
 }
 
@@ -147,15 +183,16 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     g_fw = fw;
     InitializeCriticalSection(&g_ctx.cs);
     g_ctx.connected = 0;
-    g_ctx.cli = NULL;
-    if (fw) fw->log(OS_LOG_INFO, "xcp 模块: ASAM XCP 1.3（以太网 TCP，默认端口 5555）");
+    g_ctx.can = NULL;
+    g_ctx.be = NULL;
+    if (fw) fw->log(OS_LOG_INFO, "xcp 模块: ASAM XCP 1.3，传输预留 CAN（周立功、Kvaser），与网络模块无关");
     return OS_ERR_OK;
 }
 
 static void mod_deinit(void* ctx)
 {
     (void)ctx;
-    if (g_ctx.connected || g_ctx.cli) mod_disconnect();
+    if (g_ctx.connected || g_ctx.can) mod_disconnect();
     DeleteCriticalSection(&g_ctx.cs);
 }
 
@@ -163,8 +200,8 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "xcp",
-    "1.23.0",
-    "XCP 1.3 协议：以太网连接从机，上传/下载标定内存",
+    "1.23.1",
+    "XCP 1.3 协议：经 CAN 适配器上传/下载标定内存",
     NULL,
     mod_init,
     mod_deinit,
