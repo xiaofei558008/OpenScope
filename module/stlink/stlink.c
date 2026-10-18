@@ -101,10 +101,21 @@ static HMODULE stlink_load_lib(char* err, int err_len)
 
     for (i = 0; i < n; i++) {
         HMODULE h;
+        const char* api_lib =
+            "C:\\Program Files\\STMicroelectronics\\STM32Cube\\STM32CubeProgrammer\\api\\lib";
+        char bundled_loaders[MAX_PATH];
         MultiByteToWideChar(CP_ACP, 0, cands[i].depdir, -1, wdep, MAX_PATH);
         SetDllDirectoryW(wdep);
         h = LoadLibraryA(cands[i].dll);
         if (h) {
+            /* FlashLoader 路径：优先已安装的 api\lib（器件数据库更完整），
+             * 否则用随包 dll\stlink。错配会导致 connectStLink
+             * “Unable to list supported devices” 甚至 DLL 内部崩溃。 */
+            _snprintf(bundled_loaders, sizeof(bundled_loaders), "%s\\stlink", g_ctx.dll_dir);
+            if (GetFileAttributesA(api_lib) != INVALID_FILE_ATTRIBUTES)
+                _snprintf(g_ctx.loaders_dir, sizeof(g_ctx.loaders_dir), "%s", api_lib);
+            else
+                _snprintf(g_ctx.loaders_dir, sizeof(g_ctx.loaders_dir), "%s", bundled_loaders);
             if (err && err_len > 0)
                 _snprintf(err, err_len, "%s", cands[i].dll);
             return h;
@@ -241,21 +252,30 @@ static int stlink_scan_probes(OS_StLinkDcp** out_list, int* out_n)
     return OS_ERR_OK;
 }
 
-static int mod_connect_ex(char* err, int errlen)
+/* conn_mode: HOTPLUG=采集；UNDER_RESET=烧录/擦除（目标运行时擦除会失败）
+ * speed_cap_khz: >0 时限制上限（烧录建议 ≤8000，过高易擦除失败） */
+static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
+                            char* err, int errlen)
 {
     OS_StLinkDcp* list = NULL;
     OS_StLinkDcp dcp;
-    int n, i, idx = 0, rc, freq;
+    int n, i, idx = 0, rc, freq, want_khz;
+    const char* mode_name = "HOTPLUG";
     if (err && errlen > 0) err[0] = 0;
+    if (conn_mode == OS_STLINK_MODE_UNDER_RESET) mode_name = "UNDER_RESET";
+    else if (conn_mode == OS_STLINK_MODE_NORMAL) mode_name = "NORMAL";
     if (!g_ctx.api.h) {
         if (err) _snprintf(err, errlen, "CubeProgrammer_API.dll 未加载");
         if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 连接: CubeProgrammer_API.dll 未加载");
         return OS_ERR_FAIL;
     }
+    want_khz = g_ctx.cfg.speed_khz;
+    if (speed_cap_khz > 0 && (want_khz <= 0 || want_khz > speed_cap_khz))
+        want_khz = speed_cap_khz;
     if (g_fw) {
-        g_fw->log(OS_LOG_INFO, "ST-Link 连接: iface=%s speed_khz=%d probe_idx=%d serial='%s'",
+        g_fw->log(OS_LOG_INFO, "ST-Link 连接: iface=%s speed_khz=%d mode=%s probe_idx=%d serial='%s'",
                   g_ctx.cfg.iface == OS_IF_JTAG ? "JTAG" : "SWD",
-                  g_ctx.cfg.speed_khz, g_ctx.cfg.probe_index,
+                  want_khz, mode_name, g_ctx.cfg.probe_index,
                   g_ctx.cfg.serial[0] ? g_ctx.cfg.serial : "(空)");
     }
     if (stlink_scan_probes(&list, &n) != OS_ERR_OK) return OS_ERR_FAIL;
@@ -273,11 +293,11 @@ static int mod_connect_ex(char* err, int errlen)
     }
     dcp = list[idx];
     if (g_ctx.api.delete_interface_list) g_ctx.api.delete_interface_list();
-    /* 覆盖连接参数：SWD/JTAG + HOTPLUG（非侵入，不 halt 目标）+ 频率档位 */
     dcp.dbgPort = (g_ctx.cfg.iface == OS_IF_JTAG) ? OS_STLINK_PORT_JTAG : OS_STLINK_PORT_SWD;
-    dcp.connectionMode = OS_STLINK_MODE_HOTPLUG;
+    dcp.connectionMode = conn_mode;
+    dcp.resetMode = rst_mode;
     dcp.shared = 0;
-    freq = pick_freq(&dcp, g_ctx.cfg.iface, g_ctx.cfg.speed_khz);
+    freq = pick_freq(&dcp, g_ctx.cfg.iface, want_khz);
     if (freq > 0) {
         dcp.frequency = freq;
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 连接: 频率 %d kHz（SWD/JTAG 档位就近）", freq);
@@ -292,6 +312,40 @@ static int mod_connect_ex(char* err, int errlen)
     }
     g_ctx.connected = 1;
     return OS_ERR_OK;
+}
+
+static int mod_connect_ex(char* err, int errlen)
+{
+    /* 采集默认：HOTPLUG 非侵入 */
+    return mod_connect_mode(OS_STLINK_MODE_HOTPLUG, OS_STLINK_RST_SOFTWARE, 0, err, errlen);
+}
+
+/* 烧录前切 Under Reset（硬件复位）；失败则尝试 NORMAL */
+static int stlink_enter_flash_mode(void)
+{
+    int rc;
+    if (g_ctx.connected) {
+        if (g_ctx.api.disconnect) g_ctx.api.disconnect();
+        g_ctx.connected = 0;
+    }
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录: 切换 Under Reset 连接（Halt+复位，避免擦除失败）");
+    rc = mod_connect_mode(OS_STLINK_MODE_UNDER_RESET, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
+    if (rc == OS_ERR_OK) return OS_ERR_OK;
+    if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link 烧录: Under Reset 失败，改试 NORMAL");
+    return mod_connect_mode(OS_STLINK_MODE_NORMAL, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
+}
+
+/* 烧录后恢复 HOTPLUG，便于继续采变量 */
+static void stlink_leave_flash_mode(void)
+{
+    if (g_ctx.connected) {
+        if (g_ctx.api.disconnect) g_ctx.api.disconnect();
+        g_ctx.connected = 0;
+    }
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录: 恢复 HOTPLUG 连接");
+    if (mod_connect_mode(OS_STLINK_MODE_HOTPLUG, OS_STLINK_RST_SOFTWARE, 0, NULL, 0) != OS_ERR_OK) {
+        if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link 烧录后 HOTPLUG 重连失败，请手动重新连接");
+    }
 }
 
 static void stlink_refresh_info(void)
@@ -462,25 +516,32 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         return OS_ERR_NOT_CONNECTED;
     case OS_CMD_FLASH_ERASE: {
         const OS_FlashReq* req = (const OS_FlashReq*)in;
-        int rc;
+        int rc, ok;
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         if (!g_ctx.api.mass_erase) {
             if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 不支持 massErase");
             return OS_ERR_FAIL;
         }
         EnterCriticalSection(&g_ctx.cs);
+        rc = stlink_enter_flash_mode();
+        if (rc != OS_ERR_OK) {
+            LeaveCriticalSection(&g_ctx.cs);
+            return rc;
+        }
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase…");
         rc = g_ctx.api.mass_erase(NULL);
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
-        if (rc == 0 && req && req->reset_run && g_ctx.api.reset)
+        ok = (rc == 0);
+        if (ok && req && req->reset_run && g_ctx.api.reset)
             g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
+        stlink_leave_flash_mode();
         LeaveCriticalSection(&g_ctx.cs);
-        return rc == 0 ? OS_ERR_OK : OS_ERR_FAIL;
+        return ok ? OS_ERR_OK : OS_ERR_FAIL;
     }
     case OS_CMD_FLASH_DOWNLOAD: {
         const OS_FlashReq* req = (const OS_FlashReq*)in;
         uint32_t addr;
-        int rc;
+        int rc, ok, skip;
         if (!req || !req->path[0]) return OS_ERR_INVALID_ARG;
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         if (!g_ctx.api.download_file) {
@@ -488,19 +549,50 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
             return OS_ERR_FAIL;
         }
         addr = req->address ? req->address : 0x08000000u;
+        skip = req->skip_erase ? 1 : 0;
         EnterCriticalSection(&g_ctx.cs);
+        rc = stlink_enter_flash_mode();
+        if (rc != OS_ERR_OK) {
+            LeaveCriticalSection(&g_ctx.cs);
+            return rc;
+        }
+        /* 需要擦除时：先 massErase，再 downloadFile(skipErase=1)。
+         * HOTPLUG 下 downloadFile 自带扇区擦除常报 failed to erase memory；
+         * Under Reset + 整片擦除更稳（与 CubeProgrammer GUI 流程一致）。 */
+        if (!skip && g_ctx.api.mass_erase) {
+            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录前 massErase…");
+            rc = g_ctx.api.mass_erase(NULL);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
+            if (rc != 0) {
+                stlink_leave_flash_mode();
+                LeaveCriticalSection(&g_ctx.cs);
+                return OS_ERR_FAIL;
+            }
+            skip = 1;
+        }
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile '%ls' @0x%08X skipErase=%d verify=%d",
-                            req->path, addr, req->skip_erase, req->verify);
+                            req->path, addr, skip, req->verify);
         rc = g_ctx.api.download_file(req->path, addr,
-                                     (unsigned)(req->skip_erase ? 1 : 0),
+                                     (unsigned)skip,
                                      (unsigned)(req->verify ? 1 : 0), NULL);
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile rc=%d", rc);
-        if (rc == 0 && req->reset_run) {
+        /* 若未先 massErase 且仍失败：再试 massErase + skip 下载 */
+        if (rc != 0 && !req->skip_erase && g_ctx.api.mass_erase) {
+            if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link downloadFile 失败，重试 massErase+skipErase");
+            if (g_ctx.api.mass_erase(NULL) == 0) {
+                rc = g_ctx.api.download_file(req->path, addr, 1,
+                                             (unsigned)(req->verify ? 1 : 0), NULL);
+                if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile 重试 rc=%d", rc);
+            }
+        }
+        ok = (rc == 0);
+        if (ok && req->reset_run) {
             if (g_ctx.api.reset) g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
             if (g_ctx.api.execute) g_ctx.api.execute(addr);
         }
+        stlink_leave_flash_mode();
         LeaveCriticalSection(&g_ctx.cs);
-        return rc == 0 ? OS_ERR_OK : OS_ERR_FAIL;
+        return ok ? OS_ERR_OK : OS_ERR_FAIL;
     }
     case OS_CMD_ELF_RELOADED:
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 模块: ELF 已重载");
@@ -524,8 +616,10 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
         if (fw) fw->log(OS_LOG_WARN, "stlink 模块: %s", err);
     } else {
         stlink_install_callbacks();
-        if (g_ctx.api.set_loaders_path && g_ctx.loaders_dir[0])
-            g_ctx.api.set_loaders_path(g_ctx.loaders_dir); /* 必需：否则 connectStLink 无法识别设备 */
+        if (g_ctx.api.set_loaders_path && g_ctx.loaders_dir[0]) {
+            g_ctx.api.set_loaders_path(g_ctx.loaders_dir); /* 必需：否则无法识别设备 */
+            if (fw) fw->log(OS_LOG_INFO, "stlink 模块: LoadersPath=%s", g_ctx.loaders_dir);
+        }
         if (fw) fw->log(OS_LOG_INFO, "stlink 模块: 已绑定 CubeProgrammer_API.dll (%s)", err);
     }
     return OS_ERR_OK;
@@ -543,7 +637,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_DRIVER,
     "stlink",
-    "1.0.0",
+    "1.0.1",
     "ST-Link 驱动模块：扫描/连接/读写/烧录 MCU（CubeProgrammer_API）",
     NULL,
     mod_init,
