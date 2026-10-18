@@ -1,8 +1,6 @@
-﻿# OpenScope 长时间采集自动落盘回归（J-Link 硬件组）：
-#   采集自动建立 RAM(≤10MB) 缓冲，停止时写出时间戳命名 CSV
-#   （%LOCALAPPDATA%\OpenScope\records\rec_YYYYMMDD_HHMMSS.csv）。
-#   测试：连接(默认4000kHz) -> 开始采集 ~4s -> 停止 ->
-#        日志"采集落盘"起止 + rec_*.csv 存在且行数>1。
+﻿# OpenScope 录制临时缓存回归（J-Link 硬件组）：
+#   先点录制再开始采集 → RAM(≤10MB)/cache\recording.csv；
+#   停止采集后落盘完成；重新开始采集会先清除上次缓存。
 param(
     [string]$Elf = "D:\OpenScope\tests\linix_stm32l031_v1.2.out",
     [string]$ExePath = ""
@@ -13,7 +11,7 @@ $root = Split-Path -Parent $PSScriptRoot
 if ($ExePath) { $exe = $ExePath } else { $exe = Join-Path $root "bin\Release\OpenScope.exe" }
 $log = Join-Path (Split-Path $exe) "openscope.log"
 if (Test-Path $log) { Remove-Item -LiteralPath $log -Force }
-$recDir = Join-Path $env:LOCALAPPDATA "OpenScope\records"
+$cacheFile = Join-Path $env:LOCALAPPDATA "OpenScope\cache\recording.csv"
 
 Add-Type @"
 using System;
@@ -54,6 +52,10 @@ function Wait-Log([string]$Pattern, [int]$TimeoutMs = 10000) {
     }
     return $false
 }
+function Log-Count([string]$Pattern) {
+    if (-not (Test-Path $log)) { return 0 }
+    return @(Get-Content $log -Encoding UTF8 | Select-String -SimpleMatch $Pattern).Count
+}
 
 $layout = Join-Path $env:TEMP "spool_test.ini"
 $body = @"
@@ -80,10 +82,6 @@ if ($existing.Count -gt 0) {
     exit 3
 }
 
-# 记录测试开始前的 rec 文件，避免误判旧文件
-$before = @()
-if (Test-Path $recDir) { $before = @(Get-ChildItem $recDir -Filter "rec_*.csv" | Select-Object -ExpandProperty Name) }
-
 $proc = Start-Process -FilePath $exe -ArgumentList @($Elf, "--layout-load=$layout") -PassThru
 Write-Output "started pid=$($proc.Id)"
 try {
@@ -96,40 +94,43 @@ try {
     Check ($main -ne [IntPtr]::Zero) "主窗口创建"
     Start-Sleep -Milliseconds 1500
 
-    # 连接（默认速度 4000kHz）
-    Send-Cmd $main 2002   # IDC_BTN_CONNECT
+    Send-Cmd $main 2002   # CONNECT
     Check (Wait-Log "已连接: " 10000) "连接成功（日志）"
 
-    # 开始采集 ~4s
-    Send-Cmd $main 2004   # IDC_BTN_START
+    Send-Cmd $main 2006   # 先录制
+    Check (Wait-Log "录制已开启" 4000) "先点录制"
+
+    Send-Cmd $main 2004   # START
     Check (Wait-Log "采集已开始" 6000) "采集已开始（日志）"
-    Check (Has-Log "采集落盘: RAM 缓冲") "采集开始时建立落盘 RAM 缓冲"
+    Check (Has-Log "采集落盘: RAM 缓冲") "采集开始时建立录制临时缓存"
     Start-Sleep -Milliseconds 4000
 
-    # 停止采集 -> 落盘收尾
-    Send-Cmd $main 2005   # IDC_BTN_STOP
+    Send-Cmd $main 2005   # STOP
     Check (Wait-Log "采集落盘完成" 6000) "停止时落盘完成（日志）"
     Start-Sleep -Milliseconds 500
 
-    # rec_*.csv 新文件存在且行数 > 1（表头 + 样本行）
-    $newFiles = @()
-    if (Test-Path $recDir) {
-        $newFiles = @(Get-ChildItem $recDir -Filter "rec_*.csv" | Where-Object { $before -notcontains $_.Name })
-    }
-    Check ($newFiles.Count -ge 1) "落盘 CSV 已生成（rec_*.csv 新文件）"
-    if ($newFiles.Count -ge 1) {
-        $f = $newFiles[0]
-        $lines = (Get-Content $f.FullName -Encoding UTF8 | Measure-Object -Line).Lines
-        Check ($lines -gt 1) "落盘 CSV 含样本行（$($f.Name) 共 $lines 行）"
-        Write-Output "INFO 落盘文件: $($f.FullName) ($lines 行, $($f.Length) 字节)"
-        $header = Get-Content $f.FullName -Encoding UTF8 -TotalCount 1
-        Check ($header -match 'timestamp_us' -and $header -match 'fsin') "落盘 CSV 表头含 timestamp_us 与 fsin"
+    Check (Test-Path $cacheFile) "临时缓存 CSV 已生成"
+    if (Test-Path $cacheFile) {
+        $lines = (Get-Content $cacheFile -Encoding UTF8 | Measure-Object -Line).Lines
+        Check ($lines -gt 1) "临时缓存含样本行（共 $lines 行）"
+        $header = Get-Content $cacheFile -Encoding UTF8 -TotalCount 1
+        Check ($header -match 'timestamp_us' -and $header -match 'fsin') "表头含 timestamp_us 与 fsin"
+        Write-Output "INFO 缓存文件: $cacheFile ($lines 行)"
     }
 
+    # 重新开始采集 → 应先清除上次缓存
+    $clearBefore = Log-Count "录制缓存已清除"
+    Send-Cmd $main 2004
+    Check (Wait-Log "采集已开始" 6000) "第二次采集已开始"
+    Start-Sleep -Milliseconds 500
+    Check ((Log-Count "录制缓存已清除") -gt $clearBefore) "重新开始采集时自动清除上次缓存"
+
+    Send-Cmd $main 2005
+    Start-Sleep -Milliseconds 500
     Check (-not $proc.HasExited) "进程存活"
 }
 finally {
     if (-not $proc.HasExited) { $proc.Kill() }
 }
-Write-Output ($(if ($fails -eq 0) { "ALL PASS" } else { "FAILURES: $fails" }))
+Write-Output ("ALL " + $(if ($fails -eq 0) { "PASS" } else { "FAILURES: $fails" }))
 exit $fails

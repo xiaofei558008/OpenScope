@@ -146,9 +146,8 @@ static int g_modwin_menu_count;
 static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
     { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
-    { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"记录" },
-    { IDC_BTN_LOGSTOP, L"停止记录" }, { IDC_BTN_REPLAY, L"离线回放" },
-    { IDC_BTN_REPLAYSTOP, L"停止回放" },
+    { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"录制" },
+    { IDC_BTN_REPLAY, L"离线回放" }, { IDC_BTN_REPLAYSTOP, L"停止回放" },
     /* 需求14 UI整合：网络按键并入工具栏首行（监听/上传ELF/下载ELF） */
     { IDD_NET_LISTEN, L"监听" }, { IDD_NET_UPELF, L"上传ELF" },
     { IDD_NET_DOWNELF, L"下载ELF" },
@@ -302,6 +301,12 @@ void os_fw_post(UINT msg, WPARAM w, LPARAM l)
     if (g_app.hMain) PostMessage(g_app.hMain, msg, w, l);
 }
 
+static void update_record_btn_text(void)
+{
+    HWND b = GetDlgItem(g_app.hMain, IDC_BTN_LOGSTART);
+    if (b) SetWindowTextW(b, g_app.recording ? L"停止录制" : L"录制");
+}
+
 void os_mainwin_update_buttons(void)
 {
     int hasDriver = g_app.driver != NULL;
@@ -310,6 +315,7 @@ void os_mainwin_update_buttons(void)
     int replay = g_app.acq_state == OS_ACQ_REPLAY;
     HWND b;
 #define ENB(id, on) do { b = GetDlgItem(g_app.hMain, (id)); if (b) EnableWindow(b, (on)); } while (0)
+    update_record_btn_text();
     if (g_app.net_mode) {
         /* 需求14 UI整合：网络通道下按键全部可用（网络模块内部有连接状态判断，
          * 连接/断开/开始采集/停止采集分别复用为 网络连接/停止/下达监视/停止下达） */
@@ -317,8 +323,7 @@ void os_mainwin_update_buttons(void)
         ENB(IDC_BTN_DISCON, 1);
         ENB(IDC_BTN_START, g_app.watch_count > 0 && !running);
         ENB(IDC_BTN_STOP, 1);
-        ENB(IDC_BTN_LOGSTART, !g_app.log_csv && !replay);
-        ENB(IDC_BTN_LOGSTOP, g_app.log_csv != NULL);
+        ENB(IDC_BTN_LOGSTART, !replay);
         ENB(IDC_BTN_REPLAY, !running && !replay);
         ENB(IDC_BTN_REPLAYSTOP, replay);
         ENB(IDC_BTN_OPEN, 1);
@@ -328,8 +333,7 @@ void os_mainwin_update_buttons(void)
     ENB(IDC_BTN_DISCON, conn);
     ENB(IDC_BTN_START, conn && g_app.watch_count > 0 && !running && !replay);
     ENB(IDC_BTN_STOP, running);
-    ENB(IDC_BTN_LOGSTART, conn && !g_app.log_csv && !replay);
-    ENB(IDC_BTN_LOGSTOP, g_app.log_csv != NULL);
+    ENB(IDC_BTN_LOGSTART, !replay); /* 可先录制再开始采集 */
     ENB(IDC_BTN_REPLAY, !running && !replay);
     ENB(IDC_BTN_REPLAYSTOP, replay);
     ENB(IDC_BTN_OPEN, 1);
@@ -725,7 +729,7 @@ static void layout(void)
         static const struct { int id; int fixed_w; int combo; } items[] = {
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
-            { IDC_BTN_LOGSTOP, 0, 0 }, { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
+            { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
             { IDC_CFG_DRIVER, 100, 1 }, { IDC_CFG_DEVICE, 118, 1 }, { IDC_CFG_IFACE, 56, 1 },
             { IDC_CFG_SPEED, 80, 1 }, { IDC_CFG_EMU, 170, 1 }, { IDC_CFG_REFRESH, 48, 0 },
             { IDD_NET_IP, 96, 0 }, { IDD_NET_PORT, 44, 0 },
@@ -742,17 +746,15 @@ static void layout(void)
                 MoveWindow(c, x, 5, items[i].fixed_w, 22, TRUE);
                 x += items[i].fixed_w + 4;
             } else {
-                const wchar_t* text = NULL;
-                int k;
+                wchar_t text[64];
                 SIZE sz;
-                HDC hdc = GetDC(c ? c : g_app.hMain);
+                HDC hdc = GetDC(c);
+                int n;
                 SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-                for (k = 0; k < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); k++) {
-                    if (g_tool_btns[k].id == items[i].id) { text = g_tool_btns[k].text; break; }
-                }
-                GetTextExtentPoint32W(hdc, text ? text : L"??",
-                                      text ? (int)wcslen(text) : 2, &sz);
-                ReleaseDC(c ? c : g_app.hMain, hdc);
+                n = GetWindowTextW(c, text, 64);
+                if (n <= 0) { text[0] = L'?'; text[1] = 0; n = 1; }
+                GetTextExtentPoint32W(hdc, text, n, &sz);
+                ReleaseDC(c, hdc);
                 MoveWindow(c, x, 5, sz.cx + 14, 22, TRUE);
                 x += sz.cx + 18;
             }
@@ -1606,37 +1608,64 @@ static void cmd_stop_acq(void)
     os_mainwin_update_buttons();
 }
 
-static void cmd_log_start(void)
+/* 录制开关：可先开录再开始采集；再点停止 → 询问是否保存 → 选路径。
+ * 临时数据在本地 cache；模态对话框前先停采集，避免 Bug7 卡死。 */
+static void cmd_log_toggle(void)
 {
-    OPENFILENAMEW ofn;
-    wchar_t file[MAX_PATH] = L"data.csv";
     int was_running = 0;
-    /* Bug7: 采集运行中弹文件对话框会与采集线程跨线程日志/模态循环互卡导致界面卡死。
-     * 与 cmd_replay_open 一致：先停采集，对话框关闭后再恢复。 */
-    if (g_app.acq_state == OS_ACQ_RUNNING) {
-        os_ds_stop();
-        was_running = 1;
+    if (!g_app.recording) {
+        g_app.recording = 1;
+        os_log(OS_LOG_INFO, "录制已开启（可先于采集；数据写入临时缓存）");
+        if (g_app.acq_state == OS_ACQ_RUNNING) {
+            /* 采集中途开录：停一下再开，由 os_ds_start 建立缓存，避免写盘竞态 */
+            os_ds_stop();
+            if (os_ds_start() != 0) {
+                g_app.recording = 0;
+                MessageBoxW(g_app.hMain, L"无法在采集中开启录制", L"录制", MB_OK | MB_ICONERROR);
+            }
+        }
+        os_mainwin_update_buttons();
+        layout();
+        return;
     }
-    memset(&ofn, 0, sizeof(ofn));
-    ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = g_app.hMain;
-    ofn.lpstrFilter = L"CSV 文件\0*.csv\0所有文件\0*.*\0";
-    ofn.lpstrFile = file;
-    ofn.nMaxFile = MAX_PATH;
-    ofn.lpstrDefExt = L"csv";
-    ofn.Flags = OFN_OVERWRITEPROMPT;
-    if (GetSaveFileNameW(&ofn)) {
-        if (os_datalog_start(file) != 0)
-            MessageBoxW(g_app.hMain, L"无法创建记录文件", L"记录", MB_OK | MB_ICONERROR);
-    }
-    if (was_running) os_ds_start(); /* 对话框关闭后恢复采集 */
-    os_mainwin_update_buttons();
-}
 
-static void cmd_log_stop(void)
-{
-    os_datalog_stop();
+    /* —— 停止录制 —— */
+    if (g_app.acq_state == OS_ACQ_RUNNING) {
+        os_ds_stop(); /* poll 退出时 os_spool_end 落盘 */
+        was_running = 1;
+    } else if (g_app.spool_active) {
+        os_spool_end();
+    }
+    g_app.recording = 0;
+
+    if (!os_spool_has_data()) {
+        MessageBoxW(g_app.hMain, L"没有录制到数据。", L"录制", MB_OK | MB_ICONINFORMATION);
+        os_spool_clear();
+    } else if (MessageBoxW(g_app.hMain, L"是否保存录制的 log 数据？", L"录制",
+                            MB_YESNO | MB_ICONQUESTION) == IDYES) {
+        OPENFILENAMEW ofn;
+        wchar_t file[MAX_PATH] = L"data.csv";
+        memset(&ofn, 0, sizeof(ofn));
+        ofn.lStructSize = sizeof(ofn);
+        ofn.hwndOwner = g_app.hMain;
+        ofn.lpstrFilter = L"CSV 文件\0*.csv\0所有文件\0*.*\0";
+        ofn.lpstrFile = file;
+        ofn.nMaxFile = MAX_PATH;
+        ofn.lpstrDefExt = L"csv";
+        ofn.Flags = OFN_OVERWRITEPROMPT;
+        if (GetSaveFileNameW(&ofn)) {
+            if (os_spool_save_as(file) != 0)
+                MessageBoxW(g_app.hMain, L"保存失败", L"录制", MB_OK | MB_ICONERROR);
+        }
+        os_spool_clear();
+    } else {
+        os_spool_clear();
+        os_log(OS_LOG_INFO, "用户放弃保存录制数据");
+    }
+
+    if (was_running) os_ds_start();
     os_mainwin_update_buttons();
+    layout();
 }
 
 /* 回放全量加载后：把桶缓存按变量名挂接到全部波形窗口系列 */
@@ -3299,8 +3328,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mAcq, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_START, L"开始采集\tF7");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_STOP, L"停止采集\tF8");
-        AppendMenuW(mLog, MF_STRING, IDC_BTN_LOGSTART, L"开始 CSV 记录...");
-        AppendMenuW(mLog, MF_STRING, IDC_BTN_LOGSTOP, L"停止记录");
+        AppendMenuW(mLog, MF_STRING, IDC_BTN_LOGSTART, L"录制 / 停止录制");
         AppendMenuW(mLog, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAY, L"离线回放...");
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAYSTOP, L"停止回放");
@@ -3682,8 +3710,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         case IDC_BTN_START: cmd_start_acq(); break;
         case IDC_BTN_STOP: cmd_stop_acq(); break;
-        case IDC_BTN_LOGSTART: cmd_log_start(); break;
-        case IDC_BTN_LOGSTOP: cmd_log_stop(); break;
+        case IDC_BTN_LOGSTART:
+        case IDC_BTN_LOGSTOP: cmd_log_toggle(); break;
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDM_HELP_DOC: os_help_show(hwnd); break; /* 需求12：帮助文档（F1 同路径） */
@@ -3847,7 +3875,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */
         g_tab_edit_idx = -1;
         os_ds_stop();
+        g_app.recording = 0;
         os_datalog_stop();
+        os_spool_clear();
         os_replay_stop();
         os_modmgr_shutdown();
         if (g_app.elf) os_elf_close(g_app.elf);

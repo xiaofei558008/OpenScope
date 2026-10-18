@@ -120,6 +120,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\spool_smoke.c code\src\datalog.c ^
+    /Fe:tests\bin\spool_smoke.exe /link user32.lib
+if errorlevel 1 (
+  echo [ERROR] spool_smoke build failed
+  exit /b 1
+)
+
+echo Running spool smoke...
+tests\bin\spool_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] spool_smoke FAILED
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I module\xcp module\xcp\tests\xcp_smoke.c ^
     module\xcp\xcp_slave.c module\xcp\xcp_master.c module\xcp\xcp_can.c ^
     /Fe:tests\bin\xcp_smoke.exe

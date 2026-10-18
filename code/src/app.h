@@ -157,8 +157,9 @@ typedef struct OS_App {
     int ring_head, ring_tail;
     volatile LONG total_samples;
 
-    FILE* log_csv;
+    FILE* log_csv;                 /* 兼容旧接口；录制改为 spool 临时缓存 */
     wchar_t log_path[MAX_PATH];
+    int  recording;                /* 1=录制已开启（可先于采集），再点停止并询问保存 */
     wchar_t shot_path[MAX_PATH]; /* --shot=<路径>：窗口创建后自动截图调试 */
     wchar_t rename_tab[MAX_PATH]; /* --rename-tab=<名>：首个窗口创建后自动重命名（测试钩子） */
     wchar_t replay_path[MAX_PATH]; /* --replay=<csv>：启动后自动离线回放（测试钩子） */
@@ -192,12 +193,14 @@ typedef struct OS_App {
 
     struct OS_Replay* replay;
 
-    /* 长时间采集自动落盘（RAM ≤10MB → 时间戳 CSV） */
+    /* 录制临时缓存（RAM ≤10MB → 本地磁盘 cache\recording.csv） */
     OS_Sample* spool_ram;
     int        spool_cnt, spool_cap;
     FILE*      spool_f;
     wchar_t    spool_path[MAX_PATH];
     int        spool_active;
+    int        spool_have;         /* 1=已有可保存的临时文件 */
+    int64_t    spool_total;        /* 本段已写入样本数 */
 
     /* 回放全量桶缓存（"全部显示到波形窗口"的数据源）。
      * 按叶 id 索引（与 leaves 对齐）——必须与 OS_MAX_LEAVES 等长，越界会破坏堆。 */

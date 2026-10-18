@@ -293,7 +293,15 @@ int os_ds_start(void)
     }
     g_app.stop_poll = 0;
     g_app.acq_state = OS_ACQ_RUNNING;
-    os_spool_begin(); /* 长时间采集自动落盘：RAM ≤10MB → 时间戳 CSV */
+    /* 每次重新开始采集先清上次临时缓存；仅在录制开启时建立新缓存 */
+    os_spool_clear();
+    if (g_app.recording) {
+        if (os_spool_begin() != 0) {
+            g_app.acq_state = OS_ACQ_STOPPED;
+            os_log(OS_LOG_ERROR, "录制缓存建立失败");
+            return -1;
+        }
+    }
     g_app.hPoll = CreateThread(NULL, 0, poll_thread, NULL, 0, NULL);
     if (!g_app.hPoll) {
         g_app.acq_state = OS_ACQ_STOPPED;
@@ -331,7 +339,7 @@ void os_ds_push_batch(OS_Sample* samples, int n)
     int i;
     static ULONGLONG s_last_ui_ms; /* F21/Step1: UI 排空节流（~60Hz），环内样本全收 */
     if (n <= 0 || !samples) return;
-    os_spool_push(samples, n); /* 长时间采集自动落盘（RAM ≤10MB → CSV） */
+    if (g_app.recording) os_spool_push(samples, n);
     EnterCriticalSection(&g_app.ring_cs);
     for (i = 0; i < n; i++) {
         g_app.ring[g_app.ring_head] = samples[i];

@@ -253,44 +253,61 @@ void os_replay_tick(void)
     }
 }
 
-/* ============ 长时间采集自动落盘（RAM ≤10MB → 时间戳 CSV，用户需求） ============ */
+/* ============ 录制临时缓存（RAM ≤10MB → cache\recording.csv） ============ */
 
-static void spool_dir(wchar_t* out, int cap)
+static void spool_cache_path(wchar_t* out, int cap)
 {
-    wchar_t dir[MAX_PATH];
-    wchar_t rec[MAX_PATH];
-    if (GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH) == 0 ||
-        dir[0] == 0) {
+    wchar_t dir[MAX_PATH], base[MAX_PATH], cache[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH) == 0 || dir[0] == 0) {
         GetModuleFileNameW(NULL, dir, MAX_PATH);
         {
             wchar_t* slash = wcsrchr(dir, L'\\');
             if (slash) slash[1] = 0;
         }
     }
-    _snwprintf(rec, MAX_PATH, L"%s\\OpenScope\\records", dir);
-    CreateDirectoryW(rec, NULL);
-    _snwprintf(out, cap, L"%s", rec);
+    _snwprintf(base, MAX_PATH, L"%s\\OpenScope", dir);
+    CreateDirectoryW(base, NULL);
+    _snwprintf(cache, MAX_PATH, L"%s\\cache", base);
+    CreateDirectoryW(cache, NULL);
+    _snwprintf(out, cap, L"%s\\recording.csv", cache);
 }
 
-/* 采集开始时建立落盘通道：RAM 缓冲 10MB，文件名按时间戳命名避免重复 */
+void os_spool_clear(void)
+{
+    if (g_app.spool_f) {
+        fclose(g_app.spool_f);
+        g_app.spool_f = NULL;
+    }
+    free(g_app.spool_ram);
+    g_app.spool_ram = NULL;
+    g_app.spool_cnt = 0;
+    g_app.spool_cap = 0;
+    g_app.spool_active = 0;
+    g_app.spool_have = 0;
+    g_app.spool_total = 0;
+    if (g_app.spool_path[0]) {
+        DeleteFileW(g_app.spool_path);
+        os_log(OS_LOG_INFO, "录制缓存已清除: %ls", g_app.spool_path);
+        g_app.spool_path[0] = 0;
+    }
+}
+
 int os_spool_begin(void)
 {
-    SYSTEMTIME st;
-    wchar_t dir[MAX_PATH], path[MAX_PATH];
-    if (g_app.spool_active) return 0;
-    GetLocalTime(&st);
-    spool_dir(dir, MAX_PATH);
-    _snwprintf(path, MAX_PATH, L"%s\\rec_%04d%02d%02d_%02d%02d%02d.csv",
-               dir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    wchar_t path[MAX_PATH];
+    os_spool_clear();
+    spool_cache_path(path, MAX_PATH);
     g_app.spool_cap = OS_SPOOL_RAM_CAP_BYTES / (int)(sizeof(OS_Sample) > 0 ? sizeof(OS_Sample) : 1);
     if (g_app.spool_cap < 1024) g_app.spool_cap = 1024;
     g_app.spool_ram = (OS_Sample*)malloc(sizeof(OS_Sample) * g_app.spool_cap);
     if (!g_app.spool_ram) {
-        os_log(OS_LOG_ERROR, "落盘 RAM 缓冲分配失败（%d 样本）", g_app.spool_cap);
+        os_log(OS_LOG_ERROR, "录制缓存 RAM 分配失败（%d 样本）", g_app.spool_cap);
         return -1;
     }
     g_app.spool_cnt = 0;
     g_app.spool_f = NULL;
+    g_app.spool_total = 0;
+    g_app.spool_have = 0;
     _snwprintf(g_app.spool_path, MAX_PATH, L"%s", path);
     g_app.spool_active = 1;
     os_log(OS_LOG_INFO, "采集落盘: RAM 缓冲 %d 样本(约10MB)，超出写 %ls",
@@ -298,7 +315,6 @@ int os_spool_begin(void)
     return 0;
 }
 
-/* 首次写盘：打开文件 + 写表头（与记录格式一致，回放可加载） */
 static int spool_open_file(void)
 {
     int i;
@@ -332,17 +348,16 @@ static void spool_write_sample(FILE* f, const OS_Sample* s)
     fputc('\n', f);
 }
 
-/* 采集线程每批调用：先灌 RAM，超 10MB 后整批转写磁盘（后续直接写文件） */
 void os_spool_push(OS_Sample* s, int n)
 {
     int i;
     if (!g_app.spool_active || !s || n <= 0) return;
     for (i = 0; i < n; i++) {
         if (g_app.spool_f) {
-            /* 已转盘：直接写文件（写失败只停一次，不崩溃） */
             spool_write_sample(g_app.spool_f, &s[i]);
+            g_app.spool_total++;
             if (ferror(g_app.spool_f)) {
-                os_log(OS_LOG_ERROR, "采集落盘写盘失败，停止落盘");
+                os_log(OS_LOG_ERROR, "录制缓存写盘失败，停止写入");
                 g_app.spool_active = 0;
                 fclose(g_app.spool_f);
                 g_app.spool_f = NULL;
@@ -350,31 +365,26 @@ void os_spool_push(OS_Sample* s, int n)
             }
         } else if (g_app.spool_cnt < g_app.spool_cap) {
             g_app.spool_ram[g_app.spool_cnt++] = s[i];
+            g_app.spool_total++;
         } else {
-            /* RAM 满：一次性转盘 */
             int k;
             if (spool_open_file() != 0) {
-                os_log(OS_LOG_ERROR, "采集落盘文件打开失败: %ls", g_app.spool_path);
+                os_log(OS_LOG_ERROR, "录制缓存文件打开失败: %ls", g_app.spool_path);
                 g_app.spool_active = 0;
                 return;
             }
             for (k = 0; k < g_app.spool_cnt; k++)
                 spool_write_sample(g_app.spool_f, &g_app.spool_ram[k]);
             spool_write_sample(g_app.spool_f, &s[i]);
+            g_app.spool_total++;
             if (g_app.spool_f) fflush(g_app.spool_f);
         }
     }
 }
 
-/* 采集停止：RAM 残余转盘 + 关闭文件 */
 void os_spool_end(void)
 {
-    if (!g_app.spool_active) {
-        free(g_app.spool_ram);
-        g_app.spool_ram = NULL;
-        if (g_app.spool_f) { fclose(g_app.spool_f); g_app.spool_f = NULL; }
-        return;
-    }
+    if (!g_app.spool_active && !g_app.spool_ram && !g_app.spool_f) return;
     if (g_app.spool_cnt > 0) {
         int k;
         if (spool_open_file() == 0) {
@@ -387,12 +397,34 @@ void os_spool_end(void)
         fclose(g_app.spool_f);
         g_app.spool_f = NULL;
     }
-    os_log(OS_LOG_INFO, "采集落盘完成: %ls（RAM 缓冲 %d 样本）",
-           g_app.spool_path, g_app.spool_cnt);
     free(g_app.spool_ram);
     g_app.spool_ram = NULL;
     g_app.spool_cnt = 0;
     g_app.spool_active = 0;
+    if (g_app.spool_total > 0 && g_app.spool_path[0]) {
+        g_app.spool_have = 1;
+        os_log(OS_LOG_INFO, "采集落盘完成: %ls（%lld 样本）",
+               g_app.spool_path, (long long)g_app.spool_total);
+    } else {
+        g_app.spool_have = 0;
+        if (g_app.spool_path[0]) DeleteFileW(g_app.spool_path);
+    }
+}
+
+int os_spool_has_data(void)
+{
+    return g_app.spool_have && g_app.spool_path[0] && g_app.spool_total > 0;
+}
+
+int os_spool_save_as(const wchar_t* path)
+{
+    if (!path || !path[0] || !os_spool_has_data()) return -1;
+    if (!CopyFileW(g_app.spool_path, path, FALSE)) {
+        os_log(OS_LOG_ERROR, "保存录制失败: %ls", path);
+        return -1;
+    }
+    os_log(OS_LOG_INFO, "录制已保存: %ls（%lld 样本）", path, (long long)g_app.spool_total);
+    return 0;
 }
 
 /* ============ 回放全量加载：整文件解析 + min/max 桶缓存，波形全部显示 ============ */
