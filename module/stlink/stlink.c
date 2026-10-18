@@ -304,10 +304,18 @@ static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
     } else {
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 连接: 频率=自动（DLL 默认 %d kHz）", dcp.frequency);
     }
-    rc = g_ctx.api.connect_stlink(dcp);
+    /* CubeProgrammer 在 LoadersPath 错误时可能内部崩溃；SEH 兜底避免拖垮宿主 */
+    __try {
+        rc = g_ctx.api.connect_stlink(dcp);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        rc = -999;
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link connectStLink 异常 code=0x%08lX（检查 LoadersPath）",
+                            (unsigned long)GetExceptionCode());
+    }
     if (rc != 0) {
         if (err) _snprintf(err, errlen, "connectStLink 失败 (rc=%d)", rc);
         if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 连接: connectStLink 失败 rc=%d", rc);
+        g_ctx.connected = 0;
         return OS_ERR_NO_DEVICE;
     }
     g_ctx.connected = 1;

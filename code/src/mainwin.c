@@ -15,6 +15,7 @@
 #include <commdlg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define IDC_BTN_OPEN     2001
 #define IDC_BTN_CONNECT  2002
@@ -198,11 +199,17 @@ static void log_insert_now(int level, const wchar_t* line)
     LVITEMW item;
     wchar_t t[64], lvl[16], msg[1024];
     int64_t us = os_time_us();
-    int minute = (int)(us / 1000000 / 60);
-    int sec = (int)(us / 1000000 % 60);
-    int msec = (int)(us % 1000000 / 1000);
+    time_t sec;
+    struct tm tmv;
+    int msec;
     if (!g_app.hLog || !IsWindow(g_app.hLog)) return;
-    _snwprintf(t, 64, L"%02d:%02d.%03d", minute % 60, sec, msec);
+    /* 本地时区 HH:MM:SS.mmm（旧实现用 Unix 纪元分钟取模，时间错乱） */
+    sec = (time_t)(us / 1000000);
+    msec = (int)((us % 1000000) / 1000);
+    if (sec < 0) sec = 0;
+    localtime_s(&tmv, &sec);
+    _snwprintf(t, 64, L"%02d:%02d:%02d.%03d",
+               tmv.tm_hour, tmv.tm_min, tmv.tm_sec, msec);
     switch (level) {
     case OS_LOG_WARN: _snwprintf(lvl, 16, L"警告"); break;
     case OS_LOG_ERROR: _snwprintf(lvl, 16, L"错误"); break;
@@ -2594,11 +2601,25 @@ static void cmd_flash_dialog(void)
 {
     HWND dlg, h;
     int i;
-    wchar_t cur_dev[128] = L"STM32F303RC";
+    wchar_t cur_dev[128] = L"STM32G431RB";
+    /* 优先用工具栏芯片核心名；Cortex-M* 无 Flash 算法，烧录窗改用 G431 默认（本机常用板） */
     h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
     if (h) {
         LRESULT sel = SendMessageW(h, CB_GETCURSEL, 0, 0);
-        if (sel != CB_ERR) SendMessageW(h, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)cur_dev);
+        if (sel != CB_ERR) {
+            wchar_t tmp[128];
+            SendMessageW(h, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)tmp);
+            if (tmp[0] && wcsstr(tmp, L"Cortex") == NULL)
+                _snwprintf(cur_dev, 128, L"%s", tmp);
+        }
+    }
+    if (g_app.driver && g_app.connected && g_app.driver->command) {
+        OS_DriverInfo info;
+        memset(&info, 0, sizeof(info));
+        g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
+        /* ST-Link 已识别 G43x 时，器件名用带算法的型号，便于 J-Link 切换后也能烧 */
+        if (strstr(info.emulator, "G43") || strstr(info.emulator, "G44"))
+            _snwprintf(cur_dev, 128, L"%s", L"STM32G431RB");
     }
     dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgFlash", L"烧录 / 擦除",
                           WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -3565,7 +3586,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             LVCOLUMNW col;
             memset(&col, 0, sizeof(col));
             col.mask = LVCF_TEXT | LVCF_WIDTH;
-            col.cx = 90;
+            col.cx = 110; /* HH:MM:SS.mmm */
             col.pszText = L"时间";
             ListView_InsertColumn(g_app.hLog, 0, &col);
             col.cx = 50;
