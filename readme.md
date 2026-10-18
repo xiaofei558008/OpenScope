@@ -143,6 +143,34 @@ OpenScope 是一款专为嵌入式开发设计的高性能调试与数据采集�
 
 XCP 不使用工具栏上的 IP 和端口。传输预留给 CAN 适配器（周立功、Kvaser）。协议层已经实现连接、状态、上传/下载、校验和、标定页、种子解锁和动态 DAQ；编程类命令按规范返回“未知命令”。CAN 适配器还没接入时，扫描列表是空的，点连接会提示没有发现设备。
 
+### 3.9 AI / CLI / MCP 自动化接口
+
+全部主机操作可通过本机 **WebSocket JSON-RPC 2.0** 调用（无需点界面），便于 AI 工具与脚本自动化调试 MCU。
+
+| 项 | 说明 |
+| :--- | :--- |
+| 模块 | `aiapi.dll`（能力 `OS_CAP_AI`） |
+| 默认端点 | `ws://127.0.0.1:18765`（仅本机回环） |
+| 改端口 | 环境变量 `OPENSCOPE_AI_PORT`，或启动参数 `--ai-port=端口` |
+| 协议 | 文本帧 JSON-RPC：`{"jsonrpc":"2.0","id":1,"method":"status","params":{}}` |
+| MCP | 同端口支持 `tools/list`、`tools/call`；stdio 桥：`tools/openscope_mcp.py` |
+| CLI | `python scripts/os_cli.py <method> [json_params]` |
+
+**常用方法（调用 `help` / `tools.list` 可获得实时完整表）**：`status`、`modules.list`、`drivers.list` / `drivers.select`、`probe.scan`、`connect` / `disconnect`、`elf.load`、`vars.list` / `vars.find` / `vars.watch` / `vars.read` / `vars.write`、`mem.read` / `mem.write`、`acq.start` / `acq.stop`、`flash.download` / `flash.erase`、`recording.start` / `recording.stop`。
+
+**自动更新**：每次启动扫描 `dll\*.dll`；`tools.list` 会列出当前已加载模块，并对实现了 `OS_CMD_AI_DESCRIBE` 的模块合并其工具描述。新增功能模块放入 `dll` 后重启即可被 AI 发现；宿主侧新操作登记在 `ai_bridge.c` 后同样会出现在 `help`。
+
+**示例**：
+
+```bash
+# 需先启动 OpenScope，并 pip install websocket-client
+python scripts/os_cli.py help --pretty
+python scripts/os_cli.py connect "{\"device\":\"Cortex-M4\",\"speed_khz\":4000}"
+python scripts/os_cli.py elf.load "{\"path\":\"D:/fw.elf\"}"
+python scripts/os_cli.py vars.watch "{\"name\":\"g_counter\",\"on\":1}"
+python scripts/os_cli.py acq.start
+```
+
 ---
 
 ## 4. 性能优化说明

@@ -78,6 +78,8 @@ XCP 与网络功能独立：网络功能是把一台电脑上 OpenScope 抓到�
 
 26、增加烧录/擦除芯片功能：软件内提供加载 .elf/.out/.hex/.bin 的下载窗口，方便直接在 OpenScope 里下载固件；支持整片擦除。
 
+27、将整个软件的全部操作/输入输出接口都用 CLI/MCP 对接，方便 AI 工具直接调用本软件自动化调试 MCU，而不需要界面点来点去。子模块 `aiapi.dll`：本机 `127.0.0.1` + 端口 + WebSocket JSON-RPC；后续新增软件模块自动进入 AI 接口（`tools.list` / `modules.list` / 可选 `OS_CMD_AI_DESCRIBE`），并更新 help，方便 AI 快速了解如何使用。
+
 ## Bug:
 1、添加2个变量后App异常退出；
 2、正常关闭软件后，再打开，任务栏里有OpenScope图标，但整个软件页面不能显示出来；

@@ -237,6 +237,9 @@ int  os_fw_ring_copy(OS_Sample* out, int max);
 int  os_fw_leaf_add(const char* name, uint64_t addr, uint32_t size);
 void os_fw_leaf_sync_done(int added, int updated);
 uint32_t os_fw_leaf_size(int id);
+/* 框架 v5：AI/CLI/MCP JSON-RPC 方法分发 */
+int os_ai_call(const char* method, const char* params_json,
+               char* result_json, int result_cap);
 
 /* 主窗口控制（mainwin.c） */
 void os_mainwin_update_buttons(void);

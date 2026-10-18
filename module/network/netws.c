@@ -295,7 +295,22 @@ int os_ws_send_bin(OS_WSConn* c, const uint8_t* data, uint32_t len)
 
 int os_ws_send_text(OS_WSConn* c, const char* s)
 {
-    return os_ws_send_bin(c, (const uint8_t*)s, (uint32_t)strlen(s));
+    static const uint8_t mkey[4] = {0x12,0x34,0x56,0x78};
+    uint32_t len;
+    uint8_t* f;
+    int n, r;
+    if (!c || !s) return -1;
+    len = (uint32_t)strlen(s);
+    f = (uint8_t*)malloc(14 + (size_t)len + 8);
+    if (!f) return -1;
+    n = os_ws_frame_encode(f, 14 + (int)len + 8, 1, OS_WS_OP_TEXT,
+                           (const uint8_t*)s, len, c->is_client, mkey);
+    if (n < 0) { free(f); return -1; }
+    EnterCriticalSection(&c->send_cs);
+    r = send_all(c->s, f, n);
+    LeaveCriticalSection(&c->send_cs);
+    free(f);
+    return r == 0 ? 0 : -1;
 }
 
 int os_ws_recv(OS_WSConn* c, uint8_t* buf, int cap, int* opcode)

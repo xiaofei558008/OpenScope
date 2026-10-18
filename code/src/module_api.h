@@ -11,12 +11,13 @@
 #include <windows.h>
 #include <stdint.h>
 
-#define OS_API_VERSION 4
+#define OS_API_VERSION 5
 
 /* 模块能力标志 */
 #define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写） */
 #define OS_CAP_WINDOW 0x0002 /* 提供自定义窗口类型 */
 #define OS_CAP_NET    0x0004 /* 提供网络服务（远程操作，需求 14） */
+#define OS_CAP_AI     0x0008 /* AI/CLI/MCP 自动化总线（本机 WebSocket JSON-RPC） */
 
 /* 日志级别 */
 #define OS_LOG_INFO  0
@@ -63,7 +64,9 @@ enum {
     OS_CMD_NET_WATCH_STOP = 29, /* 发送空监视列表（停止下达）：远端停止采集 */
     /* 烧录 / 擦除（软件内下载固件） */
     OS_CMD_FLASH_DOWNLOAD = 30, /* in: OS_FlashReq*，下载 .elf/.out/.hex/.bin 到 Flash */
-    OS_CMD_FLASH_ERASE    = 31  /* in: OS_FlashReq*（可用 device），整片擦除 */
+    OS_CMD_FLASH_ERASE    = 31, /* in: OS_FlashReq*（可用 device），整片擦除 */
+    /* AI 自动化：模块可选返回自身工具描述 JSON（追加到 tools.list） */
+    OS_CMD_AI_DESCRIBE    = 40  /* out: char*（调用方提供缓冲，建议 ≥4KB）；返回写出字节数或负错误码 */
 };
 
 /* 仿真口类型 */
@@ -197,6 +200,12 @@ typedef struct OS_Framework {
     void (*leaf_sync_done)(int added, int updated);
     /* 叶变量实际读取大小（无样本时也能给出 ELF/合成大小；变量表上传用）。 */
     uint32_t (*leaf_size)(int id);
+
+    /* ---- v5 扩展（AI/CLI/MCP：主机实现全部操作，模块只做传输）---- */
+    /* JSON-RPC 方法分发：method + params_json → result_json。
+     * 返回 0 成功，负错误码失败（result_json 仍可含 {"ok":false,"error":"..."}）。 */
+    int (*ai_call)(const char* method, const char* params_json,
+                   char* result_json, int result_cap);
 } OS_Framework;
 
 typedef struct OS_WindowType {

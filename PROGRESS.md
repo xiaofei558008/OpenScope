@@ -4,6 +4,7 @@
 
 ## 检查点
 
+- **checkpoint-61（2026-10-18）**：AI/CLI/MCP 自动化总线（1.25.0，需求 27）。Module API 升至 v5，框架新增 `ai_call`；`aiapi.dll` 在 `ws://127.0.0.1:18765` 提供 JSON-RPC（兼 MCP `tools/list`/`tools/call`）。宿主 `ai_bridge.c` 暴露 connect/ELF/变量/内存/采集/烧录/录制等方法；`tools.list` 自动枚举已加载模块，可选 `OS_CMD_AI_DESCRIBE` 扩展。CLI：`scripts/os_cli.py`；MCP stdio：`scripts/openscope_mcp.py`。帮助文档 §3.9。冒烟：启动后 status/modules.list/tools.list 通过（5 模块含 aiapi）。
 - **checkpoint-60（2026-10-18）**：烧录/擦除（1.24.0，需求 26）。工具栏与菜单打开烧录窗口，可选 `.elf/.out/.hex/.bin`，支持整片擦除、校验、复位运行。J-Link 走 `DownloadFile`/`EraseChip`（ExecCommand 兜底），ST-Link 走 CubeProgrammer `downloadFile`/`massErase`。`flash_smoke` 锁住命令号与未连接返回值。
 - **checkpoint-59（2026-10-18）**：录制按键与临时缓存（1.23.2）。工具栏单一「录制/停止录制」开关，可先开录再开始采集；停录询问是否保存并选路径。样本写入 `%LOCALAPPDATA%\OpenScope\cache\recording.csv`；每次重新开始采集先自动清除上次缓存。原「先选路径再记」流程去掉，避免采集中弹框卡死。
 - **checkpoint-58（2026-10-17）**：XCP 与网络拆开（1.23.1）。网络模块仍只在两台 OpenScope 之间传采集数据。XCP 驱动不再占用工具栏 IP/端口，也不再走 TCP。协议层保留，传输口改成 CAN 后端（`xcp_can`），周立功和 Kvaser 尚未接入，扫描为空。

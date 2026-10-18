@@ -129,6 +129,7 @@ static void init_fw(void)
     g_app.fw.leaf_add = os_fw_leaf_add;
     g_app.fw.leaf_sync_done = os_fw_leaf_sync_done;
     g_app.fw.leaf_size = os_fw_leaf_size;
+    g_app.fw.ai_call = os_ai_call;
 }
 
 /* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */
@@ -188,6 +189,12 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
             if (colon) *colon = 0;
             _snwprintf(g_app.net_set_ip, 64, L"%s", tok + 10);
             if (colon) _snwprintf(g_app.net_set_port, 16, L"%s", colon + 1);
+        }
+        else if (wcsncmp(tok, L"--ai-port=", 10) == 0) {
+            /* AI/CLI/MCP：启动前写入环境变量，aiapi.dll init 时读取 */
+            char port8[16];
+            os_wide_to_utf8_buf(tok + 10, port8, sizeof(port8));
+            SetEnvironmentVariableA("OPENSCOPE_AI_PORT", port8);
         }
         else if (wcsncmp(tok, L"--watch=", 8) == 0) _snwprintf(g_app.net_watch_csv, 1024, L"%s", tok + 8);
         else if (wcsncmp(tok, L"--net-win=", 10) == 0) _snwprintf(g_app.net_win_spec, 1024, L"%s", tok + 10);
@@ -329,6 +336,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
     os_log(OS_LOG_INFO, "OpenScope 启动 (version " OS_VERSION_STR ")");
+    /* AI 端口须在模块加载前生效（aiapi.dll init 读 OPENSCOPE_AI_PORT） */
+    {
+        wchar_t* t = wcsstr(lpCmdLine, L"--ai-port=");
+        if (t) {
+            wchar_t tmp[16];
+            char port8[16];
+            wchar_t* sp = wcschr(t + 10, L' ');
+            int len = sp ? (int)(sp - (t + 10)) : (int)wcslen(t + 10);
+            if (len > 0 && len < 16) {
+                memcpy(tmp, t + 10, (size_t)len * sizeof(wchar_t));
+                tmp[len] = 0;
+                os_wide_to_utf8_buf(tmp, port8, sizeof(port8));
+                SetEnvironmentVariableA("OPENSCOPE_AI_PORT", port8);
+            }
+        }
+    }
     init_fw();
     icc.dwSize = sizeof(icc);
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
