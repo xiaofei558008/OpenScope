@@ -199,6 +199,10 @@ static const AI_Tool g_tools[] = {
     {"flash.erase", "整片擦除", "{\"device\":\"\",\"reset_run\":1}"},
     {"recording.start", "开始录制（无需弹窗）", "{}"},
     {"recording.stop", "停止录制并可保存 CSV", "{\"path\":\"D:\\\\cap.csv\"}"},
+    {"log.read", "读取运行时日志（since 游标增量拉取）", "{\"since\":0,\"limit\":100,\"min_level\":0}"},
+    {"log.clear", "清空日志环形缓冲（不影响日志文件）", "{}"},
+    {"log.subscribe", "订阅实时日志推送（WebSocket 通知 method=log.event）", "{\"min_level\":0}"},
+    {"log.unsubscribe", "取消本连接的日志订阅", "{}"},
     {"module.command", "透传 OS_CMD_* 到指定模块（高级）", "{\"module\":\"jlink\",\"cmd\":3}"},
 };
 static const int g_tool_n = (int)(sizeof(g_tools) / sizeof(g_tools[0]));
@@ -306,10 +310,12 @@ static int method_status2(char* out, int cap)
     _snprintf(out, cap,
         "{\"ok\":true,\"version\":\"%s\",\"api\":%d,\"connected\":%d,\"acq_state\":%d,"
         "\"recording\":%d,\"leaf_count\":%d,\"watch_count\":%d,\"driver\":\"%s\","
-        "\"driver_index\":%d,\"elf\":\"%s\",\"mod_count\":%d,\"poll_interval_ms\":%d}",
+        "\"driver_index\":%d,\"elf\":\"%s\",\"mod_count\":%d,\"poll_interval_ms\":%d,"
+        "\"log_head_seq\":%llu,\"log_ring_cap\":%d}",
         OS_VERSION_STR, OS_API_VERSION, connected, acq, g_app.recording,
         g_app.leaf_count, g_app.watch_count, desc, di, esc, g_app.mod_count,
-        g_app.poll_interval_ms);
+        g_app.poll_interval_ms,
+        (unsigned long long)os_log_ring_head_seq(), OS_LOG_RING_CAP);
     return OS_ERR_OK;
 }
 
@@ -683,6 +689,57 @@ static int method_recording_stop(const char* params, char* out, int cap)
     return ai_ok(out, cap, "\"recording\":0,\"saved\":0");
 }
 
+static const char* log_level_name(int level)
+{
+    switch (level) {
+    case OS_LOG_WARN:  return "WARN";
+    case OS_LOG_ERROR: return "ERROR";
+    case OS_LOG_DEBUG: return "DEBUG";
+    default:           return "INFO";
+    }
+}
+
+static int method_log_read(const char* params, char* out, int cap)
+{
+    OS_LogEntry entries[128];
+    uint64_t since = 0, next = 0;
+    int limit = 100, min_level = OS_LOG_DEBUG, n, i, o = 0;
+    char ts[40], esc[640];
+    if (params) {
+        const char* pv;
+        int v;
+        if (json_find_key(params, "since", &pv) == 0)
+            since = _strtoui64(*pv == '"' ? pv + 1 : pv, NULL, 0);
+        if (json_get_int(params, "limit", &v) == 0) limit = v;
+        if (json_get_int(params, "min_level", &v) == 0) min_level = v;
+    }
+    if (limit <= 0) limit = 100;
+    if (limit > 128) limit = 128;
+    n = os_log_ring_copy(since, min_level, entries, limit, &next);
+    o += _snprintf(out + o, cap - o,
+        "{\"ok\":true,\"count\":%d,\"since\":%llu,\"next_since\":%llu,\"lines\":[",
+        n, (unsigned long long)since, (unsigned long long)next);
+    for (i = 0; i < n && o < cap - 200; i++) {
+        json_escape(entries[i].text, esc, sizeof(esc));
+        os_time_iso(entries[i].ts_us, ts, sizeof(ts));
+        o += _snprintf(out + o, cap - o,
+            "%s{\"seq\":%llu,\"level\":%d,\"level_name\":\"%s\",\"ts\":\"%s\",\"text\":\"%s\"}",
+            i ? "," : "",
+            (unsigned long long)entries[i].seq,
+            entries[i].level, log_level_name(entries[i].level), ts, esc);
+    }
+    if (o < cap - 2) { out[o++] = ']'; out[o++] = '}'; out[o] = 0; }
+    return OS_ERR_OK;
+}
+
+static int method_log_clear(char* out, int cap)
+{
+    os_log_ring_clear();
+    _snprintf(out, cap, "{\"ok\":true,\"head_seq\":%llu}",
+              (unsigned long long)os_log_ring_head_seq());
+    return OS_ERR_OK;
+}
+
 static int method_module_command(const char* params, char* out, int cap)
 {
     char name[64];
@@ -804,6 +861,17 @@ int os_ai_call(const char* method, const char* params_json,
         return method_recording_start(result_json, result_cap);
     if (strcmp(method, "recording.stop") == 0)
         return method_recording_stop(params, result_json, result_cap);
+    if (strcmp(method, "log.read") == 0)
+        return method_log_read(params, result_json, result_cap);
+    if (strcmp(method, "log.clear") == 0)
+        return method_log_clear(result_json, result_cap);
+    /* subscribe/unsubscribe 由 aiapi.dll 在传输层处理；宿主侧返回提示 */
+    if (strcmp(method, "log.subscribe") == 0 ||
+        strcmp(method, "log.unsubscribe") == 0) {
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"note\":\"handled by aiapi WebSocket transport\"}");
+        return OS_ERR_OK;
+    }
     if (strcmp(method, "module.command") == 0)
         return method_module_command(params, result_json, result_cap);
     if (strncmp(method, "module.", 7) == 0)

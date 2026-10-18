@@ -156,7 +156,18 @@ XCP 不使用工具栏上的 IP 和端口。传输预留给 CAN 适配器（周�
 | MCP | 同端口支持 `tools/list`、`tools/call`；stdio 桥：`tools/openscope_mcp.py` |
 | CLI | `python scripts/os_cli.py <method> [json_params]` |
 
-**常用方法（调用 `help` / `tools.list` 可获得实时完整表）**：`status`、`modules.list`、`drivers.list` / `drivers.select`、`probe.scan`、`connect` / `disconnect`、`elf.load`、`vars.list` / `vars.find` / `vars.watch` / `vars.read` / `vars.write`、`mem.read` / `mem.write`、`acq.start` / `acq.stop`、`flash.download` / `flash.erase`、`recording.start` / `recording.stop`。
+**常用方法（调用 `help` / `tools.list` 可获得实时完整表）**：`status`、`modules.list`、`drivers.list` / `drivers.select`、`probe.scan`、`connect` / `disconnect`、`elf.load`、`vars.list` / `vars.find` / `vars.watch` / `vars.read` / `vars.write`、`mem.read` / `mem.write`、`acq.start` / `acq.stop`、`flash.download` / `flash.erase`、`recording.start` / `recording.stop`、**`log.read` / `log.clear` / `log.subscribe` / `log.unsubscribe`**。
+
+**运行时日志（AI 接入）**：
+
+| 方法 | 说明 |
+| :--- | :--- |
+| `log.read` | 增量拉取：`{"since":0,"limit":100,"min_level":0}` → `lines[]` + `next_since`（游标） |
+| `log.clear` | 清空内存环（2048 条；不影响 `openscope.log` 文件） |
+| `log.subscribe` | 本 WebSocket 连接订阅实时推送；服务端发无 id 通知 `{"method":"log.event","params":{...}}` |
+| `log.unsubscribe` | 取消订阅 |
+
+`min_level` 传 `OS_LOG_*` 常量（`0=INFO`、`1=WARN`、`2=ERROR`、`3=DEBUG`）；过滤按严重度 **DEBUG < INFO < WARN < ERROR**。要收全部日志用 `3`（DEBUG）或省略；仅错误用 `2`。
 
 **自动更新**：每次启动扫描 `dll\*.dll`；`tools.list` 会列出当前已加载模块，并对实现了 `OS_CMD_AI_DESCRIBE` 的模块合并其工具描述。新增功能模块放入 `dll` 后重启即可被 AI 发现；宿主侧新操作登记在 `ai_bridge.c` 后同样会出现在 `help`。
 

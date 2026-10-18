@@ -4,6 +4,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include "elf.h"
+#include "module_api.h" /* OS_AiLogEntry / OS_AiLogListener */
 
 /* 枚举值表项（用于叶子变量的枚举名显示/解析） */
 typedef struct OS_EnumVal {
@@ -26,6 +27,21 @@ void os_log_file_set_override(const wchar_t* path); /* --log= 测试钩子：指
 void os_log_file_open(const wchar_t* path);
 /* 崩溃处理器用：不经过 UI 回调，直接写日志文件（同步刷新） */
 void os_log_file_write_raw(const char* line);
+
+/* ---- AI/CLI：运行时日志环形缓冲（与 UI ListView / 文件并行）---- */
+#define OS_LOG_RING_CAP 2048
+/* 条目类型见 module_api.h::OS_AiLogEntry（布局一致） */
+typedef OS_AiLogEntry OS_LogEntry;
+/* 复制 seq > since 的条目（旧→新），最多 max 条；*next_since 为下次 since。
+ * min_level：OS_LOG_* 严重度下限（DEBUG < INFO < WARN < ERROR）。 */
+int      os_log_ring_copy(uint64_t since, int min_level, OS_LogEntry* out, int max,
+                          uint64_t* next_since);
+uint64_t os_log_ring_head_seq(void); /* 当前最大 seq（无日志为 0） */
+void     os_log_ring_clear(void);
+/* 实时监听：每条新日志回调（可从任意线程；勿在回调里再调 os_log） */
+typedef OS_AiLogListener os_log_listener_fn;
+int  os_log_add_listener(os_log_listener_fn fn, void* user);
+void os_log_remove_listener(os_log_listener_fn fn, void* user);
 /* 把窗口客户区保存为 32bpp BMP（调试/截图用） */
 void os_save_window_bmp(HWND hwnd, const wchar_t* path);
 

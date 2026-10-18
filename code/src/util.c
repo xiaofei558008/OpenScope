@@ -12,7 +12,149 @@ static CRITICAL_SECTION g_log_cs;
 static int g_log_cs_ok;
 static wchar_t g_log_override[MAX_PATH]; /* --log= 测试钩子 */
 
+/* 运行时日志环（AI API / CLI 拉取与订阅） */
+static OS_LogEntry g_log_ring[OS_LOG_RING_CAP];
+static int g_log_ring_head;          /* 下一写入下标 */
+static int g_log_ring_count;
+static uint64_t g_log_ring_seq;      /* 已分配的最大 seq */
+typedef struct {
+    os_log_listener_fn fn;
+    void* user;
+} OS_LogListener;
+#define OS_LOG_MAX_LISTENERS 16
+static OS_LogListener g_log_listeners[OS_LOG_MAX_LISTENERS];
+static int g_log_listener_n;
+
 void os_log_set(void (*fn)(int level, const wchar_t* line)) { g_log_fn = fn; }
+
+static void log_cs_ensure(void)
+{
+    if (!g_log_cs_ok) {
+        InitializeCriticalSection(&g_log_cs);
+        g_log_cs_ok = 1;
+    }
+}
+
+/* 严重程度：DEBUG < INFO < WARN < ERROR（用于 min_level 过滤） */
+static int log_severity(int level)
+{
+    switch (level) {
+    case OS_LOG_ERROR: return 3;
+    case OS_LOG_WARN:  return 2;
+    case OS_LOG_DEBUG: return 0;
+    default:           return 1; /* INFO */
+    }
+}
+
+static void log_ring_push_unlocked(int level, int64_t ts_us, const char* text)
+{
+    OS_LogEntry* e;
+    OS_LogEntry copy;
+    OS_LogListener snap[OS_LOG_MAX_LISTENERS];
+    int snap_n, i;
+    g_log_ring_seq++;
+    e = &g_log_ring[g_log_ring_head];
+    e->seq = g_log_ring_seq;
+    e->level = level;
+    e->ts_us = ts_us;
+    _snprintf(e->text, sizeof(e->text), "%s", text ? text : "");
+    copy = *e;
+    g_log_ring_head = (g_log_ring_head + 1) % OS_LOG_RING_CAP;
+    if (g_log_ring_count < OS_LOG_RING_CAP) g_log_ring_count++;
+    /* 回调在持锁外执行，避免监听方再进 os_log 死锁；先快照条目与监听表 */
+    snap_n = g_log_listener_n;
+    for (i = 0; i < snap_n; i++) snap[i] = g_log_listeners[i];
+    LeaveCriticalSection(&g_log_cs);
+    for (i = 0; i < snap_n; i++) {
+        if (snap[i].fn) snap[i].fn(&copy, snap[i].user);
+    }
+    EnterCriticalSection(&g_log_cs);
+}
+
+int os_log_ring_copy(uint64_t since, int min_level, OS_LogEntry* out, int max,
+                     uint64_t* next_since)
+{
+    int start, i, n = 0, min_sev;
+    uint64_t next;
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    next = g_log_ring_seq;
+    min_sev = log_severity(min_level);
+    if (!out || max <= 0 || g_log_ring_count <= 0) {
+        if (next_since) *next_since = next;
+        LeaveCriticalSection(&g_log_cs);
+        return 0;
+    }
+    start = (g_log_ring_head - g_log_ring_count + OS_LOG_RING_CAP) % OS_LOG_RING_CAP;
+    for (i = 0; i < g_log_ring_count && n < max; i++) {
+        OS_LogEntry* e = &g_log_ring[(start + i) % OS_LOG_RING_CAP];
+        if (e->seq <= since) continue;
+        if (log_severity(e->level) < min_sev) continue;
+        out[n++] = *e;
+    }
+    if (next_since) *next_since = next;
+    LeaveCriticalSection(&g_log_cs);
+    return n;
+}
+
+uint64_t os_log_ring_head_seq(void)
+{
+    uint64_t s;
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    s = g_log_ring_seq;
+    LeaveCriticalSection(&g_log_cs);
+    return s;
+}
+
+void os_log_ring_clear(void)
+{
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    g_log_ring_head = 0;
+    g_log_ring_count = 0;
+    /* seq 不回绕，避免 since 游标错乱 */
+    LeaveCriticalSection(&g_log_cs);
+}
+
+int os_log_add_listener(os_log_listener_fn fn, void* user)
+{
+    int i;
+    if (!fn) return -1;
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    for (i = 0; i < g_log_listener_n; i++) {
+        if (g_log_listeners[i].fn == fn && g_log_listeners[i].user == user) {
+            LeaveCriticalSection(&g_log_cs);
+            return 0;
+        }
+    }
+    if (g_log_listener_n >= OS_LOG_MAX_LISTENERS) {
+        LeaveCriticalSection(&g_log_cs);
+        return -1;
+    }
+    g_log_listeners[g_log_listener_n].fn = fn;
+    g_log_listeners[g_log_listener_n].user = user;
+    g_log_listener_n++;
+    LeaveCriticalSection(&g_log_cs);
+    return 0;
+}
+
+void os_log_remove_listener(os_log_listener_fn fn, void* user)
+{
+    int i, j;
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    for (i = 0; i < g_log_listener_n; i++) {
+        if (g_log_listeners[i].fn == fn && g_log_listeners[i].user == user) {
+            for (j = i; j < g_log_listener_n - 1; j++)
+                g_log_listeners[j] = g_log_listeners[j + 1];
+            g_log_listener_n--;
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_log_cs);
+}
 
 void os_log_file_open(const wchar_t* path)
 {
@@ -71,10 +213,7 @@ void os_log_file_auto_open(void)
 
 void os_log_file_write_raw(const char* line)
 {
-    if (!g_log_cs_ok) {
-        InitializeCriticalSection(&g_log_cs);
-        g_log_cs_ok = 1;
-    }
+    log_cs_ensure();
     EnterCriticalSection(&g_log_cs);
     if (g_log_file && line) {
         fputs(line, g_log_file);
@@ -144,11 +283,13 @@ void os_log(int level, const char* fmt, ...)
     char line[1152];
     char ts[40];
     const char* lv = "INFO";
+    int64_t now;
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    os_time_iso(os_time_us(), ts, sizeof(ts));
+    now = os_time_us();
+    os_time_iso(now, ts, sizeof(ts));
     switch (level) {
     case OS_LOG_WARN: lv = "WARN"; break;
     case OS_LOG_ERROR: lv = "ERROR"; break;
@@ -157,6 +298,11 @@ void os_log(int level, const char* fmt, ...)
     }
     _snprintf(line, sizeof(line), "%s [%s] %s", ts, lv, buf);
     os_log_file_write_raw(line);
+    /* 环缓冲：与文件同锁，push 内短暂放锁回调订阅者 */
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    log_ring_push_unlocked(level, now, buf);
+    LeaveCriticalSection(&g_log_cs);
     os_utf8_to_wide_buf(buf, wbuf, 1024);
     OutputDebugStringW(wbuf);
     OutputDebugStringW(L"\n");

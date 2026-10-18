@@ -26,6 +26,63 @@ static HANDLE g_thread;
 static int g_listen = -1;
 static int g_port = AI_DEFAULT_PORT;
 
+typedef struct AiClient {
+    OS_WSConn*    conn;
+    volatile LONG subscribed;
+    int           min_level; /* OS_LOG_* 严重度下限 */
+    int           listening; /* 已注册 fw log listener */
+} AiClient;
+
+static int log_severity(int level)
+{
+    switch (level) {
+    case OS_LOG_ERROR: return 3;
+    case OS_LOG_WARN:  return 2;
+    case OS_LOG_DEBUG: return 0;
+    default:           return 1;
+    }
+}
+
+static void json_escape_text(const char* s, char* out, int cap)
+{
+    int i = 0;
+    if (!out || cap < 1) return;
+    if (!s) { out[0] = 0; return; }
+    while (*s && i < cap - 2) {
+        if (*s == '"' || *s == '\\') { out[i++] = '\\'; out[i++] = *s++; }
+        else if ((unsigned char)*s < 0x20) { s++; }
+        else out[i++] = *s++;
+    }
+    out[i] = 0;
+}
+
+static const char* log_level_name(int level)
+{
+    switch (level) {
+    case OS_LOG_WARN:  return "WARN";
+    case OS_LOG_ERROR: return "ERROR";
+    case OS_LOG_DEBUG: return "DEBUG";
+    default:           return "INFO";
+    }
+}
+
+/* 宿主日志回调 → WebSocket JSON-RPC 通知（无 id） */
+static void ai_on_log(const OS_AiLogEntry* e, void* user)
+{
+    AiClient* cl = (AiClient*)user;
+    char esc[640], msg[900];
+    if (!cl || !e || !cl->conn) return;
+    if (InterlockedCompareExchange(&cl->subscribed, 1, 1) != 1) return;
+    if (log_severity(e->level) < log_severity(cl->min_level)) return;
+    json_escape_text(e->text, esc, sizeof(esc));
+    _snprintf(msg, sizeof(msg),
+        "{\"jsonrpc\":\"2.0\",\"method\":\"log.event\",\"params\":"
+        "{\"seq\":%llu,\"level\":%d,\"level_name\":\"%s\",\"ts_us\":%lld,\"text\":\"%s\"}}",
+        (unsigned long long)e->seq, e->level, log_level_name(e->level),
+        (long long)e->ts_us, esc);
+    os_ws_send_text(cl->conn, msg);
+}
+
 static int json_extract_str(const char* j, const char* key, char* out, int cap)
 {
     char pat[96];
@@ -160,12 +217,15 @@ static void send_rpc_error(OS_WSConn* c, const char* id, int code, const char* m
     os_ws_send_text(c, msg);
 }
 
-static void handle_request(OS_WSConn* c, const char* req)
+static void handle_request(AiClient* cl, const char* req)
 {
+    OS_WSConn* c;
     char method[128], id[64], params[65536], result[AI_RESULT_CAP];
     char name[128], args[65536];
     int rc;
 
+    if (!cl || !cl->conn) return;
+    c = cl->conn;
     if (!g_fw || !g_fw->ai_call) {
         send_rpc_error(c, "null", -32000, "ai_call unavailable");
         return;
@@ -177,6 +237,38 @@ static void handle_request(OS_WSConn* c, const char* req)
         return;
     }
     json_extract_params_obj(req, params, sizeof(params));
+
+    /* 实时日志订阅：本连接注册宿主 listener，推送 method=log.event */
+    if (strcmp(method, "log.subscribe") == 0) {
+        int ml = OS_LOG_DEBUG, v;
+        const char* p = strstr(params, "\"min_level\"");
+        if (p) {
+            p = strchr(p, ':');
+            if (p) ml = atoi(p + 1);
+        }
+        (void)v;
+        cl->min_level = ml;
+        InterlockedExchange(&cl->subscribed, 1);
+        if (!cl->listening && g_fw->log_add_listener) {
+            if (g_fw->log_add_listener(ai_on_log, cl) == 0)
+                cl->listening = 1;
+        }
+        _snprintf(result, sizeof(result),
+            "{\"ok\":true,\"subscribed\":1,\"min_level\":%d,\"head_seq\":%llu}",
+            cl->min_level,
+            (unsigned long long)(g_fw->log_ring_head_seq ? g_fw->log_ring_head_seq() : 0));
+        send_rpc_result(c, id, result);
+        return;
+    }
+    if (strcmp(method, "log.unsubscribe") == 0) {
+        InterlockedExchange(&cl->subscribed, 0);
+        if (cl->listening && g_fw->log_remove_listener) {
+            g_fw->log_remove_listener(ai_on_log, cl);
+            cl->listening = 0;
+        }
+        send_rpc_result(c, id, "{\"ok\":true,\"subscribed\":0}");
+        return;
+    }
 
     /* MCP: tools/list → tools.list；tools/call → 真实工具名 */
     if (strcmp(method, "tools/list") == 0) {
@@ -260,18 +352,25 @@ static void handle_request(OS_WSConn* c, const char* req)
 
 static DWORD WINAPI client_thread(LPVOID p)
 {
-    OS_WSConn* c = (OS_WSConn*)p;
-    uint8_t* buf = (uint8_t*)malloc(AI_RECV_CAP);
-    if (!buf) { os_ws_close(c); return 0; }
+    AiClient cl;
+    uint8_t* buf;
+    memset(&cl, 0, sizeof(cl));
+    cl.conn = (OS_WSConn*)p;
+    cl.min_level = OS_LOG_DEBUG;
+    buf = (uint8_t*)malloc(AI_RECV_CAP);
+    if (!buf) { os_ws_close(cl.conn); return 0; }
     while (InterlockedCompareExchange(&g_running, 1, 1) == 1) {
-        int op = 0, n = os_ws_recv(c, buf, AI_RECV_CAP - 1, &op);
+        int op = 0, n = os_ws_recv(cl.conn, buf, AI_RECV_CAP - 1, &op);
         if (n <= 0) break;
         if (op != OS_WS_OP_TEXT && op != OS_WS_OP_BIN) continue;
         buf[n] = 0;
-        handle_request(c, (const char*)buf);
+        handle_request(&cl, (const char*)buf);
     }
+    InterlockedExchange(&cl.subscribed, 0);
+    if (cl.listening && g_fw && g_fw->log_remove_listener)
+        g_fw->log_remove_listener(ai_on_log, &cl);
     free(buf);
-    os_ws_close(c);
+    os_ws_close(cl.conn);
     return 0;
 }
 
@@ -379,8 +478,8 @@ static const OS_Module g_mod = {
     OS_API_VERSION,
     OS_CAP_AI,
     "aiapi",
-    "1.0.0",
-    "AI/CLI/MCP 本机 WebSocket JSON-RPC（127.0.0.1:18765）",
+    "1.1.0",
+    "AI/CLI/MCP 本机 WebSocket JSON-RPC + 实时日志（127.0.0.1:18765）",
     NULL,
     ai_init,
     ai_deinit,

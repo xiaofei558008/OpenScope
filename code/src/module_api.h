@@ -140,6 +140,16 @@ typedef struct OS_FlashReq {
     char     device[128];     /* 烧录算法器件名（J-Link Device=）；空则沿用连接时设备 */
 } OS_FlashReq;
 
+/* AI 运行时日志条目（与宿主环形缓冲布局一致，跨 DLL） */
+#define OS_AI_LOG_TEXT 512
+typedef struct OS_AiLogEntry {
+    uint64_t seq;
+    int      level;
+    int64_t  ts_us;
+    char     text[OS_AI_LOG_TEXT];
+} OS_AiLogEntry;
+typedef void (*OS_AiLogListener)(const OS_AiLogEntry* e, void* user);
+
 /* 采集样本：框架在轮询线程中生成，分发给窗口模块与绘图/记录器 */
 typedef struct OS_Sample {
     int64_t  ts_us;   /* Unix 纪元（1970-01-01）微秒 */
@@ -206,6 +216,15 @@ typedef struct OS_Framework {
      * 返回 0 成功，负错误码失败（result_json 仍可含 {"ok":false,"error":"..."}）。 */
     int (*ai_call)(const char* method, const char* params_json,
                    char* result_json, int result_cap);
+
+    /* ---- v5 运行时日志（AI 拉取 / WebSocket 订阅推送）---- */
+    /* 复制 seq>since 的日志；min_level 为 OS_LOG_* 严重度下限（DEBUG<INFO<WARN<ERROR）。 */
+    int (*log_ring_copy)(uint64_t since, int min_level, OS_AiLogEntry* out, int max,
+                         uint64_t* next_since);
+    uint64_t (*log_ring_head_seq)(void);
+    void (*log_ring_clear)(void);
+    int  (*log_add_listener)(OS_AiLogListener fn, void* user);
+    void (*log_remove_listener)(OS_AiLogListener fn, void* user);
 } OS_Framework;
 
 typedef struct OS_WindowType {

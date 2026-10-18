@@ -130,6 +130,11 @@ static void init_fw(void)
     g_app.fw.leaf_sync_done = os_fw_leaf_sync_done;
     g_app.fw.leaf_size = os_fw_leaf_size;
     g_app.fw.ai_call = os_ai_call;
+    g_app.fw.log_ring_copy = os_log_ring_copy;
+    g_app.fw.log_ring_head_seq = os_log_ring_head_seq;
+    g_app.fw.log_ring_clear = os_log_ring_clear;
+    g_app.fw.log_add_listener = os_log_add_listener;
+    g_app.fw.log_remove_listener = os_log_remove_listener;
 }
 
 /* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */

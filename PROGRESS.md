@@ -4,6 +4,7 @@
 
 ## 检查点
 
+- **checkpoint-62（2026-10-18）**：运行时日志接入 AI API（1.25.1）。`os_log` 写入 2048 条环形缓冲；`log.read`（since 游标增量拉取）、`log.clear`；`log.subscribe`/`unsubscribe` 经 WebSocket 推送 `log.event` 通知。框架补充 `log_ring_*` / `log_add_listener` 回调。冒烟：`log.read` 返回启动日志序列。
 - **checkpoint-61（2026-10-18）**：AI/CLI/MCP 自动化总线（1.25.0，需求 27）。Module API 升至 v5，框架新增 `ai_call`；`aiapi.dll` 在 `ws://127.0.0.1:18765` 提供 JSON-RPC（兼 MCP `tools/list`/`tools/call`）。宿主 `ai_bridge.c` 暴露 connect/ELF/变量/内存/采集/烧录/录制等方法；`tools.list` 自动枚举已加载模块，可选 `OS_CMD_AI_DESCRIBE` 扩展。CLI：`scripts/os_cli.py`；MCP stdio：`scripts/openscope_mcp.py`。帮助文档 §3.9。冒烟：启动后 status/modules.list/tools.list 通过（5 模块含 aiapi）。
 - **checkpoint-60（2026-10-18）**：烧录/擦除（1.24.0，需求 26）。工具栏与菜单打开烧录窗口，可选 `.elf/.out/.hex/.bin`，支持整片擦除、校验、复位运行。J-Link 走 `DownloadFile`/`EraseChip`（ExecCommand 兜底），ST-Link 走 CubeProgrammer `downloadFile`/`massErase`。`flash_smoke` 锁住命令号与未连接返回值。
 - **checkpoint-59（2026-10-18）**：录制按键与临时缓存（1.23.2）。工具栏单一「录制/停止录制」开关，可先开录再开始采集；停录询问是否保存并选路径。样本写入 `%LOCALAPPDATA%\OpenScope\cache\recording.csv`；每次重新开始采集先自动清除上次缓存。原「先选路径再记」流程去掉，避免采集中弹框卡死。
