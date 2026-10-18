@@ -85,8 +85,9 @@
 #define IDM_TAB_FULLSCREEN 2506 /* Bug3: 全屏/退出全屏 */
 #define IDM_TAB_MINIMIZE   2507 /* Bug6: 最小化/还原当前窗口（缩进 tab 底部最小化条） */
 
-#define IDM_LOG_COPY    2601 /* Bug13: 复制选中消息到剪贴板 */
-#define IDM_LOG_CLEAR   2602 /* Bug13: 全部清除 */
+#define IDM_LOG_COPY       2601 /* Bug13: 复制选中消息到剪贴板 */
+#define IDM_LOG_CLEAR      2602 /* Bug13: 全部清除 */
+#define IDM_LOG_SELECT_ALL 2603 /* 消息栏 Ctrl+A / 右键：全选全部日志 */
 
 #define IDM_THEME_DARK  2701 /* F20: 深色模式开关（菜单勾选项） */
 
@@ -270,7 +271,18 @@ static void log_clear_all(void)
     os_log(OS_LOG_INFO, "已清除全部消息");
 }
 
-/* Bug13: 消息区域右键菜单：复制选中 / 全部清除 */
+/* 消息栏全选全部日志（Ctrl+A / 右键菜单） */
+static void log_select_all(void)
+{
+    int n;
+    if (!g_app.hLog || !IsWindow(g_app.hLog)) return;
+    n = ListView_GetItemCount(g_app.hLog);
+    if (n <= 0) return;
+    /* ListView_SetItemState(hwnd, -1, ...) 可一次设置全部项 */
+    ListView_SetItemState(g_app.hLog, -1, LVIS_SELECTED, LVIS_SELECTED);
+}
+
+/* Bug13: 消息区域右键菜单：全选 / 复制选中 / 全部清除 */
 static void log_context_menu(void)
 {
     HMENU m = CreatePopupMenu();
@@ -279,6 +291,7 @@ static void log_context_menu(void)
     int n = g_app.hLog ? ListView_GetItemCount(g_app.hLog) : 0;
     for (i = 0; i < n && !has_sel; i++)
         if (ListView_GetItemState(g_app.hLog, i, LVIS_SELECTED) & LVIS_SELECTED) has_sel = 1;
+    AppendMenuW(m, MF_STRING | (n > 0 ? 0 : MF_GRAYED), IDM_LOG_SELECT_ALL, L"全选\tCtrl+A");
     AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_LOG_COPY, L"复制选中");
     AppendMenuW(m, MF_STRING | (n > 0 ? 0 : MF_GRAYED), IDM_LOG_CLEAR, L"全部清除");
     GetCursorPos(&pt);
@@ -3920,10 +3933,17 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             }
         }
         if (h && h->hwndFrom == g_app.hLog) {
-            /* Bug13: 消息区域右键菜单（复制选中 / 全部清除） */
+            /* Bug13: 消息区域右键菜单（全选 / 复制选中 / 全部清除） */
             if (h->code == NM_RCLICK) {
                 log_context_menu();
                 return 0;
+            }
+            if (h->code == LVN_KEYDOWN) {
+                NMLVKEYDOWN* kv = (NMLVKEYDOWN*)lParam;
+                if (kv && kv->wVKey == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                    log_select_all();
+                    return 0;
+                }
             }
         }
         if (h && h->hwndFrom == g_app.hTree) {
@@ -4049,6 +4069,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_TREE_FIND: tree_find_vars(hwnd); break; /* Ctrl+H 快速搜索变量 */
         case IDM_LOG_COPY: log_copy_selected(); break;
         case IDM_LOG_CLEAR: log_clear_all(); break;
+        case IDM_LOG_SELECT_ALL: log_select_all(); break;
         case IDM_TAB_CLOSE:
             if (g_cur_tab >= 0 && g_cur_tab < g_app.win_count)
                 PostMessage(hwnd, WM_OS_WIN_CLOSED,
