@@ -292,7 +292,7 @@ static void log_context_menu(void)
     for (i = 0; i < n && !has_sel; i++)
         if (ListView_GetItemState(g_app.hLog, i, LVIS_SELECTED) & LVIS_SELECTED) has_sel = 1;
     AppendMenuW(m, MF_STRING | (n > 0 ? 0 : MF_GRAYED), IDM_LOG_SELECT_ALL, L"全选\tCtrl+A");
-    AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_LOG_COPY, L"复制选中");
+    AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_LOG_COPY, L"复制选中\tCtrl+C");
     AppendMenuW(m, MF_STRING | (n > 0 ? 0 : MF_GRAYED), IDM_LOG_CLEAR, L"全部清除");
     GetCursorPos(&pt);
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
@@ -3940,9 +3940,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             }
             if (h->code == LVN_KEYDOWN) {
                 NMLVKEYDOWN* kv = (NMLVKEYDOWN*)lParam;
-                if (kv && kv->wVKey == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
-                    log_select_all();
-                    return 0;
+                if (kv && (GetKeyState(VK_CONTROL) & 0x8000)) {
+                    if (kv->wVKey == 'A') { log_select_all(); return 0; }
+                    if (kv->wVKey == 'C') { log_copy_selected(); return 0; }
                 }
             }
         }
