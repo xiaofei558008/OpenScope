@@ -3,8 +3,8 @@
 #ifndef OS_VERSION_H
 #define OS_VERSION_H
 #define OS_VERSION_MAJOR 1
-#define OS_VERSION_MINOR 23
-#define OS_VERSION_PATCH 2
-#define OS_VERSION_STR  "1.23.2"
-#define OS_VERSION_WIDE L"1.23.2"
+#define OS_VERSION_MINOR 24
+#define OS_VERSION_PATCH 0
+#define OS_VERSION_STR  "1.24.0"
+#define OS_VERSION_WIDE L"1.24.0"
 #endif

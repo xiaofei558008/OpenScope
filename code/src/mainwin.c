@@ -13,6 +13,7 @@
 #include "tilecalc.h"
 #include <commctrl.h>
 #include <commdlg.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define IDC_BTN_OPEN     2001
@@ -25,6 +26,7 @@
 #define IDC_BTN_REPLAY   2008
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
+#define IDC_BTN_FLASH    2015 /* 烧录/擦除窗口 */
 /* 需求 14：网络内联控件（UI整合：并入工具栏首行），2110+ 避开菜单/其它控件 id */
 #define IDD_NET_IP       2110
 #define IDD_NET_PORT     2111
@@ -53,7 +55,21 @@
 #define IDM_LAYOUT_LOAD  2022
 #define IDM_WIN_CHART    2012
 #define IDM_WIN_NUM      2013
+#define IDM_FLASH        2030 /* 菜单：烧录/擦除 */
 #define IDM_WIN_MODULE_BASE 2200
+
+/* 烧录对话框控件 */
+#define IDD_FLASH_PATH   2901
+#define IDD_FLASH_BROWSE 2902
+#define IDD_FLASH_ADDR   2903
+#define IDD_FLASH_DEV    2904
+#define IDD_FLASH_ERASE  2905 /* checkbox：下载前擦除 */
+#define IDD_FLASH_VERIFY 2906
+#define IDD_FLASH_RESET  2907
+#define IDD_FLASH_GO     2908 /* 下载烧录 */
+#define IDD_FLASH_CHIP   2909 /* 仅擦除 */
+#define IDD_FLASH_CLOSE  2910
+#define IDD_FLASH_STATUS 2911
 
 #define IDM_TREE_ALL     2301
 #define IDM_TREE_NONE    2302
@@ -147,6 +163,7 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
     { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"录制" },
+    { IDC_BTN_FLASH, L"烧录" },
     { IDC_BTN_REPLAY, L"离线回放" }, { IDC_BTN_REPLAYSTOP, L"停止回放" },
     /* 需求14 UI整合：网络按键并入工具栏首行（监听/上传ELF/下载ELF） */
     { IDD_NET_LISTEN, L"监听" }, { IDD_NET_UPELF, L"上传ELF" },
@@ -324,6 +341,7 @@ void os_mainwin_update_buttons(void)
         ENB(IDC_BTN_START, g_app.watch_count > 0 && !running);
         ENB(IDC_BTN_STOP, 1);
         ENB(IDC_BTN_LOGSTART, !replay);
+        ENB(IDC_BTN_FLASH, 0); /* 网络通道不烧录 */
         ENB(IDC_BTN_REPLAY, !running && !replay);
         ENB(IDC_BTN_REPLAYSTOP, replay);
         ENB(IDC_BTN_OPEN, 1);
@@ -334,6 +352,7 @@ void os_mainwin_update_buttons(void)
     ENB(IDC_BTN_START, conn && g_app.watch_count > 0 && !running && !replay);
     ENB(IDC_BTN_STOP, running);
     ENB(IDC_BTN_LOGSTART, !replay); /* 可先录制再开始采集 */
+    ENB(IDC_BTN_FLASH, hasDriver && conn && !replay);
     ENB(IDC_BTN_REPLAY, !running && !replay);
     ENB(IDC_BTN_REPLAYSTOP, replay);
     ENB(IDC_BTN_OPEN, 1);
@@ -729,6 +748,7 @@ static void layout(void)
         static const struct { int id; int fixed_w; int combo; } items[] = {
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
+            { IDC_BTN_FLASH, 0, 0 },
             { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
             { IDC_CFG_DRIVER, 100, 1 }, { IDC_CFG_DEVICE, 118, 1 }, { IDC_CFG_IFACE, 56, 1 },
             { IDC_CFG_SPEED, 80, 1 }, { IDC_CFG_EMU, 170, 1 }, { IDC_CFG_REFRESH, 48, 0 },
@@ -2389,6 +2409,246 @@ static void net_cfg_dialog(void)
     free(st);
 }
 
+/* ---------- 烧录 / 擦除对话框 ---------- */
+
+/* 烧录算法常用器件名（J-Link Device=）；与连接用的通用核心名分开 */
+static const wchar_t* g_flash_devices[] = {
+    L"STM32F303RC", L"STM32F103C8", L"STM32G431RB", L"STM32L031K6",
+    L"STM32F407VG", L"STM32F411RE", L"STM32H743ZI", L"STM32F103RB",
+    L"Cortex-M4", L"Cortex-M3", L"Cortex-M0+"
+};
+
+static void flash_set_status(HWND dlg, const wchar_t* s)
+{
+    HWND h = GetDlgItem(dlg, IDD_FLASH_STATUS);
+    if (h) SetWindowTextW(h, s ? s : L"");
+}
+
+static int flash_is_bin_path(const wchar_t* path)
+{
+    const wchar_t* ext = path ? wcsrchr(path, L'.') : NULL;
+    return ext && _wcsicmp(ext, L".bin") == 0;
+}
+
+static void flash_sync_addr_enable(HWND dlg)
+{
+    wchar_t path[MAX_PATH];
+    HWND haddr = GetDlgItem(dlg, IDD_FLASH_ADDR);
+    GetWindowTextW(GetDlgItem(dlg, IDD_FLASH_PATH), path, MAX_PATH);
+    EnableWindow(haddr, flash_is_bin_path(path) ? 1 : 0);
+}
+
+static int flash_fill_req(HWND dlg, OS_FlashReq* req)
+{
+    wchar_t wdev[128], waddr[32];
+    memset(req, 0, sizeof(*req));
+    GetWindowTextW(GetDlgItem(dlg, IDD_FLASH_PATH), req->path, MAX_PATH);
+    GetWindowTextW(GetDlgItem(dlg, IDD_FLASH_DEV), wdev, 128);
+    os_wide_to_utf8_buf(wdev, req->device, (int)sizeof(req->device));
+    GetWindowTextW(GetDlgItem(dlg, IDD_FLASH_ADDR), waddr, 32);
+    req->address = (uint32_t)wcstoul(waddr, NULL, 0);
+    if (req->address == 0) req->address = 0x08000000u;
+    req->skip_erase = (SendMessageW(GetDlgItem(dlg, IDD_FLASH_ERASE), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 0 : 1;
+    req->verify = (SendMessageW(GetDlgItem(dlg, IDD_FLASH_VERIFY), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    req->reset_run = (SendMessageW(GetDlgItem(dlg, IDD_FLASH_RESET), BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    return 0;
+}
+
+static LRESULT CALLBACK flash_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc;
+        HDC hdc = (HDC)wParam;
+        GetClientRect(dlg, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        return theme_ctlcolor((HDC)wParam, 0);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return theme_ctlcolor((HDC)wParam, 1);
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDD_FLASH_BROWSE: {
+            OPENFILENAMEW ofn;
+            wchar_t file[MAX_PATH] = L"";
+            memset(&ofn, 0, sizeof(ofn));
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = dlg;
+            ofn.lpstrFilter =
+                L"固件文件\0*.elf;*.out;*.hex;*.bin\0"
+                L"ELF/OUT\0*.elf;*.out\0"
+                L"Intel HEX\0*.hex\0"
+                L"Binary\0*.bin\0"
+                L"所有文件\0*.*\0";
+            ofn.lpstrFile = file;
+            ofn.nMaxFile = MAX_PATH;
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+            if (GetOpenFileNameW(&ofn)) {
+                SetWindowTextW(GetDlgItem(dlg, IDD_FLASH_PATH), file);
+                flash_sync_addr_enable(dlg);
+                flash_set_status(dlg, L"已选择固件文件");
+            }
+            return 0;
+        }
+        case IDD_FLASH_PATH:
+            if (HIWORD(wParam) == EN_CHANGE) flash_sync_addr_enable(dlg);
+            break;
+        case IDD_FLASH_GO: {
+            OS_FlashReq req;
+            int was_running = 0, rc;
+            flash_fill_req(dlg, &req);
+            if (!req.path[0]) {
+                MessageBoxW(dlg, L"请先选择 .elf / .out / .hex / .bin 文件", L"烧录", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            if (!g_app.driver || !g_app.connected) {
+                MessageBoxW(dlg, L"请先连接仿真器", L"烧录", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            if (g_app.acq_state == OS_ACQ_RUNNING) {
+                os_ds_stop();
+                was_running = 1;
+            }
+            flash_set_status(dlg, L"正在下载…");
+            os_log(OS_LOG_INFO, "烧录开始: %ls @0x%08X device=%s",
+                   req.path, req.address, req.device[0] ? req.device : "(连接默认)");
+            rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_FLASH_DOWNLOAD, &req, NULL);
+            if (rc == OS_ERR_OK) {
+                flash_set_status(dlg, L"下载成功");
+                os_log(OS_LOG_INFO, "烧录成功");
+                MessageBoxW(dlg, L"固件下载成功", L"烧录", MB_OK | MB_ICONINFORMATION);
+            } else {
+                wchar_t msg[128];
+                _snwprintf(msg, 128, L"下载失败（rc=%d），请查看消息栏日志", rc);
+                flash_set_status(dlg, msg);
+                os_log(OS_LOG_ERROR, "烧录失败 rc=%d", rc);
+                MessageBoxW(dlg, msg, L"烧录", MB_OK | MB_ICONERROR);
+            }
+            if (was_running) os_ds_start();
+            os_mainwin_update_buttons();
+            return 0;
+        }
+        case IDD_FLASH_CHIP: {
+            OS_FlashReq req;
+            int was_running = 0, rc;
+            flash_fill_req(dlg, &req);
+            if (!g_app.driver || !g_app.connected) {
+                MessageBoxW(dlg, L"请先连接仿真器", L"擦除", MB_OK | MB_ICONWARNING);
+                return 0;
+            }
+            if (MessageBoxW(dlg, L"将整片擦除 Flash，确认继续？", L"擦除",
+                            MB_YESNO | MB_ICONWARNING) != IDYES)
+                return 0;
+            if (g_app.acq_state == OS_ACQ_RUNNING) {
+                os_ds_stop();
+                was_running = 1;
+            }
+            flash_set_status(dlg, L"正在擦除…");
+            os_log(OS_LOG_INFO, "整片擦除开始 device=%s", req.device[0] ? req.device : "(连接默认)");
+            rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_FLASH_ERASE, &req, NULL);
+            if (rc == OS_ERR_OK) {
+                flash_set_status(dlg, L"擦除成功");
+                os_log(OS_LOG_INFO, "整片擦除成功");
+                MessageBoxW(dlg, L"Flash 已擦除", L"擦除", MB_OK | MB_ICONINFORMATION);
+            } else {
+                wchar_t msg[128];
+                _snwprintf(msg, 128, L"擦除失败（rc=%d）", rc);
+                flash_set_status(dlg, msg);
+                os_log(OS_LOG_ERROR, "整片擦除失败 rc=%d", rc);
+                MessageBoxW(dlg, msg, L"擦除", MB_OK | MB_ICONERROR);
+            }
+            if (was_running) os_ds_start();
+            os_mainwin_update_buttons();
+            return 0;
+        }
+        case IDD_FLASH_CLOSE:
+            DestroyWindow(dlg);
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(dlg);
+        return 0;
+    }
+    return DefWindowProcW(dlg, msg, wParam, lParam);
+}
+
+static void cmd_flash_dialog(void)
+{
+    HWND dlg, h;
+    int i;
+    wchar_t cur_dev[128] = L"STM32F303RC";
+    h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
+    if (h) {
+        LRESULT sel = SendMessageW(h, CB_GETCURSEL, 0, 0);
+        if (sel != CB_ERR) SendMessageW(h, CB_GETLBTEXT, (WPARAM)sel, (LPARAM)cur_dev);
+    }
+    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgFlash", L"烧录 / 擦除",
+                          WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                          (GetSystemMetrics(SM_CXSCREEN) - 520) / 2,
+                          (GetSystemMetrics(SM_CYSCREEN) - 300) / 2,
+                          520, 300, g_app.hMain, NULL, g_app.hInst, NULL);
+    if (!dlg) return;
+
+    CreateWindowW(L"STATIC", L"固件文件", WS_CHILD | WS_VISIBLE, 14, 16, 70, 22, dlg, NULL, g_app.hInst, NULL);
+    h = CreateWindowW(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                      90, 14, 320, 22, dlg, (HMENU)IDD_FLASH_PATH, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"浏览…", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                      420, 12, 70, 26, dlg, (HMENU)IDD_FLASH_BROWSE, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+    CreateWindowW(L"STATIC", L"BIN 基址", WS_CHILD | WS_VISIBLE, 14, 50, 70, 22, dlg, NULL, g_app.hInst, NULL);
+    h = CreateWindowW(L"EDIT", L"0x08000000", WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP,
+                      90, 48, 120, 22, dlg, (HMENU)IDD_FLASH_ADDR, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    EnableWindow(h, 0);
+
+    CreateWindowW(L"STATIC", L"器件名", WS_CHILD | WS_VISIBLE, 230, 50, 50, 22, dlg, NULL, g_app.hInst, NULL);
+    h = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWN | WS_TABSTOP | WS_VSCROLL,
+                      290, 46, 200, 200, dlg, (HMENU)IDD_FLASH_DEV, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    for (i = 0; i < (int)(sizeof(g_flash_devices) / sizeof(g_flash_devices[0])); i++)
+        SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)g_flash_devices[i]);
+    SetWindowTextW(h, cur_dev);
+
+    h = CreateWindowW(L"BUTTON", L"下载前整片擦除", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                      14, 88, 140, 22, dlg, (HMENU)IDD_FLASH_ERASE, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, BM_SETCHECK, BST_CHECKED, 0);
+    h = CreateWindowW(L"BUTTON", L"下载后校验", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                      170, 88, 110, 22, dlg, (HMENU)IDD_FLASH_VERIFY, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, BM_SETCHECK, BST_CHECKED, 0);
+    h = CreateWindowW(L"BUTTON", L"完成后复位运行", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_TABSTOP,
+                      300, 88, 140, 22, dlg, (HMENU)IDD_FLASH_RESET, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    SendMessageW(h, BM_SETCHECK, BST_CHECKED, 0);
+
+    CreateWindowW(L"STATIC", L"支持 .elf / .out / .hex / .bin；J-Link 烧录请填写带 Flash 算法的器件名",
+                  WS_CHILD | WS_VISIBLE, 14, 120, 480, 36, dlg, NULL, g_app.hInst, NULL);
+
+    h = CreateWindowW(L"BUTTON", L"下载烧录", WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON | WS_TABSTOP,
+                      14, 170, 100, 28, dlg, (HMENU)IDD_FLASH_GO, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"仅擦除芯片", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                      126, 170, 100, 28, dlg, (HMENU)IDD_FLASH_CHIP, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"关闭", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+                      420, 170, 70, 28, dlg, (HMENU)IDD_FLASH_CLOSE, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+    h = CreateWindowW(L"STATIC", L"就绪", WS_CHILD | WS_VISIBLE,
+                      14, 214, 480, 22, dlg, (HMENU)IDD_FLASH_STATUS, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+
+    run_modal(dlg, g_app.hMain);
+}
+
 /* ---------- 框架回调 ---------- */
 
 int os_fw_pick_variable(HWND parent, char* out, int out_len)
@@ -3328,6 +3588,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mAcq, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_START, L"开始采集\tF7");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_STOP, L"停止采集\tF8");
+        AppendMenuW(mAcq, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(mAcq, MF_STRING, IDM_FLASH, L"烧录 / 擦除...\tF9");
         AppendMenuW(mLog, MF_STRING, IDC_BTN_LOGSTART, L"录制 / 停止录制");
         AppendMenuW(mLog, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mLog, MF_STRING, IDC_BTN_REPLAY, L"离线回放...");
@@ -3710,6 +3972,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         case IDC_BTN_START: cmd_start_acq(); break;
         case IDC_BTN_STOP: cmd_stop_acq(); break;
+        case IDC_BTN_FLASH:
+        case IDM_FLASH: cmd_flash_dialog(); break;
         case IDC_BTN_LOGSTART:
         case IDC_BTN_LOGSTOP: cmd_log_toggle(); break;
         case IDC_BTN_REPLAY: cmd_replay_open(); break;
@@ -3959,5 +4223,11 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSDlgNetCfg";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = flash_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = L"OSDlgFlash";
     RegisterClassW(&wc);
 }

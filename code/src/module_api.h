@@ -60,7 +60,10 @@ enum {
     OS_CMD_NET_WATCH    = 26, /* 发送 WATCH_LIST（我的勾选叶列表）给远端，远端据此采集 */
     OS_CMD_NET_WRITE    = 27, /* in: OS_NetWriteReq*，网络写变量（等待对端 ACK，≤3s） */
     OS_CMD_NET_LOG_PULL = 28, /* 请求远端把采集历史（环形缓冲）分块回传（异步传输） */
-    OS_CMD_NET_WATCH_STOP = 29 /* 发送空监视列表（停止下达）：远端停止采集 */
+    OS_CMD_NET_WATCH_STOP = 29, /* 发送空监视列表（停止下达）：远端停止采集 */
+    /* 烧录 / 擦除（软件内下载固件） */
+    OS_CMD_FLASH_DOWNLOAD = 30, /* in: OS_FlashReq*，下载 .elf/.out/.hex/.bin 到 Flash */
+    OS_CMD_FLASH_ERASE    = 31  /* in: OS_FlashReq*（可用 device），整片擦除 */
 };
 
 /* 仿真口类型 */
@@ -123,6 +126,16 @@ typedef struct OS_NetWriteReq {
     char name[64];
     char value[64];
 } OS_NetWriteReq;
+
+/* OS_CMD_FLASH_DOWNLOAD / OS_CMD_FLASH_ERASE 输入 */
+typedef struct OS_FlashReq {
+    wchar_t path[MAX_PATH];   /* 固件路径（.elf/.out/.hex/.bin）；擦除时可空 */
+    uint32_t address;         /* .bin 下载基址，常见 0x08000000；ELF/HEX 可填 0 */
+    int      skip_erase;      /* 1=下载前不整片擦除（由驱动决定是否扇区擦除） */
+    int      verify;          /* 1=下载后校验 */
+    int      reset_run;       /* 1=下载/擦除后复位并运行 */
+    char     device[128];     /* 烧录算法器件名（J-Link Device=）；空则沿用连接时设备 */
+} OS_FlashReq;
 
 /* 采集样本：框架在轮询线程中生成，分发给窗口模块与绘图/记录器 */
 typedef struct OS_Sample {

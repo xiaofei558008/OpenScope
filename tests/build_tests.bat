@@ -134,6 +134,20 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\flash_smoke.c ^
+    /Fe:tests\bin\flash_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] flash_smoke build failed
+  exit /b 1
+)
+
+echo Running flash smoke...
+tests\bin\flash_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] flash_smoke FAILED
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I module\xcp module\xcp\tests\xcp_smoke.c ^
     module\xcp\xcp_slave.c module\xcp\xcp_master.c module\xcp\xcp_can.c ^
     /Fe:tests\bin\xcp_smoke.exe
@@ -277,6 +291,13 @@ echo Running network smoke (network.dll 模块冒烟)...
 tests\bin\network_smoke.exe
 if errorlevel 1 (
   echo [ERROR] network_smoke FAILED
+  exit /b 1
+)
+
+echo Running flash dialog UI...
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\ui_flash_drive.ps1
+if errorlevel 1 (
+  echo [ERROR] ui_flash_drive FAILED
   exit /b 1
 )
 

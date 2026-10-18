@@ -94,6 +94,11 @@ typedef struct OS_StLinkApi {
     int  (*reset)(int rst_mode);
     int  (*execute)(unsigned int addr);
     OS_StLinkGenInf* (*get_device_general_inf)(void);
+    /* 烧录（CubeProgrammer C API） */
+    int  (*download_file)(const wchar_t* filePath, unsigned int address,
+                          unsigned int skipErase, unsigned int verify,
+                          const wchar_t* binPath);
+    int  (*mass_erase)(char* flashMemName);
 } OS_StLinkApi;
 
 int  os_stlink_bind(OS_StLinkApi* api, char* err, int err_len);

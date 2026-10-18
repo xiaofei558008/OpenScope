@@ -101,6 +101,13 @@ int os_jlink_bind(OS_JLinkApi* api, char* err, int err_len)
 #undef BIND
     /* 可选导出 */
     api->get_fw_string = (void (*)(char*, int))GetProcAddress(h, "JLINKARM_GetFirmwareString");
+    /* 烧录：本机 JLink_x64.dll 导出名为 JLINK_*（无 ARM 前缀） */
+    api->download_file = (int (*)(const char*, uint32_t))GetProcAddress(h, "JLINK_DownloadFile");
+    if (!api->download_file)
+        api->download_file = (int (*)(const char*, uint32_t))GetProcAddress(h, "JLINKARM_DownloadFile");
+    api->erase_chip = (int (*)(void))GetProcAddress(h, "JLINK_EraseChip");
+    if (!api->erase_chip)
+        api->erase_chip = (int (*)(void))GetProcAddress(h, "JLINKARM_EraseChip");
     return OS_ERR_OK;
 }
 
@@ -440,6 +447,100 @@ static int mod_write(OS_MemReq* req)
     return (r == 0 || r == (int)req->size) ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
 
+/* 宽路径 → 本地 ANSI（J-Link DownloadFile 吃 LPCSTR） */
+static int wide_to_acp(const wchar_t* w, char* out, int cap)
+{
+    int n;
+    if (!w || !out || cap <= 0) return -1;
+    n = WideCharToMultiByte(CP_ACP, 0, w, -1, out, cap, NULL, NULL);
+    return n > 0 ? 0 : -1;
+}
+
+static int jlink_set_flash_device(const char* device)
+{
+    char cmd[192], res[256];
+    int rc;
+    if (!device || !device[0]) return OS_ERR_OK;
+    _snprintf(cmd, sizeof(cmd), "Device = %s", device);
+    memset(res, 0, sizeof(res));
+    rc = g_ctx.api.exec_cmd(cmd, res, sizeof(res));
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 烧录: '%s' rc=%d %s", cmd, rc, res[0] ? res : "");
+    return rc == 0 ? OS_ERR_OK : OS_ERR_FAIL;
+}
+
+static int mod_flash_erase(const OS_FlashReq* req)
+{
+    OS_JLinkApi* a = &g_ctx.api;
+    int rc;
+    if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    EnterCriticalSection(&g_ctx.cs);
+    if (req && req->device[0]) jlink_set_flash_device(req->device);
+    if (a->halt) a->halt();
+    if (a->erase_chip) {
+        rc = a->erase_chip();
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link EraseChip rc=%d", rc);
+        if (rc < 0) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
+    } else {
+        char res[256];
+        memset(res, 0, sizeof(res));
+        rc = a->exec_cmd("erase", res, sizeof(res));
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link ExecCommand erase rc=%d %s", rc, res);
+        if (rc != 0) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
+    }
+    if (req && req->reset_run) {
+        if (a->reset) a->reset();
+        if (a->go) a->go();
+    }
+    LeaveCriticalSection(&g_ctx.cs);
+    return OS_ERR_OK;
+}
+
+static int mod_flash_download(const OS_FlashReq* req)
+{
+    OS_JLinkApi* a = &g_ctx.api;
+    char path8[MAX_PATH * 2];
+    uint32_t addr;
+    int rc;
+    if (!req || !req->path[0]) return OS_ERR_INVALID_ARG;
+    if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    if (wide_to_acp(req->path, path8, (int)sizeof(path8)) != 0)
+        return OS_ERR_FAIL;
+    addr = req->address ? req->address : 0x08000000u;
+    EnterCriticalSection(&g_ctx.cs);
+    if (req->device[0]) jlink_set_flash_device(req->device);
+    if (a->halt) a->halt();
+    if (!req->skip_erase) {
+        if (a->erase_chip) {
+            rc = a->erase_chip();
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 烧录前擦除 rc=%d", rc);
+            if (rc < 0) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
+        }
+    }
+    if (a->download_file) {
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link DownloadFile '%s' @0x%08X", path8, addr);
+        rc = a->download_file(path8, addr);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link DownloadFile rc=%d", rc);
+        if (rc < 0) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
+    } else {
+        char cmd[MAX_PATH * 2 + 64], res[256];
+        const wchar_t* ext = wcsrchr(req->path, L'.');
+        int is_bin = ext && (_wcsicmp(ext, L".bin") == 0);
+        if (is_bin) _snprintf(cmd, sizeof(cmd), "loadbin %s 0x%X", path8, addr);
+        else _snprintf(cmd, sizeof(cmd), "loadfile %s", path8);
+        memset(res, 0, sizeof(res));
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link ExecCommand %s", cmd);
+        rc = a->exec_cmd(cmd, res, sizeof(res));
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link load rc=%d %s", rc, res[0] ? res : "");
+        if (rc != 0) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
+    }
+    if (req->reset_run) {
+        if (a->reset) a->reset();
+        if (a->go) a->go();
+    }
+    LeaveCriticalSection(&g_ctx.cs);
+    return OS_ERR_OK;
+}
+
 static int mod_command(void* ctx, int cmd, void* in, void* out)
 {
     (void)ctx;
@@ -473,6 +574,10 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_RESET:
         if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.reset();
         return OS_ERR_NOT_CONNECTED;
+    case OS_CMD_FLASH_DOWNLOAD:
+        return mod_flash_download((const OS_FlashReq*)in);
+    case OS_CMD_FLASH_ERASE:
+        return mod_flash_erase((const OS_FlashReq*)in);
     case OS_CMD_ELF_RELOADED:
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 模块: ELF 已重载");
         return OS_ERR_OK;
@@ -513,7 +618,7 @@ static const OS_Module g_module = {
     OS_CAP_DRIVER,
     "jlink",
     "1.17.3",
-    "J-Link 驱动模块：扫描/连接/读写 MCU 内存",
+    "J-Link 驱动模块：扫描/连接/读写/烧录 MCU",
     NULL,
     mod_init,
     mod_deinit,

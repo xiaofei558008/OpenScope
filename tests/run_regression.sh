@@ -37,6 +37,7 @@ NON_JLINK=(
   ui_num_minmax_drive.ps1
   ui_replay_all_drive.ps1
   ui_elf_autoload_drive.ps1
+  ui_flash_drive.ps1
 )
 JLINK=(
   ui_record_dialog_drive.ps1

@@ -39,6 +39,9 @@ typedef struct OS_JLinkApi {
     int  (*emu_get_list)(int host, void* infos, int count);
     int  (*emu_select_by_index)(int idx);
     int  (*emu_select_by_usbsn)(uint32_t sn);
+    /* 烧录（可选导出：JLINK_DownloadFile / JLINK_EraseChip） */
+    int  (*download_file)(const char* path, uint32_t addr);
+    int  (*erase_chip)(void);
 } OS_JLinkApi;
 
 /* 枚举信息结构（对齐 SEGGER JLINKARM_EMU_CONNECT_INFO） */

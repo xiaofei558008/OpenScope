@@ -89,9 +89,9 @@ try {
     $hasAbout = ($btnIds -contains 2010)
     Check (-not $hasAbout) "无“关于”按钮（工具栏已删除 About）"
 
-    # Bug8：工具栏已无“钉住变量栏”按钮（IDC_BTN_PIN=2015 已删除，自动隐藏唯一入口=左侧树钉图标）
-    $hasPinBtn = ($btnIds -contains 2015)
-    Check (-not $hasPinBtn) "Bug8 工具栏已无“钉住变量栏”按钮（自动隐藏归位到左侧树）"
+    # Bug8：钉住归位到左侧树；2015 现为「烧录」按钮
+    $hasFlashBtn = ($btnIds -contains 2015)
+    Check $hasFlashBtn "工具栏含烧录按钮（IDC_BTN_FLASH=2015）"
 
     # 建波形窗口
     [OsFeUi]::SendMessage($main, 0x111, [IntPtr]2012, [IntPtr]0) | Out-Null

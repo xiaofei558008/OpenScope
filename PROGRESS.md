@@ -4,6 +4,7 @@
 
 ## 检查点
 
+- **checkpoint-60（2026-10-18）**：烧录/擦除（1.24.0，需求 26）。工具栏与菜单打开烧录窗口，可选 `.elf/.out/.hex/.bin`，支持整片擦除、校验、复位运行。J-Link 走 `DownloadFile`/`EraseChip`（ExecCommand 兜底），ST-Link 走 CubeProgrammer `downloadFile`/`massErase`。`flash_smoke` 锁住命令号与未连接返回值。
 - **checkpoint-59（2026-10-18）**：录制按键与临时缓存（1.23.2）。工具栏单一「录制/停止录制」开关，可先开录再开始采集；停录询问是否保存并选路径。样本写入 `%LOCALAPPDATA%\OpenScope\cache\recording.csv`；每次重新开始采集先自动清除上次缓存。原「先选路径再记」流程去掉，避免采集中弹框卡死。
 - **checkpoint-58（2026-10-17）**：XCP 与网络拆开（1.23.1）。网络模块仍只在两台 OpenScope 之间传采集数据。XCP 驱动不再占用工具栏 IP/端口，也不再走 TCP。协议层保留，传输口改成 CAN 后端（`xcp_can`），周立功和 Kvaser 尚未接入，扫描为空。
 - **checkpoint-57（2026-10-17）**：XCP 协议插件（1.23.0，需求 25）。`module/xcp` 实现 ASAM MCD-1 XCP 1.3 主机与从机（CONNECT/状态/标定页/种子密钥/SHORT_UPLOAD/块下载/ADD_14 校验和/动态 DAQ），以太网帧为长度+计数器+载荷；`xcp.dll` 作为驱动加载，连接时用工具栏 IP/端口。`xcp_smoke` 覆盖协议与环回 TCP，全量构建及网络/bug9 回归通过。

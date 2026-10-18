@@ -145,6 +145,10 @@ int os_stlink_bind(OS_StLinkApi* api, char* err, int err_len)
     BIND(execute, "execute");
     BIND(get_device_general_inf, "getDeviceGeneralInf");
 #undef BIND
+    /* 烧录：可选（旧版 CubeProgrammer 可能无导出） */
+    api->download_file = (int (*)(const wchar_t*, unsigned int, unsigned int, unsigned int, const wchar_t*))
+        GetProcAddress(h, "downloadFile");
+    api->mass_erase = (int (*)(char*))GetProcAddress(h, "massErase");
     /* readMemory 的缓冲由 CubeProgrammer_API.dll 用 msvcrt.dll 分配（dumpbin /imports 实测），
      * 跨 CRT（本模块 v145/ucrt）free 会崩溃；绑定 msvcrt 的 free 用于正确释放。 */
     {
@@ -456,6 +460,48 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_RESET:
         if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
         return OS_ERR_NOT_CONNECTED;
+    case OS_CMD_FLASH_ERASE: {
+        const OS_FlashReq* req = (const OS_FlashReq*)in;
+        int rc;
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.mass_erase) {
+            if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 不支持 massErase");
+            return OS_ERR_FAIL;
+        }
+        EnterCriticalSection(&g_ctx.cs);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase…");
+        rc = g_ctx.api.mass_erase(NULL);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
+        if (rc == 0 && req && req->reset_run && g_ctx.api.reset)
+            g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
+        LeaveCriticalSection(&g_ctx.cs);
+        return rc == 0 ? OS_ERR_OK : OS_ERR_FAIL;
+    }
+    case OS_CMD_FLASH_DOWNLOAD: {
+        const OS_FlashReq* req = (const OS_FlashReq*)in;
+        uint32_t addr;
+        int rc;
+        if (!req || !req->path[0]) return OS_ERR_INVALID_ARG;
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.download_file) {
+            if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 不支持 downloadFile");
+            return OS_ERR_FAIL;
+        }
+        addr = req->address ? req->address : 0x08000000u;
+        EnterCriticalSection(&g_ctx.cs);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile '%ls' @0x%08X skipErase=%d verify=%d",
+                            req->path, addr, req->skip_erase, req->verify);
+        rc = g_ctx.api.download_file(req->path, addr,
+                                     (unsigned)(req->skip_erase ? 1 : 0),
+                                     (unsigned)(req->verify ? 1 : 0), NULL);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile rc=%d", rc);
+        if (rc == 0 && req->reset_run) {
+            if (g_ctx.api.reset) g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
+            if (g_ctx.api.execute) g_ctx.api.execute(addr);
+        }
+        LeaveCriticalSection(&g_ctx.cs);
+        return rc == 0 ? OS_ERR_OK : OS_ERR_FAIL;
+    }
     case OS_CMD_ELF_RELOADED:
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 模块: ELF 已重载");
         return OS_ERR_OK;
@@ -498,7 +544,7 @@ static const OS_Module g_module = {
     OS_CAP_DRIVER,
     "stlink",
     "1.0.0",
-    "ST-Link 驱动模块：扫描/连接/读写 MCU 内存（CubeProgrammer_API）",
+    "ST-Link 驱动模块：扫描/连接/读写/烧录 MCU（CubeProgrammer_API）",
     NULL,
     mod_init,
     mod_deinit,
