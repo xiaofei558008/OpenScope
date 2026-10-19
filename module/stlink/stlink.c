@@ -31,12 +31,15 @@ typedef struct StLinkCtx {
     char loaders_dir[MAX_PATH]; /* setLoadersPath 目标（含 FlashLoader/ExternalLoader） */
     OS_StLinkDcp probes[OS_STLINK_MAX_PROBES]; /* 最近一次扫描的探针副本（含 freq 档位） */
     int probe_count;
+    int voltage_mv;                   /* 连接时/刷新读到的目标电压 mV；未知 -1 */
     ULONGLONG last_reconnect_ms;      /* 自动重连节流时间戳 */
     ULONGLONG last_reconnect_log_ms;  /* 重连成功日志节流（对齐 jlink，5s） */
 } StLinkCtx;
 
 static StLinkCtx g_ctx;
 static const OS_Framework* g_fw;
+/* 仅在 massErase/downloadFile 期间转发 loadBar；connectStLink 也会打进度，会误显示 100% */
+static volatile LONG g_accept_flash_progress;
 static HMODULE g_hmod;
 static void (*g_stlink_free)(void*); /* msvcrt.dll 的 free（CubeProgrammer_API.dll 用 msvcrt 分配 readMemory 缓冲） */
 
@@ -46,6 +49,8 @@ static void (*g_stlink_free)(void*); /* msvcrt.dll 的 free（CubeProgrammer_API
 static int mod_scan(OS_ScanReq* req);
 static int mod_connect_ex(char* err, int errlen);
 static int mod_disconnect(void);
+static int mod_read(OS_MemReq* req);
+static int mod_write(OS_MemReq* req);
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
@@ -160,6 +165,14 @@ int os_stlink_bind(OS_StLinkApi* api, char* err, int err_len)
     api->download_file = (int (*)(const wchar_t*, unsigned int, unsigned int, unsigned int, const wchar_t*))
         GetProcAddress(h, "downloadFile");
     api->mass_erase = (int (*)(char*))GetProcAddress(h, "massErase");
+    /* CPU 控制 / 读寄存器（可选） */
+    api->halt_cpu = (int (*)(void))GetProcAddress(h, "Halt");
+    api->run_cpu = (int (*)(void))GetProcAddress(h, "Run");
+    api->step_cpu = (int (*)(void))GetProcAddress(h, "Step");
+    api->core_reset = (int (*)(void))GetProcAddress(h, "CoreReset");
+    api->system_reset = (int (*)(void))GetProcAddress(h, "SystemReset");
+    api->read_cortex_reg = (int (*)(unsigned int, unsigned int*))GetProcAddress(h, "readCortexReg");
+    api->get_core_state = (int (*)(void))GetProcAddress(h, "getCoreState");
     /* readMemory 的缓冲由 CubeProgrammer_API.dll 用 msvcrt.dll 分配（dumpbin /imports 实测），
      * 跨 CRT（本模块 v145/ucrt）free 会崩溃；绑定 msvcrt 的 free 用于正确释放。 */
     {
@@ -200,9 +213,32 @@ static void stlink_log_cb(int msgType, const wchar_t* str)
 }
 
 /* 进度条回调：官方示例把三者都设为真实函数，connectStLink 会调用进度条，
- * 空指针会导致崩溃——用空实现占位。 */
-static void stlink_init_progress_cb(void) {}
-static void stlink_load_bar_cb(int x, int n) { (void)x; (void)n; }
+ * 空指针会导致崩溃。loadBar 参数不统一：常见 (cur,total) 或 (percent,100)；
+ * n<=0 时勿切 marquee（会与百分比交替导致进度条狂闪）。 */
+static void stlink_init_progress_cb(void)
+{
+    /* 故意空：CubeProgrammer 会多次 init，若每次打回 0% 会造成数字乱跳 */
+}
+static void stlink_load_bar_cb(int x, int n)
+{
+    int pct;
+    if (!g_fw || !g_fw->flash_progress) return;
+    if (!InterlockedCompareExchange(&g_accept_flash_progress, 0, 0)) return;
+    if (n <= 0) {
+        if (x >= 0 && x <= 100)
+            g_fw->flash_progress(x, "烧录");
+        return;
+    }
+    /* (percent, 100) 与 (cur, total) 两种用法兼容 */
+    if (n == 100 && x >= 0 && x <= 100)
+        pct = x;
+    else
+        pct = (int)((long long)x * 100 / n);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    /* phase 名保持稳定，勿把百分比写进 phase（否则宿主峰值逻辑每步重置） */
+    g_fw->flash_progress(pct, "烧录");
+}
 
 static void stlink_install_callbacks(void)
 {
@@ -316,16 +352,225 @@ static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
         if (err) _snprintf(err, errlen, "connectStLink 失败 (rc=%d)", rc);
         if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 连接: connectStLink 失败 rc=%d", rc);
         g_ctx.connected = 0;
+        g_ctx.voltage_mv = -1;
         return OS_ERR_NO_DEVICE;
     }
     g_ctx.connected = 1;
+    /* CubeProgrammer DCP.targetVoltage 为短字符串，如 "3.30"（单位 V） */
+    g_ctx.voltage_mv = -1;
+    if (dcp.targetVoltage[0]) {
+        double v = atof(dcp.targetVoltage);
+        if (v > 0.1 && v < 20.0) g_ctx.voltage_mv = (int)(v * 1000.0 + 0.5);
+    }
+    if (g_fw && g_ctx.voltage_mv > 0)
+        g_fw->log(OS_LOG_INFO, "ST-Link 目标电压: %d mV", g_ctx.voltage_mv);
     return OS_ERR_OK;
 }
 
 static int mod_connect_ex(char* err, int errlen)
 {
-    /* 采集默认：HOTPLUG 非侵入 */
+    /* Attach / 默认采集：HOTPLUG 非侵入；Under Reset 仅在显式指定时 */
+    if (g_ctx.cfg.connect_under_reset && !g_ctx.cfg.attach) {
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 连接: Under Reset");
+        return mod_connect_mode(OS_STLINK_MODE_UNDER_RESET, OS_STLINK_RST_HARDWARE, 0, err, errlen);
+    }
+    if (g_ctx.cfg.attach && g_fw)
+        g_fw->log(OS_LOG_INFO, "ST-Link Attach: HOTPLUG 非侵入接入");
     return mod_connect_mode(OS_STLINK_MODE_HOTPLUG, OS_STLINK_RST_SOFTWARE, 0, err, errlen);
+}
+
+/* DHCSR 单步兜底：写 0xE000EDF0 = DBGKEY|C_DEBUGEN|C_HALT|C_STEP */
+static int stlink_step_dhcsr(void)
+{
+    OS_MemReq wr;
+    uint8_t data[4];
+    uint32_t v = 0xA05F0005u;
+    if (g_ctx.api.halt_cpu) g_ctx.api.halt_cpu();
+    data[0] = (uint8_t)(v);
+    data[1] = (uint8_t)(v >> 8);
+    data[2] = (uint8_t)(v >> 16);
+    data[3] = (uint8_t)(v >> 24);
+    memset(&wr, 0, sizeof(wr));
+    wr.address = 0xE000EDF0u;
+    wr.size = 4;
+    wr.data = data;
+    return mod_write(&wr);
+}
+
+static int stlink_write_u32(uint32_t addr, uint32_t v)
+{
+    OS_MemReq wr;
+    uint8_t data[4];
+    data[0] = (uint8_t)(v);
+    data[1] = (uint8_t)(v >> 8);
+    data[2] = (uint8_t)(v >> 16);
+    data[3] = (uint8_t)(v >> 24);
+    memset(&wr, 0, sizeof(wr));
+    wr.address = addr;
+    wr.size = 4;
+    wr.data = data;
+    return mod_write(&wr);
+}
+
+/* ---- Flash Patch Breakpoint（Cortex-M3/M4 rev1，最多 6 个代码比较器）---- */
+#define STLINK_FPB_CTRL  0xE0002000u
+#define STLINK_FPB_COMP0 0xE0002008u
+#define STLINK_FPB_MAX   6
+
+static struct {
+    uint32_t addr; /* 0=空闲；存对齐后地址（含 halfword 信息在 bit1） */
+    int      temp; /* 1=StepOut 临时，不进 BP_LIST */
+} g_fpb[STLINK_FPB_MAX];
+
+static uint32_t stlink_fpb_comp_word(uint32_t addr)
+{
+    /* rev1: address[28:2] | REPLACE | ENABLE；REPLACE 选上/下半字 */
+    uint32_t comp = (addr & 0x1FFFFFFCu) | 1u;
+    if (addr & 2u) comp |= (2u << 30); /* 上半字 */
+    else           comp |= (1u << 30); /* 下半字 */
+    return comp;
+}
+
+static int stlink_fpb_slot_write(int slot, uint32_t addr_or_zero)
+{
+    uint32_t comp = addr_or_zero ? stlink_fpb_comp_word(addr_or_zero) : 0;
+    if (slot < 0 || slot >= STLINK_FPB_MAX) return -1;
+    if (stlink_write_u32(STLINK_FPB_CTRL, 3u) < 0) return -1; /* KEY|ENABLE */
+    return stlink_write_u32(STLINK_FPB_COMP0 + (uint32_t)slot * 4u, comp);
+}
+
+static int stlink_fpb_find(uint32_t addr)
+{
+    int i;
+    addr &= ~1u;
+    for (i = 0; i < STLINK_FPB_MAX; i++)
+        if (g_fpb[i].addr && (g_fpb[i].addr & ~1u) == addr) return i;
+    return -1;
+}
+
+static int stlink_fpb_alloc(uint32_t addr, int temp)
+{
+    int i, slot = -1;
+    addr &= ~1u;
+    i = stlink_fpb_find(addr);
+    if (i >= 0) {
+        /* 已有用户永久断点时，临时 StepOut 不得改写 temp，否则随后 free 会删掉用户 BP */
+        if (!temp)
+            g_fpb[i].temp = 0;
+        return i;
+    }
+    for (i = 0; i < STLINK_FPB_MAX; i++)
+        if (!g_fpb[i].addr) { slot = i; break; }
+    if (slot < 0) return -1;
+    if (stlink_fpb_slot_write(slot, addr) < 0) return -1;
+    g_fpb[slot].addr = addr;
+    g_fpb[slot].temp = temp;
+    return slot;
+}
+
+static int stlink_fpb_free_slot(int slot)
+{
+    int i, any = 0;
+    if (slot < 0 || slot >= STLINK_FPB_MAX) return -1;
+    stlink_fpb_slot_write(slot, 0);
+    g_fpb[slot].addr = 0;
+    g_fpb[slot].temp = 0;
+    for (i = 0; i < STLINK_FPB_MAX; i++)
+        if (g_fpb[i].addr) any = 1;
+    if (!any) stlink_write_u32(STLINK_FPB_CTRL, 2u); /* KEY, disable unit */
+    return 0;
+}
+
+static int stlink_bp_set(const OS_BpReq* req)
+{
+    uint32_t addr;
+    int slot;
+    if (!req) return OS_ERR_INVALID_ARG;
+    addr = req->address & ~1u;
+    if (!addr) return OS_ERR_INVALID_ARG;
+    slot = stlink_fpb_alloc(addr, 0);
+    if (slot < 0) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 断点：FPB 槽已满（最多 %d）", STLINK_FPB_MAX);
+        return OS_ERR_FAIL;
+    }
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 断点: 设置 0x%08X slot=%d", addr, slot);
+    return OS_ERR_OK;
+}
+
+static int stlink_bp_clear(const OS_BpReq* req)
+{
+    int i;
+    if (!req) return OS_ERR_INVALID_ARG;
+    if (req->clear_all) {
+        for (i = 0; i < STLINK_FPB_MAX; i++)
+            if (g_fpb[i].addr) stlink_fpb_free_slot(i);
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 断点: 已全部清除");
+        return OS_ERR_OK;
+    }
+    i = stlink_fpb_find(req->address);
+    if (i < 0) return OS_ERR_FAIL;
+    stlink_fpb_free_slot(i);
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 断点: 清除 0x%08X", req->address & ~1u);
+    return OS_ERR_OK;
+}
+
+static int stlink_bp_list(OS_BpList* list)
+{
+    int i;
+    if (!list || !list->items || list->capacity <= 0) return OS_ERR_INVALID_ARG;
+    list->count = 0;
+    for (i = 0; i < STLINK_FPB_MAX && list->count < list->capacity; i++) {
+        if (!g_fpb[i].addr || g_fpb[i].temp) continue;
+        list->items[list->count].address = g_fpb[i].addr;
+        list->items[list->count].id = i;
+        list->items[list->count].enabled = 1;
+        list->count++;
+    }
+    return OS_ERR_OK;
+}
+
+static int stlink_step_out(void)
+{
+    unsigned int lr = 0;
+    int i, slot, keep_user = 0, pre;
+    uint32_t dhcsr;
+    OS_MemReq rd;
+    uint8_t buf[4];
+    if (!g_ctx.api.read_cortex_reg) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link StepOut: 无 readCortexReg");
+        return OS_ERR_FAIL;
+    }
+    if (g_ctx.api.read_cortex_reg(14, &lr) != 0) return OS_ERR_FAIL;
+    lr &= ~1u;
+    pre = stlink_fpb_find(lr);
+    keep_user = (pre >= 0 && !g_fpb[pre].temp);
+    slot = stlink_fpb_alloc(lr, 1);
+    if (slot < 0) {
+        if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link StepOut: 无空闲 FPB 槽");
+        return OS_ERR_FAIL;
+    }
+    if (g_ctx.api.run_cpu) g_ctx.api.run_cpu();
+    memset(&rd, 0, sizeof(rd));
+    rd.address = 0xE000EDF0u;
+    rd.size = 4;
+    rd.data = buf;
+    for (i = 0; i < 200; i++) {
+        Sleep(10);
+        if (mod_read(&rd) >= 0) {
+            dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
+                    ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+            if (dhcsr & (1u << 17)) break; /* S_HALT */
+        }
+    }
+    /* 用户已在 LR 处设断点：只借用，不释放 */
+    if (!keep_user)
+        stlink_fpb_free_slot(slot);
+    else
+        g_fpb[slot].temp = 0;
+    if (g_ctx.api.halt_cpu) g_ctx.api.halt_cpu();
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link StepOut: LR=0x%08X%s",
+                        lr, keep_user ? " (保留用户断点)" : "");
+    return OS_ERR_OK;
 }
 
 /* 烧录前切 Under Reset（硬件复位）；失败则尝试 NORMAL */
@@ -406,13 +651,18 @@ static int mod_scan(OS_ScanReq* req)
 
 static int mod_disconnect(void)
 {
+    int i;
     if (g_ctx.api.h && g_ctx.connected) {
+        for (i = 0; i < STLINK_FPB_MAX; i++)
+            if (g_fpb[i].addr) stlink_fpb_free_slot(i);
         if (TryEnterCriticalSection(&g_ctx.cs)) {
             if (g_ctx.api.h && g_ctx.connected) g_ctx.api.disconnect();
             LeaveCriticalSection(&g_ctx.cs);
         }
     }
+    memset(g_fpb, 0, sizeof(g_fpb));
     g_ctx.connected = 0;
+    g_ctx.voltage_mv = -1;
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 已断开");
     return OS_ERR_OK;
@@ -515,13 +765,127 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_GET_FREQ:
         return mod_get_freq((OS_FreqList*)out);
     case OS_CMD_HALT:
-        return OS_ERR_FAIL; /* CubeProgrammer C API 无直接 halt */
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (g_ctx.api.halt_cpu) {
+            int rc = g_ctx.api.halt_cpu();
+            return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+        }
+        return OS_ERR_FAIL;
     case OS_CMD_GO:
-        if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.execute(0x08000000);
-        return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (g_ctx.api.run_cpu) {
+            int rc = g_ctx.api.run_cpu();
+            return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+        }
+        /* 兜底：从 Flash 基址 execute */
+        if (g_ctx.api.execute) return g_ctx.api.execute(0x08000000);
+        return OS_ERR_FAIL;
     case OS_CMD_RESET:
-        if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
-        return OS_ERR_NOT_CONNECTED;
+        /* Reset & Halt：核复位并停住 */
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (g_ctx.api.core_reset) {
+            int rc = g_ctx.api.core_reset();
+            return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+        }
+        {
+            int rc = g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
+            if (rc == 0 && g_ctx.api.halt_cpu) g_ctx.api.halt_cpu();
+            return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+        }
+    case OS_CMD_RESET_RUN:
+        /* 复位后运行 */
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (g_ctx.api.system_reset) {
+            int rc = g_ctx.api.system_reset();
+            if (rc != 0) return OS_ERR_FAIL;
+            if (g_ctx.api.run_cpu) g_ctx.api.run_cpu();
+            return OS_ERR_OK;
+        }
+        {
+            int rc = g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
+            if (rc != 0) return OS_ERR_FAIL;
+            if (g_ctx.api.run_cpu) g_ctx.api.run_cpu();
+            else if (g_ctx.api.execute) g_ctx.api.execute(0x08000000);
+            return OS_ERR_OK;
+        }
+    case OS_CMD_STEP:
+    case OS_CMD_STEP_IN:
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (g_ctx.api.step_cpu) {
+            int rc = g_ctx.api.step_cpu();
+            return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+        }
+        return (stlink_step_dhcsr() >= 0) ? OS_ERR_OK : OS_ERR_FAIL;
+    case OS_CMD_STEP_OVER:
+        /* 迭代1：等同 Step */
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (g_ctx.api.step_cpu) {
+            int rc = g_ctx.api.step_cpu();
+            return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+        }
+        return (stlink_step_dhcsr() >= 0) ? OS_ERR_OK : OS_ERR_FAIL;
+    case OS_CMD_STEP_OUT:
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        return stlink_step_out();
+    case OS_CMD_BP_SET:
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        return stlink_bp_set((const OS_BpReq*)in);
+    case OS_CMD_BP_CLEAR:
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        return stlink_bp_clear((const OS_BpReq*)in);
+    case OS_CMD_BP_LIST:
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        return stlink_bp_list((OS_BpList*)out);
+    case OS_CMD_GET_CPU_STATE: {
+        OS_CpuState* st = (OS_CpuState*)out;
+        uint32_t dhcsr = 0;
+        OS_MemReq mreq;
+        uint8_t buf[4];
+        int rc;
+        if (!st) return OS_ERR_INVALID_ARG;
+        memset(st, 0, sizeof(*st));
+        st->halted = -1;
+        st->powered = -1;
+        st->under_reset = -1;
+        st->voltage_mv = -1;
+        _snprintf(st->state, sizeof(st->state), "—");
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        st->voltage_mv = g_ctx.voltage_mv;
+        /* DHCSR @ 0xE000EDF0：S_HALT=bit17，S_RESET_ST=bit25；能读通则视为有电 */
+        memset(&mreq, 0, sizeof(mreq));
+        mreq.address = 0xE000EDF0u;
+        mreq.size = 4;
+        mreq.data = buf;
+        rc = mod_read(&mreq);
+        if (rc >= 0) {
+            dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
+                    ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+            st->powered = 1;
+            st->halted = (dhcsr & (1u << 17)) ? 1 : 0;
+            st->under_reset = (dhcsr & (1u << 25)) ? 1 : 0;
+            if (dhcsr & (1u << 19)) st->halted = 1; /* LOCKUP → 当 STOP */
+        }
+        /* 仅在已停住时读 PC（readCortexReg 可能强制 halt） */
+        if (st->halted == 1 && g_ctx.api.read_cortex_reg) {
+            unsigned int pc = 0;
+            if (g_ctx.api.read_cortex_reg(15, &pc) == 0) {
+                st->pc = pc;
+                st->pc_valid = 1;
+            }
+        }
+        if (st->under_reset == 1)
+            _snprintf(st->state, sizeof(st->state), "RESET");
+        else if (st->halted == 1)
+            _snprintf(st->state, sizeof(st->state), "STOP");
+        else if (st->halted == 0)
+            _snprintf(st->state, sizeof(st->state), "RUNNING");
+        else if (st->powered == 1)
+            _snprintf(st->state, sizeof(st->state), "POWERON");
+        else
+            _snprintf(st->state, sizeof(st->state), "—");
+        (void)g_ctx.api.get_core_state; /* 保留绑定，DHCSR 路径已够用 */
+        return OS_ERR_OK;
+    }
     case OS_CMD_FLASH_ERASE: {
         const OS_FlashReq* req = (const OS_FlashReq*)in;
         int rc, ok;
@@ -536,10 +900,14 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
             LeaveCriticalSection(&g_ctx.cs);
             return rc;
         }
+        if (g_fw && g_fw->flash_progress) g_fw->flash_progress(0, "整片擦除…");
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase…");
+        InterlockedExchange(&g_accept_flash_progress, 1);
         rc = g_ctx.api.mass_erase(NULL);
+        InterlockedExchange(&g_accept_flash_progress, 0);
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
         ok = (rc == 0);
+        if (ok && g_fw && g_fw->flash_progress) g_fw->flash_progress(100, "擦除完成");
         if (ok && req && req->reset_run && g_ctx.api.reset)
             g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
         stlink_leave_flash_mode();
@@ -568,8 +936,11 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
          * HOTPLUG 下 downloadFile 自带扇区擦除常报 failed to erase memory；
          * Under Reset + 整片擦除更稳（与 CubeProgrammer GUI 流程一致）。 */
         if (!skip && g_ctx.api.mass_erase) {
+            if (g_fw && g_fw->flash_progress) g_fw->flash_progress(0, "烧录前擦除…");
             if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录前 massErase…");
+            InterlockedExchange(&g_accept_flash_progress, 1);
             rc = g_ctx.api.mass_erase(NULL);
+            InterlockedExchange(&g_accept_flash_progress, 0);
             if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
             if (rc != 0) {
                 stlink_leave_flash_mode();
@@ -578,20 +949,25 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
             }
             skip = 1;
         }
+        if (g_fw && g_fw->flash_progress) g_fw->flash_progress(0, "下载固件…");
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile '%ls' @0x%08X skipErase=%d verify=%d",
                             req->path, addr, skip, req->verify);
+        InterlockedExchange(&g_accept_flash_progress, 1);
         rc = g_ctx.api.download_file(req->path, addr,
                                      (unsigned)skip,
                                      (unsigned)(req->verify ? 1 : 0), NULL);
+        InterlockedExchange(&g_accept_flash_progress, 0);
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile rc=%d", rc);
         /* 若未先 massErase 且仍失败：再试 massErase + skip 下载 */
         if (rc != 0 && !req->skip_erase && g_ctx.api.mass_erase) {
             if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link downloadFile 失败，重试 massErase+skipErase");
+            InterlockedExchange(&g_accept_flash_progress, 1);
             if (g_ctx.api.mass_erase(NULL) == 0) {
                 rc = g_ctx.api.download_file(req->path, addr, 1,
                                              (unsigned)(req->verify ? 1 : 0), NULL);
                 if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile 重试 rc=%d", rc);
             }
+            InterlockedExchange(&g_accept_flash_progress, 0);
         }
         ok = (rc == 0);
         if (ok && req->reset_run) {

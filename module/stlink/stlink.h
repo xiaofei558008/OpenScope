@@ -99,6 +99,14 @@ typedef struct OS_StLinkApi {
                           unsigned int skipErase, unsigned int verify,
                           const wchar_t* binPath);
     int  (*mass_erase)(char* flashMemName);
+    /* CPU 控制（可选；CubeProgrammer 新版导出） */
+    int  (*halt_cpu)(void);   /* Halt */
+    int  (*run_cpu)(void);    /* Run */
+    int  (*step_cpu)(void);   /* 可选 Step */
+    int  (*core_reset)(void); /* CoreReset：核复位并停住 */
+    int  (*system_reset)(void); /* SystemReset */
+    int  (*read_cortex_reg)(unsigned int reg, unsigned int* data); /* PC 常用 reg=15 */
+    int  (*get_core_state)(void); /* 可选 getCoreState */
 } OS_StLinkApi;
 
 int  os_stlink_bind(OS_StLinkApi* api, char* err, int err_len);

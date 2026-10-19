@@ -81,14 +81,24 @@ int os_modmgr_load(void)
     } while (FindNextFileW(h, &fd));
     FindClose(h);
 
-    /* AD-13：收集全部驱动模块（多驱动可选）；默认选中 JLink，无 JLink 时选首个驱动 */
+    /* 探针驱动：仅 OS_CAP_DRIVER 且非 XCP（J-Link/ST-Link 一组互斥） */
     g_app.driver = NULL;
     g_app.driver_ctx = NULL;
     g_app.driver_count = 0;
+    g_app.xcpmod = NULL;
+    g_app.xcpmod_ctx = NULL;
+    g_app.xcp_connected = 0;
     {
         int i, jlink_idx = -1;
         for (i = 0; i < g_app.mod_count; i++) {
             OS_Module* m = &g_app.mods[i];
+            if (m->capabilities & OS_CAP_XCP) {
+                if (!g_app.xcpmod) {
+                    g_app.xcpmod = m;
+                    g_app.xcpmod_ctx = g_app.mod_ctx[i];
+                }
+                continue;
+            }
             if (m->capabilities & OS_CAP_DRIVER) {
                 if (jlink_idx < 0 && name_has_jlink(m->name)) jlink_idx = g_app.driver_count;
                 g_app.drivers[g_app.driver_count] = m;
@@ -102,6 +112,8 @@ int os_modmgr_load(void)
             g_app.driver_ctx = g_app.driver_ctxs[sel];
         }
     }
+    if (g_app.xcpmod)
+        os_log(OS_LOG_INFO, "XCP 模块: %s（与探针/网络并行）", g_app.xcpmod->name);
     /* 窗口模块列表 */
     g_app.winmod_count = 0;
     {

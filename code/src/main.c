@@ -1,6 +1,7 @@
 #include "app.h"
 #include "chartwin.h"
 #include "numwin.h"
+#include "srcwin.h"
 #include "mainwin.h"
 #include "module_mgr.h"
 #include "vartree.h"
@@ -100,8 +101,10 @@ static LONG WINAPI os_crash_filter(EXCEPTION_POINTERS* ep)
             frame = (DWORD64*)*frame;
         }
     }
-    MessageBoxW(NULL, L"OpenScope 发生未处理异常，详细信息已写入日志文件 openscope.log。",
-                L"OpenScope 崩溃", MB_OK | MB_ICONERROR);
+    /* 经 alerts 环；AI 静默（--ai-silent / ui.silent）时不阻塞弹窗 */
+    os_alert_fatal("OpenScope 崩溃",
+                   "OpenScope 发生未处理异常，详细信息已写入日志文件 openscope.log。",
+                   0);
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
@@ -135,6 +138,7 @@ static void init_fw(void)
     g_app.fw.log_ring_clear = os_log_ring_clear;
     g_app.fw.log_add_listener = os_log_add_listener;
     g_app.fw.log_remove_listener = os_log_remove_listener;
+    g_app.fw.flash_progress = os_fw_flash_progress;
 }
 
 /* 解析命令行：OpenScope.exe [elf] [--select-leaf=名] [--layout-load=文件] [--layout-save=文件] */
@@ -200,6 +204,11 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
             char port8[16];
             os_wide_to_utf8_buf(tok + 10, port8, sizeof(port8));
             SetEnvironmentVariableA("OPENSCOPE_AI_PORT", port8);
+        }
+        else if (wcscmp(tok, L"--ai-silent") == 0) {
+            /* AI 无人值守：不弹 MessageBox，确认框自动应答 */
+            os_ui_set_silent(1);
+            SetEnvironmentVariableA("OPENSCOPE_AI_SILENT", "1");
         }
         else if (wcsncmp(tok, L"--watch=", 8) == 0) _snwprintf(g_app.net_watch_csv, 1024, L"%s", tok + 8);
         else if (wcsncmp(tok, L"--net-win=", 10) == 0) _snwprintf(g_app.net_win_spec, 1024, L"%s", tok + 10);
@@ -341,7 +350,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_log_file_auto_open();
     SetUnhandledExceptionFilter(os_crash_filter);
     os_log(OS_LOG_INFO, "OpenScope 启动 (version " OS_VERSION_STR ")");
-    /* AI 端口须在模块加载前生效（aiapi.dll init 读 OPENSCOPE_AI_PORT） */
+    /* AI 端口/静默须在模块加载前生效（aiapi.dll init 读环境变量） */
     {
         wchar_t* t = wcsstr(lpCmdLine, L"--ai-port=");
         if (t) {
@@ -356,13 +365,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                 SetEnvironmentVariableA("OPENSCOPE_AI_PORT", port8);
             }
         }
+        if (wcsstr(lpCmdLine, L"--ai-silent") ||
+            GetEnvironmentVariableA("OPENSCOPE_AI_SILENT", NULL, 0) > 0) {
+            os_ui_set_silent(1);
+            SetEnvironmentVariableA("OPENSCOPE_AI_SILENT", "1");
+        }
     }
     init_fw();
     icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES;
+    icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES |
+                ICC_BAR_CLASSES | ICC_PROGRESS_CLASS;
     InitCommonControlsEx(&icc);
     os_chart_register();
     os_num_register();
+    os_src_register();
     os_mainwin_register();
     os_help_register(); /* 需求12：帮助文档窗口类（F1） */
     os_theme_load(); /* F20: 创建主窗口前读回持久化主题，标题栏/控件从首帧即按主题渲染 */
@@ -453,7 +469,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         /* 需求12：F1 弹出帮助文档；Ctrl+F 快速搜索变量（用户指定，原 Ctrl+H）。
          * 加速键在消息循环层拦截，子控件焦点同样生效；波形窗口的纯 F 键
          * （全局显示）不受影响——FCONTROL 修饰要求按住 Ctrl。 */
-        ACCEL acc[2];
+        ACCEL acc[3];
         HACCEL hAcc;
         acc[0].fVirt = FVIRTKEY;
         acc[0].key = VK_F1;
@@ -461,7 +477,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         acc[1].fVirt = FVIRTKEY | FCONTROL;
         acc[1].key = 'F';
         acc[1].cmd = IDM_TREE_FIND;
-        hAcc = CreateAcceleratorTableW(acc, 2);
+        acc[2].fVirt = FVIRTKEY | FCONTROL;
+        acc[2].key = 'P';
+        acc[2].cmd = IDM_SRC_QUICK;
+        hAcc = CreateAcceleratorTableW(acc, 3);
         while (GetMessage(&msg, NULL, 0, 0)) {
             /* N3: 就地重命名编辑框的回车/ESC 在分发前拦截（不子类化编辑框） */
             HWND te = os_tab_edit_hwnd();

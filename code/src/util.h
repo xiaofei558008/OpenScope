@@ -42,6 +42,31 @@ void     os_log_ring_clear(void);
 typedef OS_AiLogListener os_log_listener_fn;
 int  os_log_add_listener(os_log_listener_fn fn, void* user);
 void os_log_remove_listener(os_log_listener_fn fn, void* user);
+
+/* ---- AI/CLI：弹窗/严重反馈总线（MessageBox 统一入口）---- */
+#define OS_ALERT_RING_CAP 64
+#define OS_ALERT_TEXT_CAP 1024
+typedef struct OS_Alert {
+    uint64_t seq;
+    int64_t  ts_us;
+    int      level;     /* OS_LOG_* */
+    int      type;      /* MessageBox 风格：MB_OK / MB_YESNO / … */
+    int      result;    /* IDOK / IDYES / IDNO / …（静默模式为自动选择） */
+    int      silenced;  /* 1=未弹窗，AI 静默接管 */
+    char     title[128];
+    char     text[OS_ALERT_TEXT_CAP];
+} OS_Alert;
+/* 与 MessageBoxW 同签名；记录到 alerts 环 + 写日志；静默模式不阻塞 UI。 */
+int  os_msgbox(HWND owner, const wchar_t* text, const wchar_t* title, UINT type);
+void os_ui_set_silent(int on);          /* 1=AI 接管：不弹窗，按默认按钮自动应答 */
+int  os_ui_silent(void);
+void os_ui_set_yesno_default(int yes);  /* 静默时 YESNO：1=是 0=否 */
+int  os_ui_yesno_default(void);
+int  os_alert_ring_copy(uint64_t since, OS_Alert* out, int max, uint64_t* next_since);
+uint64_t os_alert_ring_head_seq(void);
+/* 崩溃路径：只记文件+环，尽量不弹窗（silent 或 force_no_ui） */
+void os_alert_fatal(const char* title_utf8, const char* text_utf8, int force_no_ui);
+
 /* 把窗口客户区保存为 32bpp BMP（调试/截图用） */
 void os_save_window_bmp(HWND hwnd, const wchar_t* path);
 

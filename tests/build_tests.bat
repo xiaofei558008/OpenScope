@@ -149,8 +149,9 @@ if errorlevel 1 (
 )
 
 cl /nologo /W2 /utf-8 /I module\xcp module\xcp\tests\xcp_smoke.c ^
-    module\xcp\xcp_slave.c module\xcp\xcp_master.c module\xcp\xcp_can.c ^
-    /Fe:tests\bin\xcp_smoke.exe
+    module\xcp\xcp_slave.c module\xcp\xcp_master.c module\xcp\xcp_transport.c ^
+    module\xcp\xcp_serial.c module\xcp\xcp_tcp.c module\xcp\xcp_can.c ^
+    /Fe:tests\bin\xcp_smoke.exe /link ws2_32.lib
 if errorlevel 1 (
   echo [ERROR] xcp_smoke build failed
   exit /b 1

@@ -2,6 +2,7 @@
 #define OS_MAINWIN_H
 
 #include <windows.h>
+#include <stdint.h>
 
 /* 变量模糊搜索选择对话框：成功返回 0 并写 leaf id，取消返回非 0 */
 int os_dlg_pick_var(HWND owner, int* out_leaf_id);
@@ -40,5 +41,32 @@ void os_mainwin_replay_all(const wchar_t* path);
 void os_mainwin_net_cmd(int action, const char* ip, int port);
 /* 需求 14：设置内联 IP/端口编辑框（--net-set 测试钩子/程序内配置共用） */
 void os_mainwin_net_set(const wchar_t* ip, const wchar_t* port);
+
+/* ---- 源码索引 / 行断点（AI/自动化） ---- */
+void os_mainwin_src_refresh_index(void);
+int  os_mainwin_src_file_count(void);
+int  os_mainwin_src_get_file(int idx, char* utf8, int cap); /* 0=ok */
+int  os_mainwin_src_find(const char* needle_utf8, int* out_idx, int max);
+int  os_mainwin_src_root_count(void);
+int  os_mainwin_src_get_root(int i, char* utf8, int cap);
+int  os_mainwin_src_add_root(const char* utf8_path); /* 0=ok */
+int  os_mainwin_src_open(const char* path_utf8, int goto_line); /* 0=ok */
+/* 按 PC 打开源码并高亮；成功写 path_out/line_out，返回 0 */
+int  os_mainwin_src_follow_pc(uint32_t pc, char* path_out, int path_cap, int* line_out);
+/* 线程安全封装（AI WebSocket 线程经 SendMessage 到主线程） */
+int  os_mainwin_src_open_safe(const char* path_utf8, int goto_line);
+int  os_mainwin_src_follow_pc_safe(uint32_t pc, char* path_out, int path_cap, int* line_out);
+
+/* AI/工作线程 → 主线程源码 UI（WM_OS_SRC_UI） */
+typedef struct OS_SrcUiReq {
+    int      op;          /* 0=open path+line, 1=follow pc */
+    char     path[MAX_PATH];
+    int      line;
+    uint32_t pc;
+    int      result;      /* out: 0=ok */
+    char     out_path[MAX_PATH];
+    int      out_line;
+} OS_SrcUiReq;
+LRESULT os_mainwin_src_ui(OS_SrcUiReq* req);
 
 #endif

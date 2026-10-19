@@ -14,10 +14,11 @@
 #define OS_API_VERSION 5
 
 /* 模块能力标志 */
-#define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写） */
+#define OS_CAP_DRIVER 0x0001 /* 提供 MCU 访问（连接/读写）——探针：J-Link/ST-Link */
 #define OS_CAP_WINDOW 0x0002 /* 提供自定义窗口类型 */
 #define OS_CAP_NET    0x0004 /* 提供网络服务（远程操作，需求 14） */
 #define OS_CAP_AI     0x0008 /* AI/CLI/MCP 自动化总线（本机 WebSocket JSON-RPC） */
+#define OS_CAP_XCP    0x0010 /* XCP 标定通道（与探针/网络并行，不占用驱动下拉） */
 
 /* 日志级别 */
 #define OS_LOG_INFO  0
@@ -65,8 +66,18 @@ enum {
     /* 烧录 / 擦除（软件内下载固件） */
     OS_CMD_FLASH_DOWNLOAD = 30, /* in: OS_FlashReq*，下载 .elf/.out/.hex/.bin 到 Flash */
     OS_CMD_FLASH_ERASE    = 31, /* in: OS_FlashReq*（可用 device），整片擦除 */
+    /* CPU 控制扩展 */
+    OS_CMD_RESET_RUN      = 32, /* 复位后运行（不等同于 RESET：RESET 为复位并停住） */
+    OS_CMD_GET_CPU_STATE  = 33, /* out: OS_CpuState*，读 PC / 是否 halt */
+    OS_CMD_STEP           = 34, /* 单步（需已 Halt；执行一条指令后仍停住） */
+    OS_CMD_STEP_OVER      = 35, /* 步过：不进入调用 */
+    OS_CMD_STEP_IN        = 36, /* 步入：进入调用（指令级 ≈ STEP） */
+    OS_CMD_STEP_OUT       = 37, /* 步出：运行到函数返回（LR） */
+    OS_CMD_BP_SET         = 38, /* in: OS_BpReq* 设硬件断点 */
+    OS_CMD_BP_CLEAR       = 39, /* in: OS_BpReq*（address；clear_all=1 全清） */
     /* AI 自动化：模块可选返回自身工具描述 JSON（追加到 tools.list） */
-    OS_CMD_AI_DESCRIBE    = 40  /* out: char*（调用方提供缓冲，建议 ≥4KB）；返回写出字节数或负错误码 */
+    OS_CMD_AI_DESCRIBE    = 40, /* out: char*（调用方提供缓冲，建议 ≥4KB） */
+    OS_CMD_BP_LIST        = 41  /* out: OS_BpList* 当前已设断点 */
 };
 
 /* 仿真口类型 */
@@ -91,7 +102,8 @@ typedef struct OS_ConnectCfg {
     char device[128];         /* 目标器件型号，空 = 默认 */
     int  probe_index;         /* -1 = 自动 */
     char serial[64];          /* 仿真器序列号，空 = 自动 */
-    int  connect_under_reset; /* 0/1 */
+    int  connect_under_reset; /* 0/1：复位下连接（打断目标） */
+    int  attach;              /* 1=Attach：不复位/不 Halt，接入正在运行的 MCU */
 } OS_ConnectCfg;
 
 typedef struct OS_DriverInfo {
@@ -139,6 +151,38 @@ typedef struct OS_FlashReq {
     int      reset_run;       /* 1=下载/擦除后复位并运行 */
     char     device[128];     /* 烧录算法器件名（J-Link Device=）；空则沿用连接时设备 */
 } OS_FlashReq;
+
+/* OS_CMD_GET_CPU_STATE 输出：MCU 运行状态与 PC（程序计数器） */
+typedef struct OS_CpuState {
+    uint32_t pc;         /* 当前 PC；halted=0 时可能为上次采样或 0 */
+    int      halted;     /* 1=已停住，0=运行中，-1=未知 */
+    int      pc_valid;   /* 1=pc 本次成功读到 */
+    int      powered;    /* 1=目标有电（VTarget>0），0=无/未知掉电，-1=未知 */
+    int      under_reset;/* 1=处于复位，0=否，-1=未知 */
+    int      voltage_mv; /* 目标电压 mV（仿真器测得）；未知为 -1 */
+    /* 主状态文案（主机可直接显示）：RUNNING / STOP / RESET / POWERON / — */
+    char     state[24];
+} OS_CpuState;
+
+/* 断点：OS_CMD_BP_SET / CLEAR / LIST */
+#define OS_BP_MAX 16
+typedef struct OS_BpReq {
+    uint32_t address;   /* Thumb 地址，驱动内会清 bit0；0+clear_all 表示全清 */
+    int      clear_all; /* CLEAR 时 1=清除全部 */
+    char     note[64];  /* 可选备注（宿主用，驱动可忽略） */
+} OS_BpReq;
+
+typedef struct OS_BpInfo {
+    uint32_t address;
+    int      id;        /* 槽位/句柄 */
+    int      enabled;   /* 1=有效 */
+} OS_BpInfo;
+
+typedef struct OS_BpList {
+    OS_BpInfo* items;   /* 调用方提供缓冲 */
+    int capacity;
+    int count;
+} OS_BpList;
 
 /* AI 运行时日志条目（与宿主环形缓冲布局一致，跨 DLL） */
 #define OS_AI_LOG_TEXT 512
@@ -225,6 +269,9 @@ typedef struct OS_Framework {
     void (*log_ring_clear)(void);
     int  (*log_add_listener)(OS_AiLogListener fn, void* user);
     void (*log_remove_listener)(OS_AiLogListener fn, void* user);
+
+    /* ---- v5 烧录进度（驱动线程回调 → UI 进度条；percent 0..100，phase 可空）---- */
+    void (*flash_progress)(int percent, const char* phase_utf8);
 } OS_Framework;
 
 typedef struct OS_WindowType {

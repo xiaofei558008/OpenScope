@@ -25,6 +25,15 @@ typedef struct OS_JLinkApi {
     int  (*halt)(void);
     int  (*go)(void);
     int  (*reset)(void);
+    int  (*step)(void);          /* 可选：单步 */
+    int  (*reset_no_halt)(void); /* 可选：复位后继续运行 */
+    int  (*is_halted)(void);      /* 可选：1=halted，0=running */
+    uint32_t (*read_reg)(int reg_index); /* 可选：Cortex-M R0..R15(PC=15) */
+    /* 可选硬件/软件断点：SetBPEx(addr, type) / ClrBPEx(handle) */
+    int  (*set_bp_ex)(uint32_t addr, uint32_t type);
+    int  (*clr_bp_ex)(int handle);
+    /* GetHWStatus：VTarget(mV) + 复位脚等；结构按 SEGGER 布局前 8 字节够用 */
+    int  (*get_hw_status)(void* pStat);
     int  (*set_speed)(int khz);
     /* 内存 */
     int  (*read_mem)(uint32_t addr, uint32_t size, uint8_t* data);
@@ -42,7 +51,20 @@ typedef struct OS_JLinkApi {
     /* 烧录（可选导出：JLINK_DownloadFile / JLINK_EraseChip） */
     int  (*download_file)(const char* path, uint32_t addr);
     int  (*erase_chip)(void);
+    /* void(*)(action, prog, percent)；可选 */
+    void (*set_flash_prog_progress_cb)(void* cb);
 } OS_JLinkApi;
+
+/* J-Link HW 状态前缀（与 SEGGER JLINKARM_HW_STATUS 对齐） */
+typedef struct OS_JLinkHwStatus {
+    uint16_t VTarget; /* 目标供电 mV */
+    uint8_t  tck;
+    uint8_t  tdi;
+    uint8_t  tdo;
+    uint8_t  tms;
+    uint8_t  tres;    /* 0=RESET 脚拉低（复位中） */
+    uint8_t  trst;
+} OS_JLinkHwStatus;
 
 /* 枚举信息结构（对齐 SEGGER JLINKARM_EMU_CONNECT_INFO） */
 typedef struct OS_JLinkEmuInfo {

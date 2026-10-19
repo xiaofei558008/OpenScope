@@ -84,6 +84,8 @@ OpenScope 是一款专为嵌入式开发设计的高性能调试与数据采集�
 - **烧录 / 擦除**：
   - 连接 J-Link 或 ST-Link 后，点工具栏 **“烧录”**（或菜单 采集→烧录/擦除）。
   - 选择 `.elf` / `.out` / `.hex` / `.bin`，可勾选下载前整片擦除、校验、完成后复位运行。
+  - 对话框内有**进度条与百分比**（及阶段文字）；烧录在后台线程执行，界面不会卡死。
+  - **CPU 控制**：`Reset`（复位后运行）、`Run`（继续）、`Reset & Halt`（复位并停住）；右侧实时显示 **PC** 与运行/停住状态（约 200ms 刷新）。
   - `.bin` 需填写 Flash 基址（默认 `0x08000000`）；J-Link 烧录请填写带 Flash 算法的器件名（如 `STM32F303RC`）。
 
 ### 3.3 数值窗口
@@ -137,11 +139,17 @@ OpenScope 是一款专为嵌入式开发设计的高性能调试与数据采集�
 - 实时样本用扁平编码（逐样本独立、无累积误差）；历史回传用时间戳 delta + 浮点 XOR 无损压缩（Gorilla 式）+ **8 线程并行压缩**，分块流式传输，支持未来 trace 大数据量。
 - 服务器转发：WebSocket 为纯 TCP 协议，可经任意 TCP 转发/反向代理（如 nginx）实现跨网段中继。
 
-### 3.8 XCP 标定协议
+### 3.8 三通道并行与 XCP
 
-通道下拉中的 **xcp** 是独立模块 `xcp.dll`（ASAM XCP 协议层 1.3，命令号与 Vector XCPlite 一致）。它和上面的网络通道是两件事：网络通道把一台电脑上 OpenScope 采到的数据送给另一台电脑上的 OpenScope；XCP 是本机跟 ECU 从机的标定协议。
+工具栏三条通道可同时使用，互不抢按钮：
 
-XCP 不使用工具栏上的 IP 和端口。传输预留给 CAN 适配器（周立功、Kvaser）。协议层已经实现连接、状态、上传/下载、校验和、标定页、种子解锁和动态 DAQ；编程类命令按规范返回“未知命令”。CAN 适配器还没接入时，扫描列表是空的，点连接会提示没有发现设备。
+| 通道 | UI | 说明 |
+| :--- | :--- | :--- |
+| **探针** | 下拉仅 J-Link / ST-Link +「连接」 | SWD 调试/采集/烧录/断点 |
+| **网络** | IP/端口 +「监听」+「网络连接」 | 两台 OpenScope 样本同步（`network.dll`） |
+| **XCP** | 传输/端口/波特 +「XCP扫描/连接/断开」 | ECU 标定（`xcp.dll`，`OS_CAP_XCP`） |
+
+**XCP**（ASAM 1.3）经物理层无关接口 `XcpTransport`/`XcpIo`：内置 **串口**（`[u16 LE len][payload]`）、**TCP**（`[u16 len][u16 ctr][payload]`）、**CAN** 占位（周立功/Kvaser 待接）。主机侧写运行日志；MCU 示例与端口在 `module/xcp/mcu/`。AI：`xcp.scan` / `xcp.connect` / `xcp.disconnect` / `xcp.status`。
 
 ### 3.9 AI / CLI / MCP 自动化接口
 
@@ -152,11 +160,16 @@ XCP 不使用工具栏上的 IP 和端口。传输预留给 CAN 适配器（周�
 | 模块 | `aiapi.dll`（能力 `OS_CAP_AI`） |
 | 默认端点 | `ws://127.0.0.1:18765`（仅本机回环） |
 | 改端口 | 环境变量 `OPENSCOPE_AI_PORT`，或启动参数 `--ai-port=端口` |
+| 静默 UI | 启动 `--ai-silent` 或环境变量 `OPENSCOPE_AI_SILENT=1`；运行中可用 `ui.silent` |
 | 协议 | 文本帧 JSON-RPC：`{"jsonrpc":"2.0","id":1,"method":"status","params":{}}` |
 | MCP | 同端口支持 `tools/list`、`tools/call`；stdio 桥：`tools/openscope_mcp.py` |
 | CLI | `python scripts/os_cli.py <method> [json_params]` |
 
-**常用方法（调用 `help` / `tools.list` 可获得实时完整表）**：`status`、`modules.list`、`drivers.list` / `drivers.select`、`probe.scan`、`connect` / `disconnect`、`elf.load`、`vars.list` / `vars.find` / `vars.watch` / `vars.read` / `vars.write`、`mem.read` / `mem.write`、`acq.start` / `acq.stop`、`flash.download` / `flash.erase`、`recording.start` / `recording.stop`、**`log.read` / `log.clear` / `log.subscribe` / `log.unsubscribe`**。
+**常用方法（调用 `help` / `tools.list` 可获得实时完整表）**：`status`、`modules.list`、`drivers.list` / `drivers.select`、`probe.scan`、`connect` / `disconnect`、`halt` / `go` / `step` / `step_in` / `step_over` / `step_out`、`bp.set` / `bp.clear` / `bp.list` / **`bp.set_line` / `bp.clear_line`**、`cpu.state`、`elf.load`、**`src.status` / `src.roots` / `src.files` / `src.open` / `src.line_to_addr` / `src.addr_to_line`**、`vars.list` / `vars.find` / `vars.watch` / `vars.read` / `vars.write`、`mem.read` / `mem.write`、`acq.start` / `acq.stop`、`flash.download` / `flash.erase`、`recording.start` / `recording.stop`、**`log.read` / `log.clear` / `log.subscribe` / `log.unsubscribe`**、**`alerts.read` / `ui.silent`**。
+
+**硬件断点（调试栏「BP」/ 菜单「断点...」）**：经仿真器设 Flash Patch / 硬件断点。ST-Link 最多 6 槽（FPB），J-Link 走 `SetBPEx`。AI：`bp.set {"address":"0x08001234","note":""}`、`bp.clear {"address":"..."}` 或 `{"all":1}`、`bp.list`；按行：`bp.set_line {"path":"main.c","line":100}` / `bp.clear_line`。
+
+**源码窗口（1.26.4）**：先配置「源码目录关联」；左侧切换到「源码」标签查看文件树，或 **Ctrl+P** 模糊打开。源码窗左侧行号栏**双击**或右键设/清断点（红点）；Halt 后自动跟 PC 高亮当前行。AI：`src.follow_pc`、`bp.set_line`/`bp.clear_line`。自动化：`python scripts/test_ai_full.py`（需先 `--ai-silent` 启动；含 run-to-bp）。
 
 **运行时日志（AI 接入）**：
 
@@ -168,6 +181,13 @@ XCP 不使用工具栏上的 IP 和端口。传输预留给 CAN 适配器（周�
 | `log.unsubscribe` | 取消订阅 |
 
 `min_level` 传 `OS_LOG_*` 常量（`0=INFO`、`1=WARN`、`2=ERROR`、`3=DEBUG`）；过滤按严重度 **DEBUG < INFO < WARN < ERROR**。要收全部日志用 `3`（DEBUG）或省略；仅错误用 `2`。
+
+**弹窗 / 严重反馈（AI 接管）**：界面所有 `MessageBox`（含崩溃提示）经统一入口写入 alerts 环，并同步写入日志（带 `[弹窗]` / `[弹窗/静默]` 前缀）。静默模式下不阻塞 UI，确认框按默认按钮/`yesno_default` 自动应答。
+
+| 方法 | 说明 |
+| :--- | :--- |
+| `alerts.read` | 增量拉取：`{"since":0,"limit":32}` → `alerts[]`（title/text/level/result/silenced）+ `next_since` |
+| `ui.silent` | 查询或设置：`{"on":1,"yesno_default":1}`；`on=1` 后不再弹窗 |
 
 **自动更新**：每次启动扫描 `dll\*.dll`；`tools.list` 会列出当前已加载模块，并对实现了 `OS_CMD_AI_DESCRIBE` 的模块合并其工具描述。新增功能模块放入 `dll` 后重启即可被 AI 发现；宿主侧新操作登记在 `ai_bridge.c` 后同样会出现在 `help`。
 

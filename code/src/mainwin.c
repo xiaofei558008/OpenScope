@@ -1,5 +1,10 @@
 #include "app.h"
 #include "mainwin.h"
+#include "dockbar.h"
+#include "srcmap.h"
+#include "bpwin.h"
+#include "srcwin.h"
+#include "srcidx.h"
 #include "chartwin.h"
 #include "numwin.h"
 #include "vartree.h"
@@ -13,6 +18,7 @@
 #include "tilecalc.h"
 #include <commctrl.h>
 #include <commdlg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -28,6 +34,17 @@
 #define IDC_BTN_REPLAYSTOP 2009
 #define IDC_BTN_ABOUT    2010
 #define IDC_BTN_FLASH    2015 /* 烧录/擦除窗口 */
+#define IDC_BTN_ATTACH   2016
+#define IDC_BTN_CPU_RUN  2017
+#define IDC_BTN_CPU_STOP 2018
+#define IDC_BTN_CPU_RHALT 2019
+#define IDC_BTN_CPU_STEP 2020
+#define IDC_BTN_CPU_STEPIN  2041
+#define IDC_BTN_CPU_STEPOUT 2042
+#define IDC_BTN_CPU_STEPOVER 2043
+#define IDC_BTN_BP          2044
+#define IDM_SRCMAP       2031
+#define IDM_BP          2032
 /* 需求 14：网络内联控件（UI整合：并入工具栏首行），2110+ 避开菜单/其它控件 id */
 #define IDD_NET_IP       2110
 #define IDD_NET_PORT     2111
@@ -99,6 +116,12 @@
 #define IDC_CFG_EMU      2104
 #define IDC_CFG_REFRESH  2105
 #define IDC_CFG_DRIVER   2106 /* AD-13: 仿真器类型下拉（J-Link/ST-Link） */
+#define IDC_XCP_TRANSPORT 2120
+#define IDC_XCP_PORT      2121
+#define IDC_XCP_BAUD      2122
+#define IDC_XCP_CONNECT   2123
+#define IDC_XCP_DISCONNECT 2124
+#define IDC_XCP_SCAN      2125
 
 /* 芯片核心预置列表（J-Link "Device=" 名称）。
  * F17：纯 SWD/JTAG 内存读写/读 Flash 地址内容只需通用核心名（CoreSight AHB-AP 架构一致），
@@ -163,15 +186,40 @@ static int g_modwin_menu_count;
 /* 工具栏按钮（菜单栏正下方一行） */
 static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
+    { IDC_BTN_ATTACH, L"Attach" },
     { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"录制" },
     { IDC_BTN_FLASH, L"烧录" },
     { IDC_BTN_REPLAY, L"离线回放" }, { IDC_BTN_REPLAYSTOP, L"停止回放" },
-    /* 需求14 UI整合：网络按键并入工具栏首行（监听/上传ELF/下载ELF） */
     { IDD_NET_LISTEN, L"监听" }, { IDD_NET_UPELF, L"上传ELF" },
     { IDD_NET_DOWNELF, L"下载ELF" },
-    /* Bug8: 自动隐藏/钉住归位到左侧 elf 变量树（OSTreePin 钉图标），不再放菜单栏下固定按键 */
 };
+
+static const struct { int id; const wchar_t* text; } g_debug_btns[] = {
+    { IDC_BTN_CPU_RUN, L"Run" }, { IDC_BTN_CPU_STOP, L"Stop" },
+    { IDC_BTN_CPU_RHALT, L"R&H" }, { IDC_BTN_CPU_STEP, L"Step" },
+    { IDC_BTN_CPU_STEPIN, L"Step In" }, { IDC_BTN_CPU_STEPOUT, L"Step Out" },
+    { IDC_BTN_CPU_STEPOVER, L"Step Over" },
+    { IDC_BTN_BP, L"BP" },
+};
+
+static OS_SrcMap g_srcmap;
+static OS_SrcIdx g_srcidx;
+#define LEFT_TAB_H 24
+
+
+static HWND main_ctrl(int id)
+{
+    HWND c, bars[2];
+    int i;
+    bars[0] = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
+    bars[1] = os_dockbar_hwnd(OS_DOCKBAR_DEBUG);
+    for (i = 0; i < 2; i++) {
+        if (bars[i] && (c = GetDlgItem(bars[i], id)) != NULL) return c;
+    }
+    return GetDlgItem(g_app.hMain, id);
+}
+
 
 /* ---------- 工具 ---------- */
 
@@ -338,9 +386,92 @@ void os_fw_post(UINT msg, WPARAM w, LPARAM l)
     if (g_app.hMain) PostMessage(g_app.hMain, msg, w, l);
 }
 
+
+/* ---- 烧录进度 / CPU 状态（驱动回调 + 状态栏） ---- */
+static HWND g_flash_dlg;
+static volatile LONG g_flash_busy;
+
+void os_fw_flash_progress(int percent, const char* phase_utf8)
+{
+    (void)percent; (void)phase_utf8;
+    if (!g_flash_dlg || !IsWindow(g_flash_dlg)) return;
+    if (!InterlockedCompareExchange(&g_flash_busy, 0, 0)) return;
+}
+
+#define STATUS_PART_CPU 4
+static int g_cpu_prev_halted = -1;
+static uint32_t g_cpu_prev_pc = 0;
+
+/* Halt ?? PC ?????????????? refresh_layout???? CPU ?? ? ???? */
+static int g_follow_busy;
+static void follow_pc_to_source(const OS_CpuState* st)
+{
+    char file[512];
+    wchar_t local[MAX_PATH];
+    int line = 0;
+    if (!st || g_follow_busy) return;
+    if (st->halted != 1 || !st->pc_valid || !g_app.elf) {
+        if (g_cpu_prev_halted == 1)
+            os_src_set_pc_line(NULL, 0);
+        return;
+    }
+    if (g_cpu_prev_halted == 1 && (st->pc & ~1u) == (g_cpu_prev_pc & ~1u))
+        return;
+    if (!os_elf_line_of_addr(g_app.elf, st->pc, file, sizeof(file), &line) || line <= 0)
+        return;
+    local[0] = 0;
+    if (!os_srcmap_resolve(&g_srcmap, file, local, MAX_PATH))
+        os_utf8_to_wide_buf(file, local, MAX_PATH);
+    if (!local[0]) return;
+    g_follow_busy = 1;
+    os_src_open_file(g_app.hTab, local, line);
+    os_src_set_pc_line(local, line);
+    g_follow_busy = 0;
+}
+
+static void refresh_cpu_status(void)
+{
+    OS_CpuState st;
+    wchar_t w[96];
+    char label[32];
+    int rc;
+    if (!g_app.hStatus) return;
+    if (!g_app.connected || !g_app.driver || !g_app.driver->command || g_app.net_mode) {
+        SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
+        g_cpu_prev_halted = -1;
+        return;
+    }
+    memset(&st, 0, sizeof(st));
+    st.halted = -1; st.powered = -1; st.under_reset = -1; st.voltage_mv = -1;
+    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_CPU_STATE, NULL, &st);
+    if (rc != OS_ERR_OK) {
+        SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
+        return;
+    }
+    follow_pc_to_source(&st);
+    g_cpu_prev_halted = st.halted;
+    if (st.pc_valid) g_cpu_prev_pc = st.pc;
+    _snprintf(label, sizeof(label), "%s", st.state[0] ? st.state : "-");
+    if (st.halted == 1 && st.pc_valid) {
+        if (st.voltage_mv > 0) {
+            int whole = st.voltage_mv / 1000;
+            int frac = (st.voltage_mv % 1000) / 10;
+            _snwprintf(w, 96, L"CPU: %hs | 0x%08X | %d.%02dV",
+                       label, (unsigned)(st.pc & ~1u), whole, frac);
+        } else
+            _snwprintf(w, 96, L"CPU: %hs | 0x%08X", label, (unsigned)(st.pc & ~1u));
+    } else if (st.voltage_mv > 0) {
+        int whole = st.voltage_mv / 1000;
+        int frac = (st.voltage_mv % 1000) / 10;
+        _snwprintf(w, 96, L"CPU: %hs | %d.%02dV", label, whole, frac);
+    } else
+        _snwprintf(w, 96, L"CPU: %hs", label);
+    SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)w);
+}
+
 static void update_record_btn_text(void)
 {
-    HWND b = GetDlgItem(g_app.hMain, IDC_BTN_LOGSTART);
+    HWND b = main_ctrl(IDC_BTN_LOGSTART);
     if (b) SetWindowTextW(b, g_app.recording ? L"停止录制" : L"录制");
 }
 
@@ -351,12 +482,17 @@ void os_mainwin_update_buttons(void)
     int running = g_app.acq_state == OS_ACQ_RUNNING;
     int replay = g_app.acq_state == OS_ACQ_REPLAY;
     HWND b;
-#define ENB(id, on) do { b = GetDlgItem(g_app.hMain, (id)); if (b) EnableWindow(b, (on)); } while (0)
+#define ENB(id, on) do { b = main_ctrl(id); if (b) EnableWindow(b, (on)); } while (0)
     update_record_btn_text();
-    if (g_app.net_mode) {
+    /* ??????? Connect ?????????????????? */
+    if (0 && g_app.net_mode) {
         /* 需求14 UI整合：网络通道下按键全部可用（网络模块内部有连接状态判断，
          * 连接/断开/开始采集/停止采集分别复用为 网络连接/停止/下达监视/停止下达） */
         ENB(IDC_BTN_CONNECT, 1);
+        ENB(IDC_BTN_ATTACH, 0);
+        ENB(IDC_BTN_CPU_RUN, 0); ENB(IDC_BTN_CPU_STOP, 0);
+        ENB(IDC_BTN_CPU_RHALT, 0); ENB(IDC_BTN_CPU_STEP, 0);
+        ENB(IDC_BTN_CPU_STEPIN, 0); ENB(IDC_BTN_CPU_STEPOUT, 0); ENB(IDC_BTN_CPU_STEPOVER, 0); ENB(IDC_BTN_BP, 0);
         ENB(IDC_BTN_DISCON, 1);
         ENB(IDC_BTN_START, g_app.watch_count > 0 && !running);
         ENB(IDC_BTN_STOP, 1);
@@ -368,7 +504,15 @@ void os_mainwin_update_buttons(void)
         return;
     }
     ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay);
+    ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay);
     ENB(IDC_BTN_DISCON, conn);
+    ENB(IDC_BTN_CPU_RUN, conn && !replay);
+    ENB(IDC_BTN_CPU_STOP, conn && !replay);
+    ENB(IDC_BTN_CPU_RHALT, conn && !replay);
+    ENB(IDC_BTN_CPU_STEP, conn && !replay);
+    ENB(IDC_BTN_CPU_STEPIN, conn && !replay);
+    ENB(IDC_BTN_CPU_STEPOUT, conn && !replay);
+    ENB(IDC_BTN_CPU_STEPOVER, conn && !replay); ENB(IDC_BTN_BP, conn && !replay);
     ENB(IDC_BTN_START, conn && g_app.watch_count > 0 && !running && !replay);
     ENB(IDC_BTN_STOP, running);
     ENB(IDC_BTN_LOGSTART, !replay); /* 可先录制再开始采集 */
@@ -382,14 +526,15 @@ void os_mainwin_update_buttons(void)
 static void refresh_status(void)
 {
     wchar_t w[512];
-    if (g_app.net_mode) {
-        _snwprintf(w, 512, L"通道: 网络（连接/断开/采集按键按网络语义复用）");
-    } else if (g_app.connected && g_app.driver) {
-        wchar_t dn[128];
-        os_utf8_to_wide_buf(g_app.driver->name, dn, 128);
-        _snwprintf(w, 512, L"已连接 %s", dn);
+    wchar_t dn[64], xn[16];
+    dn[0] = 0; xn[0] = 0;
+    if (g_app.connected && g_app.driver)
+        os_utf8_to_wide_buf(g_app.driver->name, dn, 64);
+    _snwprintf(xn, 16, g_app.xcp_connected ? L"XCP:ON" : L"XCP:off");
+    if (g_app.connected && g_app.driver) {
+        _snwprintf(w, 512, L"Probe:%s | %s | Net:independent", dn, xn);
     } else {
-        _snwprintf(w, 512, L"未连接");
+        _snwprintf(w, 512, L"Probe:off | %s | Net:independent", xn);
     }
     set_status(0, w);
     if (g_app.elf_path[0])
@@ -676,6 +821,34 @@ void os_mainwin_refresh_layout(void)
     layout();
 }
 
+static void open_source_path(const wchar_t* path)
+{
+    if (!path || !path[0]) return;
+    os_src_open_file(g_app.hTab, path, 0);
+    os_mainwin_refresh_layout();
+}
+
+static void src_quick_on_open(const wchar_t* path, void* user)
+{
+    (void)user;
+    open_source_path(path);
+}
+
+static void refresh_src_tree(void)
+{
+    os_srcidx_rebuild(&g_srcidx, &g_srcmap);
+    if (g_app.hSrcTree) os_srcidx_fill_tree(g_app.hSrcTree, &g_srcidx);
+}
+
+static void left_tab_show(int which)
+{
+    g_app.left_tab = which ? 1 : 0;
+    if (g_app.hLeftTab)
+        SendMessageW(g_app.hLeftTab, TCM_SETCURSEL, (WPARAM)g_app.left_tab, 0);
+    if (g_app.hTree) ShowWindow(g_app.hTree, g_app.left_tab == 0 ? SW_SHOW : SW_HIDE);
+    if (g_app.hSrcTree) ShowWindow(g_app.hSrcTree, g_app.left_tab == 1 ? SW_SHOW : SW_HIDE);
+}
+
 HWND os_win_create_by_type(const char* type, const wchar_t* title)
 {
     HWND h;
@@ -686,6 +859,11 @@ HWND os_win_create_by_type(const char* type, const wchar_t* title)
     }
     if (strcmp(type, "num") == 0) {
         h = os_num_create(g_app.hTab, 0, 0, 200, 150, title);
+        if (h) add_win_item(h, 0, NULL, NULL, title);
+        return h;
+    }
+    if (strcmp(type, "source") == 0) {
+        h = os_src_create(g_app.hTab, 0, 0, 200, 150, title);
         if (h) add_win_item(h, 0, NULL, NULL, title);
         return h;
     }
@@ -716,6 +894,7 @@ static void new_win_context_menu(void)
     GetCursorPos(&pt);
     AppendMenuW(m, MF_STRING, IDM_WIN_CHART, L"新建波形窗口");
     AppendMenuW(m, MF_STRING, IDM_WIN_NUM, L"新建数值窗口");
+    AppendMenuW(m, MF_STRING, IDM_WIN_SOURCE, L"新建源码窗口");
     for (i = 0; i < g_modwin_menu_count; i++) {
         wchar_t wname[128];
         os_utf8_to_wide_buf(g_modwin_menu[i].wt->display_name ? g_modwin_menu[i].wt->display_name
@@ -748,65 +927,100 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+
+static void layout_bar_controls(HWND bar, HWND fallback,
+    const struct { int id; int fixed_w; int combo; }* items, int n)
+{
+    int i, x = OS_DOCKBAR_GRIP + 4;
+    RECT br;
+    int bar_h = OS_DOCKBAR_THICK;
+    if (bar && GetClientRect(bar, &br) && br.bottom > 8) bar_h = br.bottom;
+    for (i = 0; i < n; i++) {
+        HWND c = bar ? GetDlgItem(bar, items[i].id) : NULL;
+        if (!c) c = GetDlgItem(fallback, items[i].id);
+        if (!c) continue;
+        if (bar && GetParent(c) != bar) {
+            SetParent(c, bar);
+            ShowWindow(c, SW_SHOW);
+        }
+        if (items[i].combo) {
+            MoveWindow(c, x, 4, items[i].fixed_w, 120, TRUE);
+            x += items[i].fixed_w + 4;
+        } else if (items[i].fixed_w) {
+            MoveWindow(c, x, (bar_h - 22) / 2, items[i].fixed_w, 22, TRUE);
+            x += items[i].fixed_w + 4;
+        } else {
+            wchar_t textw[64]; SIZE sz; HDC hdc; int len; int bw;
+            hdc = GetDC(c);
+            SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
+            len = GetWindowTextW(c, textw, 64);
+            if (len <= 0) { textw[0] = L'?'; textw[1] = 0; len = 1; }
+            GetTextExtentPoint32W(hdc, textw, len, &sz);
+            ReleaseDC(c, hdc);
+            bw = sz.cx + 14;
+            MoveWindow(c, x, (bar_h - 22) / 2, bw, 22, TRUE);
+            ShowWindow(c, SW_SHOW);
+            x += bw + 4;
+        }
+    }
+}
+
 static void layout(void)
 {
-    RECT rc;
-    int bw, bh = 34, sw, logh, right_h, right_w; /* 需求14 UI整合：单行工具栏（按钮+通道配置+网络） */
-    int parts[4];
+    RECT rc, content;
+    int bw, bh, sw, logh, right_h, right_w;
+    int parts[5];
     GetClientRect(g_app.hMain, &rc);
     bw = rc.right;
+    content = rc;
+    content.bottom -= 22;
+    os_dockbar_apply_layout(g_app.hMain, &content);
+    bh = content.top;
     sw = g_app.tree_w;
     logh = g_app.log_h;
-    /* F22: 消息栏收起时右侧窗口区占满（无分隔条/消息栏），只留底部细条 */
     if (g_app.log_hidden)
-        right_h = rc.bottom - bh - 22 - LOG_STRIP_H;
+        right_h = content.bottom - content.top - LOG_STRIP_H;
     else
-        right_h = rc.bottom - bh - logh - 22 - 5; /* F14: 5px 横向分隔条（消息栏上下拉伸） */
-    right_w = bw - sw - 5;
-    /* 工具栏一行（菜单栏正下方）：全部按钮 + 通道/核心/接口/速度/设备/刷新 + 网络IP/端口/监听/上传ELF/下载ELF */
+        right_h = content.bottom - content.top - logh - 5;
+    if (right_h < 40) right_h = 40;
+    right_w = content.right - content.left - sw - 5;
+        /* 停靠命令栏占用边距后，排布栏内控件 */
     {
-        static const struct { int id; int fixed_w; int combo; } items[] = {
-            { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_DISCON, 0, 0 },
+        HWND hMainBar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
+        HWND hDbgBar = os_dockbar_hwnd(OS_DOCKBAR_DEBUG);
+        static const struct { int id; int fixed_w; int combo; } main_items[] = {
+            { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_ATTACH, 0, 0 },
+            { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_FLASH, 0, 0 },
             { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
             { IDC_CFG_DRIVER, 100, 1 }, { IDC_CFG_DEVICE, 118, 1 }, { IDC_CFG_IFACE, 56, 1 },
             { IDC_CFG_SPEED, 80, 1 }, { IDC_CFG_EMU, 170, 1 }, { IDC_CFG_REFRESH, 48, 0 },
             { IDD_NET_IP, 96, 0 }, { IDD_NET_PORT, 44, 0 },
-            { IDD_NET_LISTEN, 0, 0 }, { IDD_NET_UPELF, 0, 0 }, { IDD_NET_DOWNELF, 0, 0 },
+            { IDD_NET_LISTEN, 0, 0 }, { IDD_NET_CONNECT, 0, 0 }, { IDD_NET_UPELF, 0, 0 }, { IDD_NET_DOWNELF, 0, 0 },
+            { IDC_XCP_TRANSPORT, 72, 1 }, { IDC_XCP_PORT, 72, 0 }, { IDC_XCP_BAUD, 56, 0 },
+            { IDC_XCP_SCAN, 0, 0 }, { IDC_XCP_CONNECT, 0, 0 }, { IDC_XCP_DISCONNECT, 0, 0 },
         };
-        int i, x = 6;
-        for (i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
-            HWND c = GetDlgItem(g_app.hMain, items[i].id);
-            if (!c) continue;
-            if (items[i].combo) {
-                MoveWindow(c, x, 5, items[i].fixed_w, 120, TRUE);
-                x += items[i].fixed_w + 4;
-            } else if (items[i].fixed_w) {
-                MoveWindow(c, x, 5, items[i].fixed_w, 22, TRUE);
-                x += items[i].fixed_w + 4;
-            } else {
-                wchar_t text[64];
-                SIZE sz;
-                HDC hdc = GetDC(c);
-                int n;
-                SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-                n = GetWindowTextW(c, text, 64);
-                if (n <= 0) { text[0] = L'?'; text[1] = 0; n = 1; }
-                GetTextExtentPoint32W(hdc, text, n, &sz);
-                ReleaseDC(c, hdc);
-                MoveWindow(c, x, 5, sz.cx + 14, 22, TRUE);
-                x += sz.cx + 18;
-            }
-        }
+        static const struct { int id; int fixed_w; int combo; } dbg_items[] = {
+            { IDC_BTN_CPU_RUN, 0, 0 }, { IDC_BTN_CPU_STOP, 0, 0 },
+            { IDC_BTN_CPU_RHALT, 0, 0 }, { IDC_BTN_CPU_STEP, 0, 0 },
+            { IDC_BTN_CPU_STEPIN, 0, 0 }, { IDC_BTN_CPU_STEPOUT, 0, 0 },
+            { IDC_BTN_CPU_STEPOVER, 0, 0 }, { IDC_BTN_BP, 0, 0 },
+        };
+        if (hMainBar) layout_bar_controls(hMainBar, g_app.hMain, main_items,
+            (int)(sizeof(main_items)/sizeof(main_items[0])));
+        if (hDbgBar) layout_bar_controls(hDbgBar, g_app.hMain, dbg_items,
+            (int)(sizeof(dbg_items)/sizeof(dbg_items[0])));
     }
     /* N9(d): 变量栏自动隐藏后，只留左侧细条；右侧窗口区从细条右侧开始 */
     if (g_app.tree_hidden) {
         if (g_app.hTreeStrip && IsWindow(g_app.hTreeStrip)) {
-            MoveWindow(g_app.hTreeStrip, 0, bh, 8, right_h, TRUE);
+            MoveWindow(g_app.hTreeStrip, content.left, bh, 8, right_h, TRUE);
             ShowWindow(g_app.hTreeStrip, SW_SHOW); /* Bug12: 隐藏变量栏时显示左侧细条 */
         }
         if (IsWindow(g_app.hTree)) ShowWindow(g_app.hTree, SW_HIDE);
+        if (g_app.hSrcTree && IsWindow(g_app.hSrcTree)) ShowWindow(g_app.hSrcTree, SW_HIDE);
+        if (g_app.hLeftTab && IsWindow(g_app.hLeftTab)) ShowWindow(g_app.hLeftTab, SW_HIDE);
         sw = 8;
         right_w = bw - sw - 5;
     } else {
@@ -814,18 +1028,44 @@ static void layout(void)
             ShowWindow(g_app.hTreeStrip, SW_HIDE);
         if (IsWindow(g_app.hTree)) ShowWindow(g_app.hTree, SW_SHOW);
     }
-    MoveWindow(g_app.hSplitV, sw, bh, 5, right_h, TRUE);
-    MoveWindow(g_app.hTree, 0, bh, g_app.tree_w, right_h, TRUE);
+    MoveWindow(g_app.hSplitV, content.left + sw, bh, 5, right_h, TRUE);
+    {
+        int th = LEFT_TAB_H;
+        int tree_top = bh + th;
+        int tree_h = right_h - th;
+        if (tree_h < 40) tree_h = 40;
+        if (g_app.hLeftTab && IsWindow(g_app.hLeftTab)) {
+            if (g_app.tree_hidden) ShowWindow(g_app.hLeftTab, SW_HIDE);
+            else {
+                MoveWindow(g_app.hLeftTab, content.left, bh, g_app.tree_w, th, TRUE);
+                ShowWindow(g_app.hLeftTab, SW_SHOW);
+            }
+        }
+        if (IsWindow(g_app.hTree)) {
+            if (g_app.tree_hidden) ShowWindow(g_app.hTree, SW_HIDE);
+            else {
+                MoveWindow(g_app.hTree, content.left, tree_top, g_app.tree_w, tree_h, TRUE);
+                ShowWindow(g_app.hTree, g_app.left_tab == 0 ? SW_SHOW : SW_HIDE);
+            }
+        }
+        if (g_app.hSrcTree && IsWindow(g_app.hSrcTree)) {
+            if (g_app.tree_hidden) ShowWindow(g_app.hSrcTree, SW_HIDE);
+            else {
+                MoveWindow(g_app.hSrcTree, content.left, tree_top, g_app.tree_w, tree_h, TRUE);
+                ShowWindow(g_app.hSrcTree, g_app.left_tab == 1 ? SW_SHOW : SW_HIDE);
+            }
+        }
+    }
     /* N12: 钉图标浮在变量栏右上角（隐藏时一并隐藏） */
     if (g_app.hTreePin && IsWindow(g_app.hTreePin)) {
         if (g_app.tree_hidden) {
             ShowWindow(g_app.hTreePin, SW_HIDE);
         } else {
-            MoveWindow(g_app.hTreePin, g_app.tree_w - 34, bh + 4, 30, 22, TRUE);
+            MoveWindow(g_app.hTreePin, content.left + g_app.tree_w - 34, bh + 4, 30, 22, TRUE);
             ShowWindow(g_app.hTreePin, SW_SHOW);
         }
     }
-    MoveWindow(g_app.hRight, sw + 5, bh, right_w - 5, right_h, TRUE);
+    MoveWindow(g_app.hRight, content.left + sw + 5, bh, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
     if (g_app.log_hidden) {
@@ -848,8 +1088,14 @@ static void layout(void)
         }
     }
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
-    parts[0] = 170; parts[1] = 420; parts[2] = 620; parts[3] = -1;
-    SendMessageW(g_app.hStatus, SB_SETPARTS, 4, (LPARAM)parts);
+    {
+        int cpu_w = 200;
+        parts[0] = 150; parts[1] = 380; parts[2] = 500;
+        parts[3] = (bw > cpu_w + 40) ? (bw - cpu_w) : (bw * 3 / 4);
+        parts[4] = -1;
+        SendMessageW(g_app.hStatus, SB_SETPARTS, 5, (LPARAM)parts);
+    }
+    refresh_cpu_status();
     /* Bug3: 全屏窗口随主窗口缩放同步铺满整个客户区 */
     if (g_app.fs_win && IsWindow(g_app.fs_win))
         MoveWindow(g_app.fs_win, 0, 0, rc.right, rc.bottom, TRUE);
@@ -1172,6 +1418,11 @@ static int load_elf_path(const wchar_t* path)
     g_app.elf_mtime = os_file_mtime_ms(path);
     os_vartree_build();
     os_vartree_fill_tree(g_app.hTree);
+    os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
+    refresh_src_tree();
+    os_log(OS_LOG_INFO, "源码行表: %d 条 / %d 个文件%s",
+           os_elf_line_count(elf), os_elf_line_file_count(elf),
+           os_elf_line_count(elf) > 0 ? "" : "（无 .debug_line，无法按行设断点）");
     os_layout_apply_pending(); /* 布局恢复时未解析的变量，ELF 就绪后补挂 */
     {
         /* 需求2：ELF 重载后叶下标可能漂移——全部本地窗口按变量名重绑 leaf_id，
@@ -1269,10 +1520,6 @@ static void cmd_connect(void)
     OS_ConnectCfg cfg;
     LRESULT ifi, emu, dci;
     /* 需求14 UI整合：网络通道下"连接"按键复用为网络连接 */
-    if (g_app.net_mode) {
-        cmd_net_action(OS_CMD_NET_CONNECT);
-        return;
-    }
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块");
         set_status(0, L"未加载驱动模块");
@@ -1289,23 +1536,23 @@ static void cmd_connect(void)
     }
     /* 直接读取界面配置，不再弹配置对话框 */
     memset(&cfg, 0, sizeof(cfg));
-    ifi = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
+    ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
     cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
     /* N8: 速度下拉可手工输入，直接解析输入框文本（"0 (自动)" 或非法输入 -> 0 自动） */
     {
         wchar_t sbuf[64];
         char sb8[64];
-        HWND hs = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
+        HWND hs = main_ctrl(IDC_CFG_SPEED);
         SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
         os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
         cfg.speed_khz = atoi(sb8);
         if (cfg.speed_khz < 0) cfg.speed_khz = 0;
         g_app.speed_khz = cfg.speed_khz; /* 采集线程块读合并成本模型按实际速度计算 */
     }
-    emu = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
+    emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
     cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
     /* 芯片核心：从界面下拉读取（F17 核心名列表，默认 Cortex-M4；纯内存读写无需具体型号） */
-    dci = SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
+    dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
     if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
         char dev8[128];
         os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
@@ -1331,13 +1578,86 @@ static void cmd_connect(void)
     os_mainwin_update_buttons();
 }
 
+
+static void cmd_start_acq(void); /* fwd */
+
+static void cmd_attach(void)
+{
+    /* 复用连接：attach=1 非侵入，成功后若有监视则开采集 */
+    int rc, c = 0;
+    OS_DriverInfo info;
+    OS_ConnectCfg cfg;
+    LRESULT ifi, emu, dci;
+    if (g_app.net_mode) {
+        MessageBoxW(g_app.hMain, L"网络通道不支持 Attach", L"Attach", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    if (!g_app.driver || !g_app.driver->command) {
+        os_log(OS_LOG_ERROR, "未加载驱动模块");
+        return;
+    }
+    if (g_emu_count <= 0) {
+        MessageBoxW(g_app.hMain, L"没有发现仿真器，请先刷新", L"Attach", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.attach = 1;
+    ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
+    cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
+    {
+        wchar_t sbuf[64]; char sb8[64];
+        HWND hs = main_ctrl(IDC_CFG_SPEED);
+        SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
+        os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
+        cfg.speed_khz = atoi(sb8);
+        if (cfg.speed_khz < 0) cfg.speed_khz = 0;
+        g_app.speed_khz = cfg.speed_khz;
+    }
+    emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
+    cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
+    dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
+    if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
+        char dev8[128];
+        os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
+        _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
+    } else _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
+    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    if (rc != OS_ERR_OK) {
+        os_log(OS_LOG_ERROR, "Attach 失败 rc=%d", rc);
+        os_mainwin_update_buttons();
+        return;
+    }
+    g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+    g_app.connected = c;
+    memset(&info, 0, sizeof(info));
+    g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
+    os_log(OS_LOG_INFO, "Attach 成功: %s", info.emulator[0] ? info.emulator : "?");
+    refresh_status();
+    os_mainwin_update_buttons();
+    if (g_app.connected && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
+        cmd_start_acq();
+}
+
+static void cmd_cpu_ctrl(int cmd, const wchar_t* ok_msg)
+{
+    int rc;
+    if (g_app.net_mode) return;
+    if (!g_app.driver || !g_app.connected) {
+        MessageBoxW(g_app.hMain, L"请先连接或 Attach", L"CPU", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    rc = g_app.driver->command(g_app.driver_ctx, cmd, NULL, NULL);
+    if (rc == OS_ERR_OK) {
+        os_log(OS_LOG_INFO, "CPU: %ls", ok_msg);
+        refresh_cpu_status();
+    } else {
+        os_log(OS_LOG_ERROR, "CPU 控制失败 cmd=%d rc=%d", cmd, rc);
+    }
+}
+
 static void cmd_disconnect(void)
 {
     /* 需求14 UI整合：网络通道下"断开"按键复用为网络停止 */
-    if (g_app.net_mode) {
-        cmd_net_action(OS_CMD_NET_STOP);
-        return;
-    }
     /* 先停采集再拆会话。否则采集线程下一圈看到未连接就报“MCU 连接已断开”并退出，
      * 和用户主动断开混在同一条错误日志里。 */
     if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
@@ -1413,11 +1733,11 @@ void os_mainwin_net_set(const wchar_t* ip, const wchar_t* port)
 {
     HWND h;
     if (ip) {
-        h = GetDlgItem(g_app.hMain, IDD_NET_IP);
+        h = main_ctrl(IDD_NET_IP);
         if (h) SetWindowTextW(h, ip);
     }
     if (port) {
-        h = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+        h = main_ctrl(IDD_NET_PORT);
         if (h) SetWindowTextW(h, port);
     }
 }
@@ -1426,8 +1746,8 @@ void os_mainwin_net_set(const wchar_t* ip, const wchar_t* port)
 static void cmd_net_action(int action)
 {
     wchar_t wip[64], wport[16]; char ip8[64];
-    HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
-    HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+    HWND hip = main_ctrl(IDD_NET_IP);
+    HWND hport = main_ctrl(IDD_NET_PORT);
     if (hip) GetWindowTextW(hip, wip, 64); else wip[0] = 0;
     if (hport) GetWindowTextW(hport, wport, 16); else _snwprintf(wport, 16, L"10000");
     os_wide_to_utf8_buf(wip, ip8, sizeof(ip8));
@@ -1455,7 +1775,7 @@ static int cfg_fill_emus(void)
     g_app.driver->command(g_app.driver_ctx, OS_CMD_SCAN, &req, NULL);
     n = req.count;
     g_emu_count = n;
-    h = GetDlgItem(g_app.hMain, IDC_CFG_EMU);
+    h = main_ctrl(IDC_CFG_EMU);
     if (!h) return n;
     SendMessageW(h, CB_RESETCONTENT, 0, 0);
     for (i = 0; i < n && i < 16; i++) {
@@ -1476,7 +1796,7 @@ static int cfg_fill_emus(void)
 /* AD-13：填充"仿真器/通道"下拉（全部 OS_CAP_DRIVER 模块 + 网络通道，需求14 UI整合） */
 static void cfg_fill_drivers(void)
 {
-    HWND h = GetDlgItem(g_app.hMain, IDC_CFG_DRIVER);
+    HWND h = main_ctrl(IDC_CFG_DRIVER);
     int i, n = os_modmgr_driver_count();
     if (!h) return;
     SendMessageW(h, CB_RESETCONTENT, 0, 0);
@@ -1487,7 +1807,6 @@ static void cfg_fill_drivers(void)
         os_utf8_to_wide_buf(nm, w, 64);
         SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)w);
     }
-    SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)L"网络"); /* 需求14：网络远程通道 */
     {
         int idx = os_modmgr_driver_index();
         SendMessageW(h, CB_SETCURSEL, (WPARAM)(idx >= 0 ? idx : 0), 0);
@@ -1497,7 +1816,7 @@ static void cfg_fill_drivers(void)
 /* 需求14 UI整合：当前通道是否选中"网络"（下拉末项） */
 static int net_mode_sel(void)
 {
-    HWND h = GetDlgItem(g_app.hMain, IDC_CFG_DRIVER);
+    HWND h = main_ctrl(IDC_CFG_DRIVER);
     LRESULT idx;
     if (!h) return 0;
     idx = SendMessageW(h, CB_GETCURSEL, 0, 0);
@@ -1519,12 +1838,12 @@ static void net_mode_apply_controls(void)
 /* 按当前驱动刷新速度下拉：驱动实现 OS_CMD_GET_FREQ（如 ST-Link 枚举档位）则用其档位，否则用 J-Link 预置 */
 static void cfg_fill_speeds(void)
 {
-    HWND h = GetDlgItem(g_app.hMain, IDC_CFG_SPEED);
+    HWND h = main_ctrl(IDC_CFG_SPEED);
     OS_FreqList fl;
     int i, iface, use_freq = 0;
     static const int speeds[] = { 0, 50, 100, 200, 400, 1000, 2000, 4000, 5000, 8000, 10000, 12000, 15000, 20000, 25000, 30000, 40000, 50000 };
     if (!h) return;
-    iface = (SendMessageW(GetDlgItem(g_app.hMain, IDC_CFG_IFACE), CB_GETCURSEL, 0, 0) == 1)
+    iface = (SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0) == 1)
                 ? OS_IF_JTAG : OS_IF_SWD;
     memset(&fl, 0, sizeof(fl));
     if (g_app.driver && g_app.driver->command &&
@@ -1557,17 +1876,83 @@ static void cfg_fill_speeds(void)
 
 /* AD-13：切换仿真器/通道——断开旧连接、重指驱动、重扫设备 + 刷新速度档位；
  * 选中"网络"项（末项）则进入网络远程通道（需求14 UI整合）。 */
-static void cmd_select_driver(int idx)
+
+static const char* xcp_transport_name_ui(void)
 {
-    if (idx == os_modmgr_driver_count()) {
-        /* 网络通道：连接/断开/开始采集/停止采集按键复用为网络语义 */
-        g_app.net_mode = 1;
-        net_mode_apply_controls();
-        refresh_status();
-        os_mainwin_update_buttons();
-        os_log(OS_LOG_INFO, "通道切换: 网络（连接=网络连接，开始采集=下达监视列表，停止采集=停止下达）");
+    LRESULT i = SendMessageW(main_ctrl(IDC_XCP_TRANSPORT), CB_GETCURSEL, 0, 0);
+    if (i == 1) return "can";
+    if (i == 2) return "tcp";
+    return "serial";
+}
+
+static void cmd_xcp_scan(void)
+{
+    OS_ScanReq req;
+    OS_DeviceInfo items[32];
+    int i;
+    if (!g_app.xcpmod || !g_app.xcpmod->command) {
+        os_log(OS_LOG_WARN, "XCP: 未加载模块");
         return;
     }
+    memset(&req, 0, sizeof(req));
+    req.items = items;
+    req.capacity = 32;
+    g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_SCAN, &req, NULL);
+    os_log(OS_LOG_INFO, "XCP 扫描结果 %d 个", req.count);
+    for (i = 0; i < req.count; i++)
+        os_log(OS_LOG_INFO, "  [%d] %s (%s)", i, items[i].name, items[i].serial);
+    if (req.count > 0 && items[0].name[0]) {
+        /* serial:COMx -> 填端口框 */
+        const char* p = strchr(items[0].name, ':');
+        wchar_t w[64];
+        os_utf8_to_wide_buf(p ? p + 1 : items[0].name, w, 64);
+        SetWindowTextW(main_ctrl(IDC_XCP_PORT), w);
+    }
+}
+
+static void cmd_xcp_connect(void)
+{
+    OS_ConnectCfg cfg;
+    wchar_t wp[64], wb[32];
+    char port8[64], baud8[32];
+    int rc, c = 0;
+    if (!g_app.xcpmod || !g_app.xcpmod->command) {
+        os_log(OS_LOG_ERROR, "XCP: 未加载模块");
+        return;
+    }
+    memset(&cfg, 0, sizeof(cfg));
+    cfg.probe_index = 0;
+    _snprintf(cfg.device, sizeof(cfg.device), "%s", xcp_transport_name_ui());
+    GetWindowTextW(main_ctrl(IDC_XCP_PORT), wp, 64);
+    GetWindowTextW(main_ctrl(IDC_XCP_BAUD), wb, 32);
+    os_wide_to_utf8_buf(wp, port8, sizeof(port8));
+    os_wide_to_utf8_buf(wb, baud8, sizeof(baud8));
+    _snprintf(cfg.serial, sizeof(cfg.serial), "%s", port8);
+    cfg.speed_khz = atoi(baud8);
+    if (cfg.speed_khz <= 0) cfg.speed_khz = 115200;
+    rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    if (rc != OS_ERR_OK) {
+        os_log(OS_LOG_ERROR, "XCP 连接失败 rc=%d", rc);
+        g_app.xcp_connected = 0;
+        return;
+    }
+    g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+    g_app.xcp_connected = c;
+    os_log(OS_LOG_INFO, "XCP 连接成功（与探针/网络并行）");
+    refresh_status();
+}
+
+static void cmd_xcp_disconnect(void)
+{
+    if (!g_app.xcpmod || !g_app.xcpmod->command) return;
+    g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+    g_app.xcp_connected = 0;
+    os_log(OS_LOG_INFO, "XCP 已断开");
+    refresh_status();
+}
+
+static void cmd_select_driver(int idx)
+{
     if (os_modmgr_select_driver(idx) != OS_ERR_OK) return;
     g_app.net_mode = 0;
     net_mode_apply_controls();
@@ -1587,13 +1972,13 @@ void os_mainwin_cfg_init(void)
     const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
     int i;
     cfg_fill_drivers();
-    h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
+    h = main_ctrl(IDC_CFG_DEVICE);
     if (h) {
         for (i = 0; i < (int)(sizeof(g_devices) / sizeof(g_devices[0])); i++)
             SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)g_devices[i]);
         SendMessageW(h, CB_SETCURSEL, 0, 0); /* 默认 Cortex-M4 */
     }
-    h = GetDlgItem(g_app.hMain, IDC_CFG_IFACE);
+    h = main_ctrl(IDC_CFG_IFACE);
     if (h) {
         for (i = 0; i < 2; i++) SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)ifaces[i]);
         SendMessageW(h, CB_SETCURSEL, 0, 0);
@@ -1619,8 +2004,7 @@ static void chart_broadcast(UINT msg)
 
 static void cmd_start_acq(void)
 {
-    /* 需求14 UI整合：网络通道下"开始采集"复用为"同步采集"（下达本机勾选监视列表） */
-    if (g_app.net_mode) {
+    if (0 && g_app.net_mode) {
         cmd_net_action(OS_CMD_NET_WATCH);
         return;
     }
@@ -1637,8 +2021,7 @@ static void cmd_start_acq(void)
 
 static void cmd_stop_acq(void)
 {
-    /* 需求14 UI整合：网络通道下"停止采集"复用为"停止下达"（对端停止采集） */
-    if (g_app.net_mode) {
+    if (0 && g_app.net_mode) {
         cmd_net_action(OS_CMD_NET_WATCH_STOP);
         return;
     }
@@ -1893,6 +2276,7 @@ void os_mainwin_rebuild_window_menu(void)
         DeleteMenu(g_menu_win, 0, MF_BYPOSITION);
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_CHART, L"波形窗口");
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_NUM, L"数值窗口");
+    AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_SOURCE, L"源码窗口");
     g_modwin_menu_count = 0;
     for (i = 0; i < g_app.winmod_count; i++) {
         const OS_WindowType* wt = g_app.winmods[i]->window_types;
@@ -2045,7 +2429,8 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORLISTBOX:
         return theme_ctlcolor((HDC)wParam, 1);
-    case WM_DESTROY: {
+    case WM_DESTROY:
+        os_dockbar_destroy(); {
         PickState* st = (PickState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
         free(st);
         return 0;
@@ -2391,9 +2776,9 @@ static void net_cfg_dialog(void)
     NetCfgState* st = (NetCfgState*)calloc(1, sizeof(NetCfgState));
     wchar_t cur_ip[64] = L"127.0.0.1", cur_port[16] = L"10000";
     if (!st) return;
-    h = GetDlgItem(g_app.hMain, IDD_NET_IP);
+    h = main_ctrl(IDD_NET_IP);
     if (h) GetWindowTextW(h, cur_ip, 64);
-    h = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+    h = main_ctrl(IDD_NET_PORT);
     if (h) GetWindowTextW(h, cur_port, 16);
     dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgNetCfg", L"网络配置",
                           WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
@@ -2420,8 +2805,8 @@ static void net_cfg_dialog(void)
     SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
     run_modal(dlg, g_app.hMain);
     if (st->ip_out[0]) {
-        HWND hip = GetDlgItem(g_app.hMain, IDD_NET_IP);
-        HWND hport = GetDlgItem(g_app.hMain, IDD_NET_PORT);
+        HWND hip = main_ctrl(IDD_NET_IP);
+        HWND hport = main_ctrl(IDD_NET_PORT);
         if (hip) SetWindowTextW(hip, st->ip_out);
         if (hport) SetWindowTextW(hport, st->port_out);
         os_log(OS_LOG_INFO, "网络配置: %ls:%ls", st->ip_out, st->port_out);
@@ -2603,7 +2988,7 @@ static void cmd_flash_dialog(void)
     int i;
     wchar_t cur_dev[128] = L"STM32G431RB";
     /* 优先用工具栏芯片核心名；Cortex-M* 无 Flash 算法，烧录窗改用 G431 默认（本机常用板） */
-    h = GetDlgItem(g_app.hMain, IDC_CFG_DEVICE);
+    h = main_ctrl(IDC_CFG_DEVICE);
     if (h) {
         LRESULT sel = SendMessageW(h, CB_GETCURSEL, 0, 0);
         if (sel != CB_ERR) {
@@ -3446,6 +3831,12 @@ void os_mainwin_apply_theme(void)
         SendMessageW(g_app.hTree, TVM_SETTEXTCOLOR, 0, os_theme(TH_TREE_TEXT));
         SendMessageW(g_app.hTree, TVM_SETLINECOLOR, 0, os_theme(TH_TREE_LINE));
         InvalidateRect(g_app.hTree, NULL, TRUE);
+    if (g_app.hSrcTree && IsWindow(g_app.hSrcTree)) {
+        SendMessageW(g_app.hSrcTree, TVM_SETBKCOLOR, 0, os_theme(TH_TREE_BG));
+        SendMessageW(g_app.hSrcTree, TVM_SETTEXTCOLOR, 0, os_theme(TH_TREE_TEXT));
+        SendMessageW(g_app.hSrcTree, TVM_SETLINECOLOR, 0, os_theme(TH_TREE_LINE));
+        InvalidateRect(g_app.hSrcTree, NULL, TRUE);
+    }
     }
     if (g_app.hLog && IsWindow(g_app.hLog)) {
         ListView_SetBkColor(g_app.hLog, os_theme(TH_LOG_BG));
@@ -3487,15 +3878,33 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         int i;
         g_app.hMain = hwnd;
         os_theme_set_main(hwnd);
-        g_app.hBtnBar = hwnd;
-        for (i = 0; i < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); i++) {
-            HWND b;
-            if (g_tool_btns[i].id >= 2110) continue; /* 网络按键（监听/上传ELF/下载ELF）由下方网络块创建 */
-            b = CreateWindowW(L"BUTTON", g_tool_btns[i].text,
-                              WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                              6 + i * 84, 5, 80, 24, hwnd, (HMENU)(INT_PTR)g_tool_btns[i].id,
-                              g_app.hInst, NULL);
-            SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        os_dockbar_register(g_app.hInst);
+        os_dockbar_create(hwnd, g_app.hInst);
+        os_srcmap_init(&g_srcmap);
+        os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
+        refresh_src_tree();
+        {
+            HWND hMainBar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
+            HWND hDbgBar = os_dockbar_hwnd(OS_DOCKBAR_DEBUG);
+            HWND parent = hMainBar ? hMainBar : hwnd;
+            g_app.hBtnBar = parent;
+            for (i = 0; i < (int)(sizeof(g_tool_btns) / sizeof(g_tool_btns[0])); i++) {
+                HWND b;
+                if (g_tool_btns[i].id >= 2110) continue;
+                b = CreateWindowW(L"BUTTON", g_tool_btns[i].text,
+                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                  6 + i * 84, 5, 80, 24, parent, (HMENU)(INT_PTR)g_tool_btns[i].id,
+                                  g_app.hInst, NULL);
+                SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            }
+            parent = hDbgBar ? hDbgBar : hwnd;
+            for (i = 0; i < (int)(sizeof(g_debug_btns) / sizeof(g_debug_btns[0])); i++) {
+                HWND b = CreateWindowW(L"BUTTON", g_debug_btns[i].text,
+                                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                      6 + i * 72, 5, 68, 24, parent, (HMENU)(INT_PTR)g_debug_btns[i].id,
+                                      g_app.hInst, NULL);
+                SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            }
         }
         /* 连接配置控件（仿真器/MCU核心/接口/速度/设备/刷新，随工具栏一行布局） */
         {
@@ -3544,6 +3953,50 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
               }
             }
         }
+                /* 配置/网络控件挂到主命令栏 */
+        
+        /* XCP 并行通道（与探针/网络独立） */
+        {
+            HWND c;
+            c = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST | WS_TABSTOP,
+                              1400, 5, 72, 120, hwnd, (HMENU)IDC_XCP_TRANSPORT, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            combo_install_theme(c);
+            SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)L"串口");
+            SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)L"CAN");
+            SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)L"TCP");
+            SendMessageW(c, CB_SETCURSEL, 0, 0);
+            c = CreateWindowW(L"EDIT", L"COM3", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                              1480, 5, 72, 21, hwnd, (HMENU)IDC_XCP_PORT, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            c = CreateWindowW(L"EDIT", L"115200", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_NUMBER,
+                              1560, 5, 56, 21, hwnd, (HMENU)IDC_XCP_BAUD, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+            { static const struct { int id; const wchar_t* t; } xb[] = {
+                { IDC_XCP_SCAN, L"XCP扫描" }, { IDC_XCP_CONNECT, L"XCP连接" }, { IDC_XCP_DISCONNECT, L"XCP断开" } };
+              int k;
+              for (k = 0; k < 3; k++) {
+                c = CreateWindowW(L"BUTTON", xb[k].t, WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                                  1620 + k * 72, 5, 70, 24, hwnd, (HMENU)(INT_PTR)xb[k].id, g_app.hInst, NULL);
+                SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+              }
+            }
+            c = CreateWindowW(L"BUTTON", L"网络连接", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                              0, 5, 72, 24, hwnd, (HMENU)IDD_NET_CONNECT, g_app.hInst, NULL);
+            SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        }
+
+        {
+            HWND bar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
+            int ids[] = { IDC_CFG_DRIVER, IDC_CFG_DEVICE, IDC_CFG_IFACE, IDC_CFG_SPEED, IDC_CFG_EMU, IDC_CFG_REFRESH,
+                          IDD_NET_IP, IDD_NET_PORT, IDD_NET_LISTEN, IDD_NET_CONNECT, IDD_NET_UPELF, IDD_NET_DOWNELF,
+                          IDC_XCP_TRANSPORT, IDC_XCP_PORT, IDC_XCP_BAUD, IDC_XCP_SCAN, IDC_XCP_CONNECT, IDC_XCP_DISCONNECT };
+            int k;
+            if (bar) for (k = 0; k < (int)(sizeof(ids)/sizeof(ids[0])); k++) {
+                HWND c = GetDlgItem(hwnd, ids[k]);
+                if (c) SetParent(c, bar);
+            }
+        }
         g_app.hTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                       WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
                                       TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_CHECKBOXES,
@@ -3555,6 +4008,29 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
          * 修改的位，style 是目标值。旧代码 style=0 会把 TVS_EX_MULTISELECT 清为 0
          * （禁用多选），应设为 TVS_EX_MULTISELECT 才真正开启。 */
         TreeView_SetExtendedStyle(g_app.hTree, TVS_EX_MULTISELECT, TVS_EX_MULTISELECT);
+        g_app.hLeftTab = CreateWindowW(WC_TABCONTROLW, L"",
+                                       WS_CHILD | WS_VISIBLE | TCS_FIXEDWIDTH,
+                                       0, 34, 340, LEFT_TAB_H, hwnd, NULL, g_app.hInst, NULL);
+        SendMessageW(g_app.hLeftTab, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        {
+            TCITEMW ti;
+            memset(&ti, 0, sizeof(ti));
+            ti.mask = TCIF_TEXT;
+            ti.pszText = L"变量";
+            TabCtrl_InsertItem(g_app.hLeftTab, 0, &ti);
+            ti.pszText = L"源码";
+            TabCtrl_InsertItem(g_app.hLeftTab, 1, &ti);
+            SendMessageW(g_app.hLeftTab, TCM_SETITEMSIZE, 0, MAKELPARAM(80, 20));
+        }
+        g_app.hSrcTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
+                                         WS_CHILD | TVS_HASLINES | TVS_HASBUTTONS |
+                                         TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+                                         0, 58, 340, 400, hwnd, NULL, g_app.hInst, NULL);
+        SendMessageW(g_app.hSrcTree, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        TreeView_SetUnicodeFormat(g_app.hSrcTree, TRUE);
+        g_app.left_tab = 0;
+        ShowWindow(g_app.hSrcTree, SW_HIDE);
+
         g_app.hSplitV = CreateWindowW(L"OSSplitter", L"", WS_CHILD | WS_VISIBLE,
                                       340, 34, 5, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hRight = CreateWindowExW(WS_EX_CLIENTEDGE, g_right_class, L"",
@@ -3610,6 +4086,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         mHelp = CreateMenu();
         g_menu_file = mFile;
         AppendMenuW(mFile, MF_STRING, IDC_BTN_OPEN, L"打开 ELF 文件...\tCtrl+O");
+        AppendMenuW(mFile, MF_STRING, IDM_SRCMAP, L"源码目录关联...");
+        AppendMenuW(mFile, MF_STRING, IDM_SRC_QUICK, L"快速打开源码...\tCtrl+P");
         AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_SAVE, L"保存布局为...");
         AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_LOAD, L"加载布局...");
         AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
@@ -3618,7 +4096,17 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mFile, MF_STRING, IDM_EXIT, L"退出\tAlt+F4");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_CONNECT, L"连接...\tF5");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_ATTACH, L"Attach（不打断运行）\tF4");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_DISCON, L"断开\tF6");
+        AppendMenuW(mAcq, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_RUN, L"Run");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STOP, L"Stop");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_RHALT, L"Reset & Halt");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STEP, L"Step");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STEPIN, L"Step In");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STEPOUT, L"Step Out");
+        AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STEPOVER, L"Step Over");
+        AppendMenuW(mAcq, MF_STRING, IDM_BP, L"断点...");
         AppendMenuW(mAcq, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_START, L"开始采集\tF7");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_STOP, L"停止采集\tF8");
@@ -3932,6 +4420,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_layout_apply_pending();
         os_mainwin_refresh_status();
         return 0;
+    case WM_OS_SRC_UI:
+        return os_mainwin_src_ui((OS_SrcUiReq*)lParam);
     case WM_NOTIFY: {
         LPNMHDR h = (LPNMHDR)lParam;
         if (h && h->hwndFrom == g_app.hTab) {
@@ -3965,6 +4455,28 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                     if (kv->wVKey == 'A') { log_select_all(); return 0; }
                     if (kv->wVKey == 'C') { log_copy_selected(); return 0; }
                 }
+            }
+        }
+        if (h && h->hwndFrom == g_app.hLeftTab) {
+            if (h->code == TCN_SELCHANGE) {
+                int sel = (int)SendMessageW(g_app.hLeftTab, TCM_GETCURSEL, 0, 0);
+                left_tab_show(sel);
+                return 0;
+            }
+        }
+        if (h && h->hwndFrom == g_app.hSrcTree) {
+            if (h->code == NM_DBLCLK) {
+                HTREEITEM it = TreeView_GetSelection(g_app.hSrcTree);
+                TVITEMW vi;
+                memset(&vi, 0, sizeof(vi));
+                vi.mask = TVIF_PARAM;
+                vi.hItem = it;
+                if (it && TreeView_GetItem(g_app.hSrcTree, &vi) && vi.lParam > 0) {
+                    int ix = (int)vi.lParam - 1;
+                    if (ix >= 0 && ix < g_srcidx.count)
+                        open_source_path(g_srcidx.paths[ix]);
+                }
+                return 0;
             }
         }
         if (h && h->hwndFrom == g_app.hTree) {
@@ -4002,7 +4514,38 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         switch (LOWORD(wParam)) {
         case IDC_BTN_OPEN: cmd_open_elf(); break;
         case IDC_BTN_CONNECT: cmd_connect(); break;
+        case IDC_BTN_ATTACH: cmd_attach(); break;
         case IDC_BTN_DISCON: cmd_disconnect(); break;
+        case IDC_BTN_CPU_RUN: cmd_cpu_ctrl(OS_CMD_GO, L"Run"); break;
+        case IDC_BTN_CPU_STOP: cmd_cpu_ctrl(OS_CMD_HALT, L"Stop"); break;
+        case IDC_BTN_CPU_RHALT: cmd_cpu_ctrl(OS_CMD_RESET, L"Reset & Halt"); break;
+        case IDC_BTN_CPU_STEP: cmd_cpu_ctrl(OS_CMD_STEP, L"Step"); break;
+        case IDC_BTN_CPU_STEPIN: cmd_cpu_ctrl(OS_CMD_STEP_IN, L"Step In"); break;
+        case IDC_BTN_CPU_STEPOUT: cmd_cpu_ctrl(OS_CMD_STEP_OUT, L"Step Out"); break;
+        case IDC_BTN_CPU_STEPOVER: cmd_cpu_ctrl(OS_CMD_STEP_OVER, L"Step Over"); break;
+        case IDC_BTN_BP:
+        case IDM_BP:
+            if (!g_app.connected)
+                os_msgbox(hwnd, L"请先连接仿真器", L"断点", MB_OK | MB_ICONINFORMATION);
+            else
+                os_bpwin_dialog(hwnd);
+            break;
+        case IDM_SRCMAP:
+            os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
+            os_srcmap_dialog(hwnd, &g_srcmap);
+            refresh_src_tree();
+            left_tab_show(1);
+            break;
+        case IDM_SRC_QUICK:
+            os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
+            if (g_srcidx.count <= 0) refresh_src_tree();
+            if (g_srcidx.count <= 0) {
+                os_msgbox(hwnd, L"请先在「源码目录关联」中添加源码根目录", L"快速打开", MB_OK | MB_ICONINFORMATION);
+                break;
+            }
+            os_srcidx_quick_open(hwnd, &g_srcidx, src_quick_on_open, NULL);
+            break;
+
         case IDC_CFG_REFRESH:
             if (cfg_fill_emus() <= 0) {
                 wchar_t msg[256], dn[64];
@@ -4021,6 +4564,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_REPLAYSTOP: cmd_replay_stop(); break;
         case IDM_HELP_DOC: os_help_show(hwnd); break; /* 需求12：帮助文档（F1 同路径） */
         case IDD_NET_LISTEN: cmd_net_action(OS_CMD_NET_START); break;
+
+        case IDD_NET_CONNECT: cmd_net_action(OS_CMD_NET_CONNECT); break;
+        case IDC_XCP_SCAN: cmd_xcp_scan(); break;
+        case IDC_XCP_CONNECT: cmd_xcp_connect(); break;
+        case IDC_XCP_DISCONNECT: cmd_xcp_disconnect(); break;
         case IDD_NET_UPELF: cmd_net_action(OS_CMD_NET_SYNC_ELF); break;
         case IDD_NET_DOWNELF: cmd_net_action(OS_CMD_NET_ELF_PULL); break;
         /* 需求14 UI整合：网络菜单 */
@@ -4082,6 +4630,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         case IDM_WIN_CHART: cmd_add_window(1); break;
         case IDM_WIN_NUM: cmd_add_window(0); break;
+        case IDM_WIN_SOURCE:
+            if (g_srcidx.count <= 0) refresh_src_tree();
+            if (g_srcidx.count <= 0) {
+                os_msgbox(hwnd, L"请先配置源码目录关联", L"源码", MB_OK | MB_ICONINFORMATION);
+                break;
+            }
+            os_srcidx_quick_open(hwnd, &g_srcidx, src_quick_on_open, NULL);
+            break;
         case IDM_TREE_ALL: tree_select_all(1); break;
         case IDM_TREE_NONE: tree_select_all(0); break;
         case IDM_TREE_RELOAD: os_mainwin_reload_elf(); break;
@@ -4272,4 +4828,194 @@ void os_mainwin_register(void)
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSDlgFlash";
     RegisterClassW(&wc);
+}
+
+/* ---- ???? / ????AI ????? ---- */
+
+void os_mainwin_src_refresh_index(void)
+{
+    os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
+    refresh_src_tree();
+}
+
+int os_mainwin_src_file_count(void)
+{
+    return g_srcidx.count;
+}
+
+int os_mainwin_src_get_file(int idx, char* utf8, int cap)
+{
+    if (!utf8 || cap <= 0 || idx < 0 || idx >= g_srcidx.count) return -1;
+    os_wide_to_utf8_buf(g_srcidx.paths[idx], utf8, cap);
+    return 0;
+}
+
+int os_mainwin_src_find(const char* needle_utf8, int* out_idx, int max)
+{
+    wchar_t needle[260];
+    int tmp[256];
+    int n, i, use;
+    if (!out_idx || max <= 0) return 0;
+    os_utf8_to_wide_buf(needle_utf8 ? needle_utf8 : "", needle, 260);
+    use = max < 256 ? max : 256;
+    n = os_srcidx_fuzzy(&g_srcidx, needle, tmp, use);
+    for (i = 0; i < n; i++) out_idx[i] = tmp[i];
+    return n;
+}
+
+int os_mainwin_src_root_count(void)
+{
+    return g_srcmap.root_count;
+}
+
+int os_mainwin_src_get_root(int i, char* utf8, int cap)
+{
+    if (!utf8 || cap <= 0 || i < 0 || i >= g_srcmap.root_count) return -1;
+    os_wide_to_utf8_buf(g_srcmap.roots[i], utf8, cap);
+    return 0;
+}
+
+int os_mainwin_src_add_root(const char* utf8_path)
+{
+    wchar_t w[MAX_PATH];
+    int i;
+    if (!utf8_path || !utf8_path[0]) return -1;
+    os_utf8_to_wide_buf(utf8_path, w, MAX_PATH);
+    if (!w[0]) return -1;
+    for (i = 0; i < g_srcmap.root_count; i++)
+        if (_wcsicmp(g_srcmap.roots[i], w) == 0) {
+            refresh_src_tree();
+            return 0;
+        }
+    if (g_srcmap.root_count >= OS_SRCMAP_MAX_ROOTS) return -1;
+    _snwprintf(g_srcmap.roots[g_srcmap.root_count], MAX_PATH, L"%s", w);
+    g_srcmap.root_count++;
+    if (g_app.elf_path[0])
+        _snwprintf(g_srcmap.elf_path, MAX_PATH, L"%s", g_app.elf_path);
+    os_srcmap_save(&g_srcmap);
+    refresh_src_tree();
+    return 0;
+}
+
+int os_mainwin_src_open(const char* path_utf8, int goto_line)
+{
+    wchar_t w[MAX_PATH];
+    HWND h;
+    DWORD attr;
+    if (!path_utf8 || !path_utf8[0]) return -1;
+    w[0] = 0;
+    if (!os_srcmap_resolve(&g_srcmap, path_utf8, w, MAX_PATH))
+        os_utf8_to_wide_buf(path_utf8, w, MAX_PATH);
+    attr = GetFileAttributesW(w);
+    if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY)) {
+        /* ?????? basename */
+        int ids[8], n, i;
+        const char* base = strrchr(path_utf8, '\\');
+        if (!base) base = strrchr(path_utf8, '/');
+        base = base ? base + 1 : path_utf8;
+        if (g_srcidx.count <= 0) refresh_src_tree();
+        n = os_mainwin_src_find(base, ids, 8);
+        for (i = 0; i < n; i++) {
+            char found[MAX_PATH];
+            if (os_mainwin_src_get_file(ids[i], found, sizeof(found)) != 0) continue;
+            os_utf8_to_wide_buf(found, w, MAX_PATH);
+            attr = GetFileAttributesW(w);
+            if (attr != INVALID_FILE_ATTRIBUTES && !(attr & FILE_ATTRIBUTE_DIRECTORY))
+                break;
+            w[0] = 0;
+        }
+        if (!w[0]) return -1;
+    }
+    h = os_src_open_file(g_app.hTab, w, goto_line);
+    if (!h) return -1;
+    /* follow_pc ???? refresh_layout???? CPU ??????? */
+    if (!g_follow_busy)
+        os_mainwin_refresh_layout();
+    return 0;
+}
+
+int os_mainwin_src_follow_pc(uint32_t pc, char* path_out, int path_cap, int* line_out)
+{
+    char file[512];
+    wchar_t local[MAX_PATH];
+    char local8[MAX_PATH];
+    int line = 0;
+    if (path_out && path_cap > 0) path_out[0] = 0;
+    if (line_out) *line_out = 0;
+    if (!g_app.elf) return -1;
+    if (!os_elf_line_of_addr(g_app.elf, pc, file, sizeof(file), &line) || line <= 0)
+        return -1;
+    local[0] = 0;
+    if (!os_srcmap_resolve(&g_srcmap, file, local, MAX_PATH))
+        os_utf8_to_wide_buf(file, local, MAX_PATH);
+    os_wide_to_utf8_buf(local, local8, sizeof(local8));
+    g_follow_busy = 1;
+    if (os_mainwin_src_open(local8[0] ? local8 : file, line) != 0) {
+        g_follow_busy = 0;
+        return -1;
+    }
+    os_src_set_pc_line(local, line);
+    g_follow_busy = 0;
+    if (path_out && path_cap > 0)
+        _snprintf(path_out, path_cap, "%s", local8[0] ? local8 : file);
+    if (line_out) *line_out = line;
+    return 0;
+}
+
+static int on_ui_thread(void)
+{
+    DWORD tid = GetCurrentThreadId();
+    DWORD uit = g_app.hMain ? GetWindowThreadProcessId(g_app.hMain, NULL) : 0;
+    return uit && tid == uit;
+}
+
+LRESULT os_mainwin_src_ui(OS_SrcUiReq* req)
+{
+    if (!req) return -1;
+    req->result = -1;
+    req->out_path[0] = 0;
+    req->out_line = 0;
+    if (req->op == 0) {
+        req->result = os_mainwin_src_open(req->path, req->line);
+        if (req->result == 0) {
+            _snprintf(req->out_path, sizeof(req->out_path), "%s", req->path);
+            req->out_line = req->line;
+        }
+    } else if (req->op == 1) {
+        req->result = os_mainwin_src_follow_pc(req->pc, req->out_path,
+                                               (int)sizeof(req->out_path), &req->out_line);
+    }
+    return req->result;
+}
+
+/* ???????????????? UI */
+static int src_ui_invoke(OS_SrcUiReq* req)
+{
+    if (!req) return -1;
+    if (on_ui_thread() || !g_app.hMain)
+        return (int)os_mainwin_src_ui(req);
+    return (int)SendMessageW(g_app.hMain, WM_OS_SRC_UI, 0, (LPARAM)req);
+}
+
+int os_mainwin_src_open_safe(const char* path_utf8, int goto_line)
+{
+    OS_SrcUiReq req;
+    memset(&req, 0, sizeof(req));
+    req.op = 0;
+    req.line = goto_line;
+    if (path_utf8) _snprintf(req.path, sizeof(req.path), "%s", path_utf8);
+    return src_ui_invoke(&req);
+}
+
+int os_mainwin_src_follow_pc_safe(uint32_t pc, char* path_out, int path_cap, int* line_out)
+{
+    OS_SrcUiReq req;
+    memset(&req, 0, sizeof(req));
+    req.op = 1;
+    req.pc = pc;
+    if (src_ui_invoke(&req) != 0) return -1;
+    if (path_out && path_cap > 0)
+        _snprintf(path_out, path_cap, "%s", req.out_path);
+    if (line_out) *line_out = req.out_line;
+    return 0;
 }

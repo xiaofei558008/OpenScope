@@ -156,6 +156,169 @@ void os_log_remove_listener(os_log_listener_fn fn, void* user)
     LeaveCriticalSection(&g_log_cs);
 }
 
+/* ---- 弹窗/严重反馈环（AI alerts.read / ui.silent）---- */
+static OS_Alert g_alert_ring[OS_ALERT_RING_CAP];
+static int g_alert_ring_head;
+static int g_alert_ring_count;
+static uint64_t g_alert_ring_seq;
+static volatile LONG g_ui_silent;
+static volatile LONG g_yesno_default_yes = 1; /* 静默 YESNO 默认选「是」 */
+
+void os_ui_set_silent(int on)
+{
+    InterlockedExchange(&g_ui_silent, on ? 1 : 0);
+}
+
+int os_ui_silent(void)
+{
+    return (int)InterlockedCompareExchange(&g_ui_silent, 0, 0);
+}
+
+void os_ui_set_yesno_default(int yes)
+{
+    InterlockedExchange(&g_yesno_default_yes, yes ? 1 : 0);
+}
+
+int os_ui_yesno_default(void)
+{
+    return (int)InterlockedCompareExchange(&g_yesno_default_yes, 0, 0);
+}
+
+static int alert_level_from_type(UINT type)
+{
+    UINT icon = type & 0xF0;
+    if (icon == MB_ICONERROR || icon == MB_ICONHAND) return OS_LOG_ERROR;
+    if (icon == MB_ICONWARNING || icon == MB_ICONEXCLAMATION) return OS_LOG_WARN;
+    return OS_LOG_INFO;
+}
+
+static int silent_auto_result(UINT type)
+{
+    UINT btns = type & 0x0F;
+    UINT def = type & 0xF00;
+    int def_idx = 0;
+    if (def == MB_DEFBUTTON2) def_idx = 1;
+    else if (def == MB_DEFBUTTON3) def_idx = 2;
+    else if (def == MB_DEFBUTTON4) def_idx = 3;
+    switch (btns) {
+    case MB_OKCANCEL:
+        return def_idx == 1 ? IDCANCEL : IDOK;
+    case MB_YESNO:
+        if (def_idx == 1) return IDNO;
+        return InterlockedCompareExchange(&g_yesno_default_yes, 0, 0) ? IDYES : IDNO;
+    case MB_YESNOCANCEL:
+        if (def_idx == 1) return IDNO;
+        if (def_idx == 2) return IDCANCEL;
+        return InterlockedCompareExchange(&g_yesno_default_yes, 0, 0) ? IDYES : IDNO;
+    case MB_RETRYCANCEL:
+        return def_idx == 1 ? IDCANCEL : IDRETRY;
+    case MB_ABORTRETRYIGNORE:
+        if (def_idx == 1) return IDRETRY;
+        if (def_idx == 2) return IDIGNORE;
+        return IDABORT;
+    default:
+        return IDOK;
+    }
+}
+
+static void alert_ring_push(int level, int type, int result, int silenced,
+                            const char* title, const char* text)
+{
+    OS_Alert* e;
+    int64_t now = os_time_us();
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    g_alert_ring_seq++;
+    e = &g_alert_ring[g_alert_ring_head];
+    e->seq = g_alert_ring_seq;
+    e->ts_us = now;
+    e->level = level;
+    e->type = type;
+    e->result = result;
+    e->silenced = silenced ? 1 : 0;
+    _snprintf(e->title, sizeof(e->title), "%s", title ? title : "");
+    _snprintf(e->text, sizeof(e->text), "%s", text ? text : "");
+    g_alert_ring_head = (g_alert_ring_head + 1) % OS_ALERT_RING_CAP;
+    if (g_alert_ring_count < OS_ALERT_RING_CAP) g_alert_ring_count++;
+    LeaveCriticalSection(&g_log_cs);
+}
+
+int os_alert_ring_copy(uint64_t since, OS_Alert* out, int max, uint64_t* next_since)
+{
+    int start, i, n = 0;
+    uint64_t next;
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    next = g_alert_ring_seq;
+    if (!out || max <= 0 || g_alert_ring_count <= 0) {
+        if (next_since) *next_since = next;
+        LeaveCriticalSection(&g_log_cs);
+        return 0;
+    }
+    start = (g_alert_ring_head - g_alert_ring_count + OS_ALERT_RING_CAP) % OS_ALERT_RING_CAP;
+    for (i = 0; i < g_alert_ring_count && n < max; i++) {
+        OS_Alert* e = &g_alert_ring[(start + i) % OS_ALERT_RING_CAP];
+        if (e->seq <= since) continue;
+        out[n++] = *e;
+    }
+    if (next_since) *next_since = next;
+    LeaveCriticalSection(&g_log_cs);
+    return n;
+}
+
+uint64_t os_alert_ring_head_seq(void)
+{
+    uint64_t s;
+    log_cs_ensure();
+    EnterCriticalSection(&g_log_cs);
+    s = g_alert_ring_seq;
+    LeaveCriticalSection(&g_log_cs);
+    return s;
+}
+
+int os_msgbox(HWND owner, const wchar_t* text, const wchar_t* title, UINT type)
+{
+    char t8[128], x8[OS_ALERT_TEXT_CAP];
+    int level, silenced, result;
+    os_wide_to_utf8_buf(title ? title : L"OpenScope", t8, sizeof(t8));
+    os_wide_to_utf8_buf(text ? text : L"", x8, sizeof(x8));
+    level = alert_level_from_type(type);
+    silenced = os_ui_silent();
+    if (silenced) {
+        result = silent_auto_result(type);
+        alert_ring_push(level, (int)type, result, 1, t8, x8);
+        os_log(level, "[弹窗/静默] %s | %s (result=%d type=0x%X)", t8, x8, result, (unsigned)type);
+        return result;
+    }
+    result = MessageBoxW(owner, text, title, type);
+    alert_ring_push(level, (int)type, result, 0, t8, x8);
+    os_log(level, "[弹窗] %s | %s (result=%d type=0x%X)", t8, x8, result, (unsigned)type);
+    return result;
+}
+
+void os_alert_fatal(const char* title_utf8, const char* text_utf8, int force_no_ui)
+{
+    char t8[128], x8[OS_ALERT_TEXT_CAP];
+    int no_ui;
+    _snprintf(t8, sizeof(t8), "%s", title_utf8 ? title_utf8 : "OpenScope");
+    _snprintf(x8, sizeof(x8), "%s", text_utf8 ? text_utf8 : "");
+    alert_ring_push(OS_LOG_ERROR, (int)(MB_OK | MB_ICONERROR), IDOK, 1, t8, x8);
+    /* 崩溃路径：尽量只写文件，避免再进完整 os_log/UI */
+    {
+        char line[1200], ts[40];
+        os_time_iso(os_time_us(), ts, sizeof(ts));
+        _snprintf(line, sizeof(line), "%s [FATAL] [崩溃弹窗] %s | %s", ts, t8, x8);
+        os_log_file_write_raw(line);
+    }
+    no_ui = force_no_ui || os_ui_silent();
+    if (!no_ui) {
+        wchar_t wt[128], wx[OS_ALERT_TEXT_CAP];
+        os_utf8_to_wide_buf(t8, wt, 128);
+        os_utf8_to_wide_buf(x8, wx, OS_ALERT_TEXT_CAP);
+        MessageBoxW(NULL, wx, wt, MB_OK | MB_ICONERROR);
+    }
+}
+
 void os_log_file_open(const wchar_t* path)
 {
     long pos;

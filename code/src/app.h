@@ -64,11 +64,16 @@ typedef struct {
 #define WM_OS_PICK_TEST_ADD (WM_APP + 43) /* 测试钩子（发给搜索/选变量对话框）：等价右键菜单添加 (wParam=1 波形, 0 数值) */
 #define WM_OS_NUM_TEST_DUMP (WM_APP + 46) /* 测试钩子（发给数值窗口）：逐行日志输出 min/max。不得与 WM_OS_LEAF_SYNC 同号 */
 #define WM_OS_NUM_TEST_EDIT (WM_APP + 45) /* 测试钩子（发给数值窗口）：打开就地编辑框 (wParam=行, lParam=列) */
+#define WM_OS_FLASH_PROGRESS (WM_APP + 47) /* 烧录进度：wParam=0..100 或 0xFFFFFFFF=滚动；lParam=heap UTF-8 阶段串（接收方 free） */
+#define WM_OS_FLASH_DONE     (WM_APP + 48) /* 烧录/擦除完成：wParam=rc，lParam=FlashJob* */
+#define WM_OS_SRC_UI         (WM_APP + 49) /* 源码 UI：lParam=OS_SrcUiReq*（SendMessage 同步，主线程执行） */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 #define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */
 #define IDM_HELP_DOC 2702 /* 需求12：帮助菜单"帮助文档" + F1 快捷键 */
 #define IDM_TREE_FIND 2703 /* Ctrl+F 快速搜索变量（加速键，main.c 消息循环层拦截） */
+#define IDM_SRC_QUICK 2704 /* Ctrl+P 快速打开源码文件 */
+#define IDM_WIN_SOURCE 2705 /* 新建源码窗口 */
 
 typedef enum {
     OS_ACQ_STOPPED = 0,
@@ -114,6 +119,9 @@ typedef struct OS_WinItem {
 typedef struct OS_App {
     HINSTANCE hInst;
     HWND hMain, hTree, hRight, hLog, hStatus, hSplitV, hSplitH, hBtnBar, hTab;
+    HWND hLeftTab;         /* 左侧：变量 / 源码 标签 */
+    HWND hSrcTree;         /* 源码文件树 */
+    int  left_tab;         /* 0=变量 1=源码 */
     HWND hTreeStrip;       /* N9(d): 变量栏隐藏后左侧细条（悬停展开） */
     HWND hTreePin;         /* N12: 变量栏顶部钉图标按钮（钉住/自动隐藏） */
     HWND hLogStrip;        /* F22: 消息栏收起后的底部细条（点击弹出） */
@@ -142,8 +150,11 @@ typedef struct OS_App {
     OS_Module* winmods[OS_MAX_MODULES];
     void* winmod_ctx[OS_MAX_MODULES];
     int winmod_count;
-    OS_Module* netmod;      /* 网络模块（OS_CAP_NET，需求 14） */
+    OS_Module* netmod;      /* 网络模块（OS_CAP_NET，需求 14）——与探针并行 */
     void* netmod_ctx;
+    OS_Module* xcpmod;      /* XCP 模块（OS_CAP_XCP）——与探针/网络并行 */
+    void* xcpmod_ctx;
+    int  xcp_connected;     /* UI 镜像：XCP 是否已连接 */
     OS_Framework fw;
 
     volatile LONG acq_state;
@@ -170,7 +181,7 @@ typedef struct OS_App {
     int  net_connect_port;
     int  net_sync_flag;            /* 1=连接后触发 ELF 双向同步 */
     int  net_exit_ms;              /* >0 启动 N ms 后自动退出 */
-    int  net_mode;                 /* UI 整合：通道下拉选中"网络"=1（连接/断开/采集按键按网络语义复用） */
+    int  net_mode;                 /* 兼容旧测试钩子；并行模式下不再用下拉独占通道 */
     int  net_watch_flag;           /* 1=连接后发送监视列表（--net-watch） */
     char net_write_name[64];       /* --net-write=name=value：连接后网络写变量 */
     char net_write_value[64];
@@ -216,6 +227,7 @@ extern OS_App g_app;
 /* 框架回调实现（分布于各文件） */
 void os_fw_log(int level, const char* fmt, ...);
 void os_fw_post(UINT msg, WPARAM w, LPARAM l);
+void os_fw_flash_progress(int percent, const char* phase_utf8);
 const struct OS_Variable* os_fw_find(const char* name);
 int os_fw_leaf_count(void);
 const char* os_fw_leaf_name(int id);

@@ -72,6 +72,17 @@ int  os_elf_find_var(OS_ElfFile* f, const char* name);  /* 精确匹配，返回
 /* 模糊搜索（子串匹配，不区分大小写），返回匹配数，结果写入 out（最多 max 个索引）。 */
 int  os_elf_find_vars(OS_ElfFile* f, const char* needle, int max, int* out);
 
+/* ---- DWARF .debug_line：源码行 ↔ 地址 ---- */
+int         os_elf_line_count(OS_ElfFile* f);
+int         os_elf_line_file_count(OS_ElfFile* f);
+const char* os_elf_line_file_at(OS_ElfFile* f, int idx);
+/* 按文件路径/文件名 + 行号查指令地址；成功返回 1 并写 *out_addr */
+int         os_elf_addr_of_line(OS_ElfFile* f, const char* path_or_name, int line,
+                                uint32_t* out_addr);
+/* 按地址查源文件与行号；成功返回 1 */
+int         os_elf_line_of_addr(OS_ElfFile* f, uint32_t addr,
+                                char* file_out, int file_cap, int* line_out);
+
 #ifdef __cplusplus
 }
 #endif

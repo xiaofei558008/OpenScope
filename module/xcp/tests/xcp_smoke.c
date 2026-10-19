@@ -1,6 +1,7 @@
 /* XCP 1.3 协议冒烟：进程内主从回环。传输不走 TCP。 */
 #include "xcp_master.h"
 #include "xcp_slave.h"
+#include "xcp_transport.h"
 #include "xcp_can.h"
 
 #include <stdio.h>
@@ -165,6 +166,11 @@ int main(void)
     printf("xcp smoke\n");
     expect(xcp_can_backend_count() == 0 && xcp_can_backend(0) == 0,
            "CAN 后端尚未接入（周立功、Kvaser）");
+    xcp_transport_init_builtins();
+    expect(xcp_transport_count() >= 3, "内置传输 serial/can/tcp");
+    expect(xcp_transport_by_name("serial") != 0, "serial 传输");
+    expect(xcp_transport_by_name("tcp") != 0, "tcp 传输");
+    expect(xcp_transport_by_name("can") != 0, "can 传输占位");
     test_loop();
     if (g_fail) {
         printf("XCP SMOKE FAIL (%d)\n", g_fail);

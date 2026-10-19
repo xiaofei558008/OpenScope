@@ -10,6 +10,8 @@
 #include "datalog.h"
 #include "util.h"
 #include "version.h"
+#include "elf.h"
+#include "srcwin.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -175,14 +177,36 @@ static const AI_Tool g_tools[] = {
     {"tools.list", "列出全部可用工具（含已加载模块动态扩展）", "{}"},
     {"status", "软件/连接/采集/ELF 状态摘要", "{}"},
     {"modules.list", "已加载 DLL 模块列表", "{}"},
-    {"drivers.list", "驱动模块列表", "{}"},
-    {"drivers.select", "选择当前驱动", "{\"index\":0}"},
+    {"drivers.list", "探针驱动列表（仅 J-Link/ST-Link）", "{}"},
+    {"drivers.select", "选择探针驱动", "{\"index\":0}"},
     {"probe.scan", "扫描仿真器", "{}"},
-    {"connect", "连接 MCU", "{\"device\":\"Cortex-M4\",\"iface\":0,\"speed_khz\":4000,\"probe_index\":-1}"},
+    {"xcp.scan", "扫描 XCP 传输端点（串口/CAN/TCP）", "{}"},
+    {"xcp.connect", "连接 XCP（与探针/网络并行）", "{\"transport\":\"serial\",\"port\":\"COM3\",\"baud\":115200}"},
+    {"xcp.disconnect", "断开 XCP", "{}"},
+    {"xcp.status", "XCP 连接状态", "{}"},
+    {"connect", "连接 MCU（attach=1 非侵入接入）", "{\"device\":\"Cortex-M4\",\"iface\":0,\"speed_khz\":4000,\"probe_index\":-1,\"attach\":0}"},
     {"disconnect", "断开 MCU", "{}"},
-    {"halt", "Halt CPU", "{}"},
-    {"go", "Go/Run CPU", "{}"},
-    {"reset", "复位目标", "{}"},
+    {"halt", "Halt CPU（停住）", "{}"},
+    {"go", "Go/Run CPU（继续运行）", "{}"},
+    {"reset", "复位并停住（Reset & Halt）", "{}"},
+    {"reset_run", "复位后运行（Reset & Go）", "{}"},
+    {"step", "单步（需已 Halt）", "{}"},
+    {"step_in", "步入", "{}"},
+    {"step_over", "步过", "{}"},
+    {"step_out", "步出（跑到 LR）", "{}"},
+    {"bp.set", "设置硬件断点", "{\"address\":\"0x08001234\",\"note\":\"\"}"},
+    {"bp.clear", "清除断点（all=1 全清）", "{\"address\":\"0x08001234\",\"all\":0}"},
+    {"bp.list", "列出当前硬件断点", "{}"},
+    {"bp.set_line", "按源码文件+行号设硬件断点", "{\"path\":\"D:\\\\proj\\\\main.c\",\"line\":100,\"note\":\"\"}"},
+    {"bp.clear_line", "按源码文件+行号清断点", "{\"path\":\"D:\\\\proj\\\\main.c\",\"line\":100}"},
+    {"src.status", "源码索引与 DWARF 行表摘要", "{}"},
+    {"src.roots", "查询/添加源码根目录（add=路径则追加）", "{\"add\":\"D:\\\\proj\"}"},
+    {"src.files", "列出/模糊搜索源码文件", "{\"needle\":\"main.c\",\"limit\":50,\"offset\":0}"},
+    {"src.open", "打开源码窗口（可选跳行）", "{\"path\":\"D:\\\\proj\\\\main.c\",\"line\":100}"},
+    {"src.line_to_addr", "源码行→指令地址", "{\"path\":\"main.c\",\"line\":100}"},
+    {"src.addr_to_line", "指令地址→源码行", "{\"address\":\"0x0800114E\"}"},
+    {"src.follow_pc", "按 PC 打开并高亮源码行（可省略 address=用当前 CPU PC）", "{\"address\":\"0x0800114E\"}"},
+    {"cpu.state", "读 MCU 运行状态与 PC", "{}"},
     {"elf.load", "加载 ELF/out 并刷新变量表", "{\"path\":\"D:\\\\fw.elf\"}"},
     {"elf.reload", "重新加载当前 ELF", "{}"},
     {"vars.list", "列出叶变量（可选 needle 过滤，limit 限制条数）", "{\"needle\":\"\",\"limit\":50,\"offset\":0}"},
@@ -203,6 +227,8 @@ static const AI_Tool g_tools[] = {
     {"log.clear", "清空日志环形缓冲（不影响日志文件）", "{}"},
     {"log.subscribe", "订阅实时日志推送（WebSocket 通知 method=log.event）", "{\"min_level\":0}"},
     {"log.unsubscribe", "取消本连接的日志订阅", "{}"},
+    {"alerts.read", "读取弹窗/严重反馈（MessageBox、崩溃等；since 游标）", "{\"since\":0,\"limit\":32}"},
+    {"ui.silent", "查询/设置 AI 静默（不弹窗，确认框自动应答）", "{\"on\":1,\"yesno_default\":1}"},
     {"module.command", "透传 OS_CMD_* 到指定模块（高级）", "{\"module\":\"jlink\",\"cmd\":3}"},
 };
 static const int g_tool_n = (int)(sizeof(g_tools) / sizeof(g_tools[0]));
@@ -311,11 +337,14 @@ static int method_status2(char* out, int cap)
         "{\"ok\":true,\"version\":\"%s\",\"api\":%d,\"connected\":%d,\"acq_state\":%d,"
         "\"recording\":%d,\"leaf_count\":%d,\"watch_count\":%d,\"driver\":\"%s\","
         "\"driver_index\":%d,\"elf\":\"%s\",\"mod_count\":%d,\"poll_interval_ms\":%d,"
-        "\"log_head_seq\":%llu,\"log_ring_cap\":%d}",
+        "\"log_head_seq\":%llu,\"log_ring_cap\":%d,"
+        "\"alert_head_seq\":%llu,\"alert_ring_cap\":%d,\"ui_silent\":%d}",
         OS_VERSION_STR, OS_API_VERSION, connected, acq, g_app.recording,
         g_app.leaf_count, g_app.watch_count, desc, di, esc, g_app.mod_count,
         g_app.poll_interval_ms,
-        (unsigned long long)os_log_ring_head_seq(), OS_LOG_RING_CAP);
+        (unsigned long long)os_log_ring_head_seq(), OS_LOG_RING_CAP,
+        (unsigned long long)os_alert_ring_head_seq(), OS_ALERT_RING_CAP,
+        os_ui_silent());
     return OS_ERR_OK;
 }
 
@@ -369,6 +398,7 @@ static int method_connect(const char* params, char* out, int cap)
         if (json_get_int(params, "speed_khz", &v) == 0) cfg.speed_khz = v;
         if (json_get_int(params, "probe_index", &v) == 0) cfg.probe_index = v;
         if (json_get_int(params, "connect_under_reset", &v) == 0) cfg.connect_under_reset = v;
+        if (json_get_int(params, "attach", &v) == 0) cfg.attach = v;
         if (json_get_str(params, "device", device, sizeof(device)) == 0 && device[0])
             _snprintf(cfg.device, sizeof(cfg.device), "%s", device);
         if (json_get_str(params, "serial", serial, sizeof(serial)) == 0)
@@ -383,9 +413,12 @@ static int method_connect(const char* params, char* out, int cap)
     memset(&info, 0, sizeof(info));
     g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
     os_mainwin_update_buttons();
+    /* Attach 且有监视变量时自动开采集 */
+    if (cfg.attach && c && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
+        os_fw_acq_start();
     _snprintf(out, cap,
-        "{\"ok\":true,\"connected\":%d,\"emulator\":\"%s\",\"dll\":\"%s\"}",
-        c, info.emulator[0] ? info.emulator : "", info.dll_version);
+        "{\"ok\":true,\"connected\":%d,\"attach\":%d,\"emulator\":\"%s\",\"dll\":\"%s\"}",
+        c, cfg.attach ? 1 : 0, info.emulator[0] ? info.emulator : "", info.dll_version);
     return OS_ERR_OK;
 }
 
@@ -437,7 +470,7 @@ static int method_scan(char* out, int cap)
 
 static int method_elf_load(const char* params, char* out, int cap)
 {
-    char path8[MAX_PATH];
+    char path8[MAX_PATH], esc[MAX_PATH * 2];
     wchar_t pathw[MAX_PATH];
     int rc;
     if (json_get_str(params, "path", path8, sizeof(path8)) != 0 || !path8[0])
@@ -445,8 +478,9 @@ static int method_elf_load(const char* params, char* out, int cap)
     os_utf8_to_wide_buf(path8, pathw, MAX_PATH);
     rc = os_mainwin_open_elf(pathw);
     if (rc != 0) return ai_fail(out, cap, OS_ERR_FAIL, "elf load failed");
+    json_escape(path8, esc, sizeof(esc));
     _snprintf(out, cap, "{\"ok\":true,\"leaf_count\":%d,\"path\":\"%s\"}",
-              g_app.leaf_count, path8);
+              g_app.leaf_count, esc);
     return OS_ERR_OK;
 }
 
@@ -681,7 +715,11 @@ static int method_recording_stop(const char* params, char* out, int cap)
         os_spool_clear();
         if (was_running) os_ds_start();
         os_mainwin_update_buttons();
-        _snprintf(out, cap, "{\"ok\":true,\"recording\":0,\"saved\":1,\"path\":\"%s\"}", path8);
+        {
+            char esc[MAX_PATH * 2];
+            json_escape(path8, esc, sizeof(esc));
+            _snprintf(out, cap, "{\"ok\":true,\"recording\":0,\"saved\":1,\"path\":\"%s\"}", esc);
+        }
         return OS_ERR_OK;
     }
     if (was_running) os_ds_start();
@@ -737,6 +775,58 @@ static int method_log_clear(char* out, int cap)
     os_log_ring_clear();
     _snprintf(out, cap, "{\"ok\":true,\"head_seq\":%llu}",
               (unsigned long long)os_log_ring_head_seq());
+    return OS_ERR_OK;
+}
+
+static int method_alerts_read(const char* params, char* out, int cap)
+{
+    OS_Alert entries[64];
+    uint64_t since = 0, next = 0;
+    int limit = 32, n, i, o = 0;
+    char ts[40], esc_t[160], esc_x[640];
+    if (params) {
+        const char* pv;
+        int v;
+        if (json_find_key(params, "since", &pv) == 0)
+            since = _strtoui64(*pv == '"' ? pv + 1 : pv, NULL, 0);
+        if (json_get_int(params, "limit", &v) == 0) limit = v;
+    }
+    if (limit <= 0) limit = 32;
+    if (limit > 64) limit = 64;
+    n = os_alert_ring_copy(since, entries, limit, &next);
+    o += _snprintf(out + o, cap - o,
+        "{\"ok\":true,\"count\":%d,\"since\":%llu,\"next_since\":%llu,\"ui_silent\":%d,\"alerts\":[",
+        n, (unsigned long long)since, (unsigned long long)next, os_ui_silent());
+    for (i = 0; i < n && o < cap - 280; i++) {
+        json_escape(entries[i].title, esc_t, sizeof(esc_t));
+        json_escape(entries[i].text, esc_x, sizeof(esc_x));
+        os_time_iso(entries[i].ts_us, ts, sizeof(ts));
+        o += _snprintf(out + o, cap - o,
+            "%s{\"seq\":%llu,\"level\":%d,\"level_name\":\"%s\",\"ts\":\"%s\","
+            "\"type\":%d,\"result\":%d,\"silenced\":%d,\"title\":\"%s\",\"text\":\"%s\"}",
+            i ? "," : "",
+            (unsigned long long)entries[i].seq,
+            entries[i].level, log_level_name(entries[i].level), ts,
+            entries[i].type, entries[i].result, entries[i].silenced,
+            esc_t, esc_x);
+    }
+    if (o < cap - 2) { out[o++] = ']'; out[o++] = '}'; out[o] = 0; }
+    return OS_ERR_OK;
+}
+
+static int method_ui_silent(const char* params, char* out, int cap)
+{
+    int on = -1, yn = -1;
+    if (params) {
+        json_get_int(params, "on", &on);
+        json_get_int(params, "yesno_default", &yn);
+    }
+    if (yn >= 0) os_ui_set_yesno_default(yn ? 1 : 0);
+    if (on >= 0) os_ui_set_silent(on ? 1 : 0);
+    _snprintf(out, cap,
+        "{\"ok\":true,\"ui_silent\":%d,\"yesno_default\":%d,\"alert_head_seq\":%llu}",
+        os_ui_silent(), os_ui_yesno_default(),
+        (unsigned long long)os_alert_ring_head_seq());
     return OS_ERR_OK;
 }
 
@@ -816,12 +906,389 @@ int os_ai_call(const char* method, const char* params_json,
         os_mainwin_update_buttons();
         return method_drivers_list(result_json, result_cap);
     }
+    if (strcmp(method, "xcp.scan") == 0) {
+        OS_ScanReq req;
+        OS_DeviceInfo items[32];
+        int i, n = 0;
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        memset(&req, 0, sizeof(req));
+        req.items = items; req.capacity = 32;
+        g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_SCAN, &req, NULL);
+        n += _snprintf(result_json + n, result_cap - n, "{\"ok\":true,\"count\":%d,\"endpoints\":[", req.count);
+        for (i = 0; i < req.count && n < result_cap - 160; i++) {
+            char nm[140], tr[80];
+            json_escape(items[i].name, nm, sizeof(nm));
+            json_escape(items[i].serial, tr, sizeof(tr));
+            n += _snprintf(result_json + n, result_cap - n,
+                "%s{\"index\":%d,\"name\":\"%s\",\"transport\":\"%s\"}",
+                i ? "," : "", i, nm, tr);
+        }
+        if (n < result_cap - 2) { result_json[n++] = ']'; result_json[n++] = '}'; result_json[n] = 0; }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.connect") == 0) {
+        OS_ConnectCfg cfg;
+        char transport[32] = "serial", port[64] = "", baud_s[32];
+        int baud = 115200, rc, c = 0;
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        memset(&cfg, 0, sizeof(cfg));
+        json_get_str(params, "transport", transport, sizeof(transport));
+        json_get_str(params, "port", port, sizeof(port));
+        if (json_get_int(params, "baud", &baud) != 0) baud = 115200;
+        if (!port[0]) json_get_str(params, "serial", port, sizeof(port));
+        _snprintf(cfg.device, sizeof(cfg.device), "%s", transport[0] ? transport : "serial");
+        _snprintf(cfg.serial, sizeof(cfg.serial), "%s", port);
+        cfg.speed_khz = baud;
+        cfg.probe_index = 0;
+        rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_CONNECT, &cfg, NULL);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "xcp.connect failed");
+        g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+        g_app.xcp_connected = c;
+        _snprintf(baud_s, sizeof(baud_s), "%d", baud);
+        {
+            char te[40], pe[140];
+            json_escape(cfg.device, te, sizeof(te));
+            json_escape(cfg.serial, pe, sizeof(pe));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"connected\":%d,\"transport\":\"%s\",\"port\":\"%s\",\"baud\":%d}",
+                c, te, pe, baud);
+        }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.disconnect") == 0) {
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+        g_app.xcp_connected = 0;
+        return ai_ok(result_json, result_cap, "\"connected\":0");
+    }
+    if (strcmp(method, "xcp.status") == 0) {
+        int c = 0;
+        OS_DriverInfo info;
+        memset(&info, 0, sizeof(info));
+        if (g_app.xcpmod && g_app.xcpmod->command) {
+            g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+            g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_GET_INFO, NULL, &info);
+            g_app.xcp_connected = c;
+        }
+        {
+            char esc[160];
+            json_escape(info.emulator[0] ? info.emulator : "", esc, sizeof(esc));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"connected\":%d,\"loaded\":%d,\"info\":\"%s\"}",
+                c, g_app.xcpmod ? 1 : 0, esc);
+        }
+        return OS_ERR_OK;
+    }
     if (strcmp(method, "probe.scan") == 0) return method_scan(result_json, result_cap);
     if (strcmp(method, "connect") == 0) return method_connect(params, result_json, result_cap);
     if (strcmp(method, "disconnect") == 0) return method_disconnect(result_json, result_cap);
     if (strcmp(method, "halt") == 0) return method_drv_simple(OS_CMD_HALT, result_json, result_cap);
     if (strcmp(method, "go") == 0) return method_drv_simple(OS_CMD_GO, result_json, result_cap);
     if (strcmp(method, "reset") == 0) return method_drv_simple(OS_CMD_RESET, result_json, result_cap);
+    if (strcmp(method, "reset_run") == 0)
+        return method_drv_simple(OS_CMD_RESET_RUN, result_json, result_cap);
+    if (strcmp(method, "step") == 0)
+        return method_drv_simple(OS_CMD_STEP, result_json, result_cap);
+    if (strcmp(method, "step_in") == 0)
+        return method_drv_simple(OS_CMD_STEP_IN, result_json, result_cap);
+    if (strcmp(method, "step_over") == 0)
+        return method_drv_simple(OS_CMD_STEP_OVER, result_json, result_cap);
+    if (strcmp(method, "step_out") == 0)
+        return method_drv_simple(OS_CMD_STEP_OUT, result_json, result_cap);
+    if (strcmp(method, "bp.set") == 0) {
+        OS_BpReq req;
+        uint64_t addr64 = 0;
+        char note[64];
+        int rc;
+        if (!g_app.driver || !g_app.connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+        if (json_get_u64(params, "address", &addr64) != 0 || addr64 == 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "address required");
+        memset(&req, 0, sizeof(req));
+        req.address = (uint32_t)addr64;
+        if (json_get_str(params, "note", note, sizeof(note)) == 0)
+            _snprintf(req.note, sizeof(req.note), "%s", note);
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "bp.set failed");
+        os_src_refresh_bps();
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"address\":%u,\"address_hex\":\"0x%08X\"}",
+            (unsigned)(req.address & ~1u), (unsigned)(req.address & ~1u));
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "bp.clear") == 0) {
+        OS_BpReq req;
+        uint64_t addr64 = 0;
+        int all = 0, rc;
+        if (!g_app.driver || !g_app.connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+        all = json_get_bool(params, "all", 0);
+        memset(&req, 0, sizeof(req));
+        req.clear_all = all ? 1 : 0;
+        if (!all) {
+            if (json_get_u64(params, "address", &addr64) != 0 || addr64 == 0)
+                return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "address or all required");
+            req.address = (uint32_t)addr64;
+        }
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_CLEAR, &req, NULL);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "bp.clear failed");
+        os_src_refresh_bps();
+        return ai_ok(result_json, result_cap, NULL);
+    }
+    if (strcmp(method, "bp.list") == 0) {
+        OS_BpInfo items[OS_BP_MAX];
+        OS_BpList list;
+        int i, n = 0, rc;
+        if (!g_app.driver || !g_app.connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+        memset(items, 0, sizeof(items));
+        memset(&list, 0, sizeof(list));
+        list.items = items;
+        list.capacity = OS_BP_MAX;
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_LIST, NULL, &list);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "bp.list failed");
+        n += _snprintf(result_json + n, result_cap - n,
+            "{\"ok\":true,\"count\":%d,\"breakpoints\":[", list.count);
+        for (i = 0; i < list.count && n < result_cap - 80; i++) {
+            n += _snprintf(result_json + n, result_cap - n,
+                "%s{\"id\":%d,\"address\":%u,\"address_hex\":\"0x%08X\",\"enabled\":%d}",
+                i ? "," : "", items[i].id, (unsigned)items[i].address,
+                (unsigned)items[i].address, items[i].enabled);
+        }
+        if (n < result_cap - 2) {
+            result_json[n++] = ']';
+            result_json[n++] = '}';
+            result_json[n] = 0;
+        }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "bp.set_line") == 0 || strcmp(method, "bp.clear_line") == 0) {
+        char path[MAX_PATH];
+        int line = 0, rc, is_set;
+        uint32_t addr = 0;
+        OS_BpReq req;
+        is_set = (strcmp(method, "bp.set_line") == 0);
+        if (!g_app.driver || !g_app.connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+        if (!g_app.elf)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "no elf");
+        if (json_get_str(params, "path", path, sizeof(path)) != 0 || !path[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "path required");
+        if (json_get_int(params, "line", &line) != 0 || line <= 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "line required");
+        if (!os_elf_addr_of_line(g_app.elf, path, line, &addr) || !addr)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "line map failed");
+        memset(&req, 0, sizeof(req));
+        req.address = addr;
+        if (is_set) {
+            char note[64];
+            if (json_get_str(params, "note", note, sizeof(note)) == 0)
+                _snprintf(req.note, sizeof(req.note), "%s", note);
+            else
+                _snprintf(req.note, sizeof(req.note), "%s:%d", path, line);
+            rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
+            if (rc != OS_ERR_OK)
+                return ai_fail(result_json, result_cap, rc, "bp.set_line failed");
+            os_src_refresh_bps();
+            {
+                char esc[MAX_PATH * 2];
+                json_escape(path, esc, sizeof(esc));
+                _snprintf(result_json, result_cap,
+                    "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\"}",
+                    esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u));
+            }
+            return OS_ERR_OK;
+        }
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_CLEAR, &req, NULL);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "bp.clear_line failed");
+        os_src_refresh_bps();
+        {
+            char esc[MAX_PATH * 2];
+            json_escape(path, esc, sizeof(esc));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\"}",
+                esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u));
+        }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.status") == 0) {
+        int rows = g_app.elf ? os_elf_line_count(g_app.elf) : 0;
+        int files = g_app.elf ? os_elf_line_file_count(g_app.elf) : 0;
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"src_files\":%d,\"src_roots\":%d,\"line_rows\":%d,\"line_files\":%d,"
+            "\"elf_loaded\":%d}",
+            os_mainwin_src_file_count(), os_mainwin_src_root_count(),
+            rows, files, g_app.elf ? 1 : 0);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.roots") == 0) {
+        char add[MAX_PATH];
+        int i, n = 0;
+        if (params && json_get_str(params, "add", add, sizeof(add)) == 0 && add[0]) {
+            if (os_mainwin_src_add_root(add) != 0)
+                return ai_fail(result_json, result_cap, OS_ERR_FAIL, "add root failed");
+        }
+        n += _snprintf(result_json + n, result_cap - n,
+            "{\"ok\":true,\"count\":%d,\"roots\":[", os_mainwin_src_root_count());
+        for (i = 0; i < os_mainwin_src_root_count() && n < result_cap - 300; i++) {
+            char root[MAX_PATH], esc[MAX_PATH * 2];
+            if (os_mainwin_src_get_root(i, root, sizeof(root)) != 0) continue;
+            json_escape(root, esc, sizeof(esc));
+            n += _snprintf(result_json + n, result_cap - n, "%s\"%s\"", i ? "," : "", esc);
+        }
+        if (n < result_cap - 2) {
+            result_json[n++] = ']';
+            result_json[n++] = '}';
+            result_json[n] = 0;
+        }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.files") == 0) {
+        char needle[260], body[8192];
+        int limit = 50, offset = 0, ids[128], nmatch, i, shown = 0, bn = 0;
+        needle[0] = 0;
+        body[0] = 0;
+        if (params) {
+            json_get_str(params, "needle", needle, sizeof(needle));
+            json_get_int(params, "limit", &limit);
+            json_get_int(params, "offset", &offset);
+        }
+        if (limit <= 0) limit = 50;
+        if (limit > 128) limit = 128;
+        if (offset < 0) offset = 0;
+        if (os_mainwin_src_file_count() <= 0)
+            os_mainwin_src_refresh_index();
+        if (needle[0])
+            nmatch = os_mainwin_src_find(needle, ids, 128);
+        else {
+            nmatch = os_mainwin_src_file_count();
+            if (nmatch > 128) nmatch = 128;
+            for (i = 0; i < nmatch; i++) ids[i] = i;
+        }
+        for (i = offset; i < nmatch && shown < limit && bn < (int)sizeof(body) - 400; i++) {
+            char path[MAX_PATH], esc[MAX_PATH * 2];
+            if (os_mainwin_src_get_file(ids[i], path, sizeof(path)) != 0) continue;
+            json_escape(path, esc, sizeof(esc));
+            bn += _snprintf(body + bn, (int)sizeof(body) - bn,
+                "%s{\"index\":%d,\"path\":\"%s\"}", shown ? "," : "", ids[i], esc);
+            shown++;
+        }
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"total\":%d,\"count\":%d,\"files\":[%s]}",
+            nmatch, shown, body);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.open") == 0) {
+        char path[MAX_PATH], esc[MAX_PATH * 2];
+        int line = 0;
+        if (json_get_str(params, "path", path, sizeof(path)) != 0 || !path[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "path required");
+        json_get_int(params, "line", &line);
+        if (os_mainwin_src_open_safe(path, line) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "open failed");
+        json_escape(path, esc, sizeof(esc));
+        _snprintf(result_json, result_cap, "{\"ok\":true,\"path\":\"%s\",\"line\":%d}", esc, line);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.line_to_addr") == 0) {
+        char path[MAX_PATH], esc[MAX_PATH * 2];
+        int line = 0;
+        uint32_t addr = 0;
+        if (!g_app.elf)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "no elf");
+        if (json_get_str(params, "path", path, sizeof(path)) != 0 || !path[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "path required");
+        if (json_get_int(params, "line", &line) != 0 || line <= 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "line required");
+        if (!os_elf_addr_of_line(g_app.elf, path, line, &addr) || !addr)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "line map failed");
+        json_escape(path, esc, sizeof(esc));
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\"}",
+            esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u));
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.addr_to_line") == 0) {
+        uint64_t addr64 = 0;
+        char file[512], esc[1024];
+        int line = 0;
+        if (!g_app.elf)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "no elf");
+        if (json_get_u64(params, "address", &addr64) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "address required");
+        if (!os_elf_line_of_addr(g_app.elf, (uint32_t)addr64, file, sizeof(file), &line))
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "addr map failed");
+        json_escape(file, esc, sizeof(esc));
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"address\":%u,\"address_hex\":\"0x%08X\",\"path\":\"%s\",\"line\":%d}",
+            (unsigned)(addr64 & ~1u), (unsigned)(addr64 & ~1u), esc, line);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "src.follow_pc") == 0) {
+        uint64_t addr64 = 0;
+        char path[MAX_PATH], esc[MAX_PATH * 2];
+        int line = 0;
+        if (params && json_get_u64(params, "address", &addr64) == 0 && addr64 != 0) {
+            /* use provided */
+        } else {
+            OS_CpuState st;
+            int rc;
+            if (!g_app.driver || !g_app.connected)
+                return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+            memset(&st, 0, sizeof(st));
+            st.halted = -1;
+            rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_CPU_STATE, NULL, &st);
+            if (rc != OS_ERR_OK || !st.pc_valid)
+                return ai_fail(result_json, result_cap, OS_ERR_FAIL, "no pc");
+            addr64 = st.pc;
+        }
+        if (os_mainwin_src_follow_pc_safe((uint32_t)addr64, path, sizeof(path), &line) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "follow failed");
+        json_escape(path, esc, sizeof(esc));
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"address\":%u,\"address_hex\":\"0x%08X\",\"path\":\"%s\",\"line\":%d}",
+            (unsigned)(addr64 & ~1u), (unsigned)(addr64 & ~1u), esc, line);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "cpu.state") == 0) {
+        OS_CpuState st;
+        int rc;
+        char src_path[MAX_PATH] = "";
+        int src_line = 0;
+        if (!g_app.driver || !g_app.connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+        memset(&st, 0, sizeof(st));
+        st.halted = -1;
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_CPU_STATE, NULL, &st);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "cpu.state failed");
+        if (st.halted == 1 && st.pc_valid && g_app.elf) {
+            char file[512];
+            if (os_elf_line_of_addr(g_app.elf, st.pc, file, sizeof(file), &src_line) && src_line > 0)
+                _snprintf(src_path, sizeof(src_path), "%s", file);
+        }
+        {
+            char esc[40], pesc[MAX_PATH * 2];
+            json_escape(st.state[0] ? st.state : "-", esc, sizeof(esc));
+            json_escape(src_path, pesc, sizeof(pesc));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"pc\":%u,\"pc_hex\":\"0x%08X\",\"halted\":%d,\"pc_valid\":%d,"
+                "\"powered\":%d,\"under_reset\":%d,\"voltage_mv\":%d,\"state\":\"%s\","
+                "\"source_path\":\"%s\",\"source_line\":%d}",
+                (unsigned)st.pc, (unsigned)st.pc,
+                st.halted, st.pc_valid, st.powered, st.under_reset, st.voltage_mv, esc,
+                pesc, src_line);
+        }
+        return OS_ERR_OK;
+    }
     if (strcmp(method, "elf.load") == 0) return method_elf_load(params, result_json, result_cap);
     if (strcmp(method, "elf.reload") == 0) {
         if (os_mainwin_reload_elf() != 0)
@@ -865,6 +1332,10 @@ int os_ai_call(const char* method, const char* params_json,
         return method_log_read(params, result_json, result_cap);
     if (strcmp(method, "log.clear") == 0)
         return method_log_clear(result_json, result_cap);
+    if (strcmp(method, "alerts.read") == 0)
+        return method_alerts_read(params, result_json, result_cap);
+    if (strcmp(method, "ui.silent") == 0)
+        return method_ui_silent(params, result_json, result_cap);
     /* subscribe/unsubscribe 由 aiapi.dll 在传输层处理；宿主侧返回提示 */
     if (strcmp(method, "log.subscribe") == 0 ||
         strcmp(method, "log.unsubscribe") == 0) {

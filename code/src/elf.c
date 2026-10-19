@@ -51,6 +51,15 @@ struct OS_ElfFile {
     const uint8_t* dbg_str;           uint64_t dbg_str_size;
     const uint8_t* dbg_str_offsets;   uint64_t dbg_str_offsets_size;
     const uint8_t* dbg_addr;          uint64_t dbg_addr_size;
+    const uint8_t* dbg_line;          uint64_t dbg_line_size;
+    const uint8_t* dbg_line_str;      uint64_t dbg_line_str_size;
+
+    /* .debug_line 矩阵（文件名 os_alloc；recs 用 realloc） */
+    char**   line_files;
+    int      line_file_count;
+    struct { uint32_t addr; uint32_t line; uint16_t file; }* line_recs;
+    int      line_rec_count;
+    int      line_rec_cap;
 
     OS_Variable* vars;
     int var_count;
@@ -297,7 +306,515 @@ static int elf_parse_sections(OS_ElfFile* f, char* errbuf, int errbuf_len)
     f->dbg_str_offsets = elf_find_section(f, ".debug_str_offsets", &f->dbg_str_offsets_size, NULL);
     elf_find_section(f, ".debug_addr", &f->dbg_addr_size, NULL);
     f->dbg_addr = elf_find_section(f, ".debug_addr", &f->dbg_addr_size, NULL);
+    f->dbg_line = elf_find_section(f, ".debug_line", &f->dbg_line_size, NULL);
+    f->dbg_line_str = elf_find_section(f, ".debug_line_str", &f->dbg_line_str_size, NULL);
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* DWARF .debug_line（v2–v5）                                          */
+/* ------------------------------------------------------------------ */
+
+#define DW_LNS_copy               1
+#define DW_LNS_advance_pc         2
+#define DW_LNS_advance_line       3
+#define DW_LNS_set_file           4
+#define DW_LNS_set_column         5
+#define DW_LNS_negate_stmt        6
+#define DW_LNS_set_basic_block    7
+#define DW_LNS_const_add_pc       8
+#define DW_LNS_fixed_advance_pc   9
+#define DW_LNS_set_prologue_end   10
+#define DW_LNS_set_epilogue_begin 11
+#define DW_LNS_set_isa            12
+#define DW_LNE_end_sequence       1
+#define DW_LNE_set_address        2
+#define DW_LNE_define_file        3
+
+#define DW_LNCT_path              0x01
+#define DW_LNCT_directory_index   0x02
+#define DW_FORM_addr              0x01
+#define DW_FORM_data2             0x05
+#define DW_FORM_data4             0x06
+#define DW_FORM_data8             0x07
+#define DW_FORM_string            0x08
+#define DW_FORM_data1             0x0b
+#define DW_FORM_strp              0x0e
+#define DW_FORM_udata             0x0f
+#define DW_FORM_line_strp         0x1f
+#define DW_FORM_strp_sup          0x1d
+
+static int64_t leb128_s(const uint8_t** pp, const uint8_t* end)
+{
+    int64_t r = 0;
+    int s = 0;
+    while (*pp < end) {
+        uint8_t b = *(*pp)++;
+        r |= (int64_t)(b & 0x7f) << s;
+        s += 7;
+        if (!(b & 0x80)) {
+            if (s < 64 && (b & 0x40)) r |= -((int64_t)1 << s);
+            return r;
+        }
+    }
+    return r;
+}
+
+static uint64_t leb128_u(const uint8_t** pp, const uint8_t* end)
+{
+    uint64_t r = 0;
+    int s = 0;
+    while (*pp < end) {
+        uint8_t b = *(*pp)++;
+        r |= (uint64_t)(b & 0x7f) << s;
+        if (!(b & 0x80)) return r;
+        s += 7;
+        if (s > 63) break;
+    }
+    return r;
+}
+
+static void line_emit(OS_ElfFile* f, uint64_t addr, uint32_t line, uint16_t file, int is_stmt)
+{
+    (void)is_stmt;
+    if (file == 0 || line == 0) return;
+    if (addr == 0) return; /* 未 set_address 前的拷贝无意义 */
+    if (f->line_rec_count >= f->line_rec_cap) {
+        int nc = f->line_rec_cap ? f->line_rec_cap * 2 : 4096;
+        void* n = realloc(f->line_recs, (size_t)nc * sizeof(*f->line_recs));
+        if (!n) return;
+        f->line_recs = n;
+        f->line_rec_cap = nc;
+    }
+    f->line_recs[f->line_rec_count].addr = (uint32_t)addr;
+    f->line_recs[f->line_rec_count].line = line;
+    f->line_recs[f->line_rec_count].file = file;
+    f->line_rec_count++;
+}
+
+static int line_add_file(OS_ElfFile* f, const char* path)
+{
+    char** nf;
+    if (!path) path = "";
+    nf = (char**)realloc(f->line_files, (size_t)(f->line_file_count + 1) * sizeof(char*));
+    if (!nf) return -1;
+    f->line_files = nf;
+    f->line_files[f->line_file_count] = os_strdup(f, path);
+    return f->line_file_count++; /* 返回写入下标（全局） */
+}
+
+/* 本 CU 内 DWARF file 下标(1-based) → 全局 line_files 下标 */
+static uint16_t line_map_file(int file_base, uint16_t local)
+{
+    if (local == 0) return 0;
+    return (uint16_t)(file_base + (int)local - 1);
+}
+
+static const char* line_strp(OS_ElfFile* f, uint64_t off, int use_line_str)
+{
+    const uint8_t* base;
+    uint64_t sz;
+    if (use_line_str) {
+        base = f->dbg_line_str;
+        sz = f->dbg_line_str_size;
+    } else {
+        base = f->dbg_str;
+        sz = f->dbg_str_size;
+    }
+    if (!base || off >= sz) return "";
+    return (const char*)(base + off);
+}
+
+/* 跳过/读取一条 LNCT 表单值；若 want_str 非空则尽量填字符串指针 */
+static int line_read_form(OS_ElfFile* f, const uint8_t** pp, const uint8_t* end,
+                          uint64_t form, const char** want_str, uint64_t* want_udata,
+                          uint8_t addr_size)
+{
+    const uint8_t* p = *pp;
+    if (want_str) *want_str = NULL;
+    if (want_udata) *want_udata = 0;
+    switch (form) {
+    case DW_FORM_string:
+        if (want_str) *want_str = (const char*)p;
+        while (p < end && *p) p++;
+        if (p < end) p++;
+        break;
+    case DW_FORM_line_strp: {
+        uint64_t off = (p + 4 <= end) ? rd_u32(p, f->le) : 0;
+        p += 4;
+        if (want_str) *want_str = line_strp(f, off, 1);
+        break;
+    }
+    case DW_FORM_strp:
+    case DW_FORM_strp_sup: {
+        uint64_t off = (p + 4 <= end) ? rd_u32(p, f->le) : 0;
+        p += 4;
+        if (want_str) *want_str = line_strp(f, off, 0);
+        break;
+    }
+    case DW_FORM_udata: {
+        uint64_t v = leb128_u(&p, end);
+        if (want_udata) *want_udata = v;
+        break;
+    }
+    case DW_FORM_data1:
+        if (p < end) { if (want_udata) *want_udata = *p; p++; }
+        break;
+    case DW_FORM_data2:
+        if (p + 2 <= end) { if (want_udata) *want_udata = rd_u16(p, f->le); p += 2; }
+        break;
+    case DW_FORM_data4:
+        if (p + 4 <= end) { if (want_udata) *want_udata = rd_u32(p, f->le); p += 4; }
+        break;
+    case DW_FORM_data8:
+        if (p + 8 <= end) { if (want_udata) *want_udata = rd_u64(p, f->le); p += 8; }
+        break;
+    case DW_FORM_addr:
+        if (addr_size == 8 && p + 8 <= end) { p += 8; }
+        else if (p + 4 <= end) { p += 4; }
+        break;
+    default:
+        /* 未知 form：尽力按 udata 消耗，否则放弃 */
+        leb128_u(&p, end);
+        break;
+    }
+    *pp = p;
+    return 0;
+}
+
+static void line_join_path(char* out, int cap, const char* dir, const char* file)
+{
+    if (!out || cap <= 0) return;
+    if (!file) file = "";
+    if (!dir || !dir[0] || file[0] == '/' || file[0] == '\\' ||
+        (file[0] && file[1] == ':')) {
+        snprintf(out, cap, "%s", file);
+        return;
+    }
+    snprintf(out, cap, "%s/%s", dir, file);
+}
+
+static void parse_debug_line(OS_ElfFile* f)
+{
+    const uint8_t* p;
+    const uint8_t* end;
+    int units = 0, units_ok = 0;
+    if (!f->dbg_line || f->dbg_line_size < 12) return;
+    p = f->dbg_line;
+    end = f->dbg_line + f->dbg_line_size;
+    line_add_file(f, ""); /* [0] 占位，与 DWARF file=0 对齐 */
+
+    while (p + 12 <= end) {
+        uint32_t unit_len = rd_u32(p, f->le);
+        const uint8_t* unit_end;
+        uint16_t version;
+        uint8_t min_inst, max_ops = 1, default_is_stmt, line_range, opcode_base;
+        uint8_t addr_size = f->is64 ? 8 : 4;
+        int8_t line_base;
+        uint8_t std_op_lens[256];
+        uint64_t header_len;
+        const uint8_t* hdr_end;
+        int i, file_base;
+        uint64_t address = 0;
+        uint32_t line = 1;
+        uint16_t file_local = 1, file_g = 1;
+        int is_stmt;
+        uint8_t op_index = 0;
+        char* dirs[256];
+        int dir_count = 0;
+        char pathbuf[512];
+
+        p += 4;
+        units++;
+        if (unit_len == 0xffffffffu) break; /* DWARF64 暂不支持 */
+        if (unit_len < 4) break;
+        unit_end = p + unit_len;
+        if (unit_end > end) break;
+        version = rd_u16(p, f->le); p += 2;
+        if (version < 2 || version > 5) { p = unit_end; continue; }
+
+        if (version >= 5) {
+            if (p + 2 > unit_end) { p = unit_end; continue; }
+            addr_size = *p++;
+            p++; /* segment_selector_size */
+            if (!addr_size) addr_size = f->is64 ? 8 : 4;
+        }
+        header_len = rd_u32(p, f->le); p += 4;
+        hdr_end = p + header_len;
+        if (hdr_end > unit_end) { p = unit_end; continue; }
+
+        if (p + 4 > hdr_end) { p = unit_end; continue; }
+        min_inst = *p++;
+        if (version >= 4) {
+            max_ops = *p++;
+            if (!max_ops) max_ops = 1;
+        }
+        default_is_stmt = *p++;
+        line_base = (int8_t)(*p++);
+        if (p >= hdr_end) { p = unit_end; continue; }
+        line_range = *p++;
+        if (!line_range) { p = unit_end; continue; }
+        if (p >= hdr_end) { p = unit_end; continue; }
+        opcode_base = *p++;
+        memset(std_op_lens, 0, sizeof(std_op_lens));
+        for (i = 1; i < opcode_base && p < hdr_end; i++)
+            std_op_lens[i] = *p++;
+
+        memset(dirs, 0, sizeof(dirs));
+        dir_count = 0;
+        file_base = f->line_file_count; /* 本 CU 第一个文件将写在此下标；DWARF file=1 → file_base */
+
+        if (version < 5) {
+            /* include_directories[1..]；0 = 当前编译目录（空） */
+            dirs[dir_count++] = os_strdup(f, "");
+            while (p < hdr_end && *p && dir_count < 255) {
+                dirs[dir_count++] = os_strdup(f, (const char*)p);
+                while (p < hdr_end && *p) p++;
+                if (p < hdr_end) p++;
+            }
+            if (p < hdr_end) p++;
+            while (p < hdr_end && *p) {
+                const char* nm = (const char*)p;
+                uint64_t dir_idx, mtime, sz;
+                while (p < hdr_end && *p) p++;
+                if (p < hdr_end) p++;
+                dir_idx = leb128_u(&p, hdr_end);
+                mtime = leb128_u(&p, hdr_end);
+                sz = leb128_u(&p, hdr_end);
+                (void)mtime; (void)sz;
+                {
+                    const char* d = (dir_idx < (uint64_t)dir_count) ? dirs[dir_idx] : "";
+                    line_join_path(pathbuf, sizeof(pathbuf), d, nm);
+                    line_add_file(f, pathbuf);
+                }
+            }
+            if (p < hdr_end) p++;
+        } else {
+            /* DWARF5：directory_entry_format + directories + file_name_entry_format + files */
+            uint8_t dfmt_n, ffmt_n;
+            uint64_t dcontent[8], dform[8], fcontent[8], fform[8];
+            uint64_t dcount, fcount;
+            int di, fi, k;
+            if (p >= hdr_end) { p = unit_end; continue; }
+            dfmt_n = *p++;
+            if (dfmt_n > 8) { p = unit_end; continue; }
+            for (k = 0; k < dfmt_n && p < hdr_end; k++) {
+                dcontent[k] = leb128_u(&p, hdr_end);
+                dform[k] = leb128_u(&p, hdr_end);
+            }
+            dcount = leb128_u(&p, hdr_end);
+            for (di = 0; di < (int)dcount && di < 255 && p < hdr_end; di++) {
+                const char* path = "";
+                for (k = 0; k < dfmt_n; k++) {
+                    const char* s = NULL;
+                    uint64_t u = 0;
+                    line_read_form(f, &p, hdr_end, dform[k], &s, &u, addr_size);
+                    if (dcontent[k] == DW_LNCT_path && s) path = s;
+                }
+                dirs[dir_count++] = os_strdup(f, path ? path : "");
+            }
+            if (p >= hdr_end) { p = unit_end; continue; }
+            ffmt_n = *p++;
+            if (ffmt_n > 8) { p = unit_end; continue; }
+            for (k = 0; k < ffmt_n && p < hdr_end; k++) {
+                fcontent[k] = leb128_u(&p, hdr_end);
+                fform[k] = leb128_u(&p, hdr_end);
+            }
+            fcount = leb128_u(&p, hdr_end);
+            for (fi = 0; fi < (int)fcount && p < hdr_end; fi++) {
+                const char* path = "";
+                uint64_t dir_idx = 0;
+                for (k = 0; k < ffmt_n; k++) {
+                    const char* s = NULL;
+                    uint64_t u = 0;
+                    line_read_form(f, &p, hdr_end, fform[k], &s, &u, addr_size);
+                    if (fcontent[k] == DW_LNCT_path && s) path = s;
+                    if (fcontent[k] == DW_LNCT_directory_index) dir_idx = u;
+                }
+                {
+                    const char* d = (dir_idx < (uint64_t)dir_count) ? dirs[dir_idx] : "";
+                    /* 若 path 已是绝对路径则 join 会原样保留 */
+                    line_join_path(pathbuf, sizeof(pathbuf), d, path);
+                    line_add_file(f, pathbuf);
+                }
+            }
+        }
+
+        if (f->line_file_count <= file_base) {
+            /* 本 CU 无文件名，跳过程序 */
+            p = unit_end;
+            continue;
+        }
+
+        p = hdr_end;
+        is_stmt = default_is_stmt;
+        address = 0;
+        line = 1;
+        file_local = 1;
+        file_g = line_map_file(file_base, file_local);
+        op_index = 0;
+        units_ok++;
+
+        while (p < unit_end) {
+            uint8_t op = *p++;
+            if (op == 0) {
+                uint64_t elen = leb128_u(&p, unit_end);
+                const uint8_t* eend = p + elen;
+                uint8_t ext;
+                if (eend > unit_end) break;
+                if (p >= eend) { p = eend; continue; }
+                ext = *p++;
+                if (ext == DW_LNE_end_sequence) {
+                    line_emit(f, address, line, file_g, is_stmt);
+                    address = 0;
+                    line = 1;
+                    file_local = 1;
+                    file_g = line_map_file(file_base, file_local);
+                    is_stmt = default_is_stmt;
+                    op_index = 0;
+                } else if (ext == DW_LNE_set_address) {
+                    if (addr_size >= 8 && p + 8 <= eend) {
+                        address = rd_u64(p, f->le); p += 8;
+                    } else if (p + 4 <= eend) {
+                        address = rd_u32(p, f->le); p += 4;
+                    }
+                    op_index = 0;
+                } else if (ext == DW_LNE_define_file && p < eend) {
+                    const char* nm = (const char*)p;
+                    while (p < eend && *p) p++;
+                    if (p < eend) p++;
+                    leb128_u(&p, eend);
+                    leb128_u(&p, eend);
+                    leb128_u(&p, eend);
+                    line_add_file(f, nm);
+                }
+                p = eend;
+            } else if (op < opcode_base) {
+                int a;
+                switch (op) {
+                case DW_LNS_copy:
+                    line_emit(f, address, line, file_g, is_stmt);
+                    break;
+                case DW_LNS_advance_pc: {
+                    uint64_t opadv = leb128_u(&p, unit_end);
+                    address += min_inst * (opadv / max_ops);
+                    op_index = (uint8_t)(op_index + (opadv % max_ops));
+                    if (op_index >= max_ops) {
+                        address += min_inst;
+                        op_index = (uint8_t)(op_index - max_ops);
+                    }
+                    break;
+                }
+                case DW_LNS_advance_line:
+                    line = (uint32_t)((int32_t)line + (int32_t)leb128_s(&p, unit_end));
+                    break;
+                case DW_LNS_set_file:
+                    file_local = (uint16_t)leb128_u(&p, unit_end);
+                    file_g = line_map_file(file_base, file_local);
+                    break;
+                case DW_LNS_set_column:
+                    leb128_u(&p, unit_end);
+                    break;
+                case DW_LNS_negate_stmt:
+                    is_stmt = !is_stmt;
+                    break;
+                case DW_LNS_set_basic_block:
+                    break;
+                case DW_LNS_const_add_pc: {
+                    uint64_t opadv = (255 - opcode_base) / line_range;
+                    address += min_inst * (opadv / max_ops);
+                    break;
+                }
+                case DW_LNS_fixed_advance_pc:
+                    if (p + 2 <= unit_end) {
+                        address += rd_u16(p, f->le);
+                        p += 2;
+                    }
+                    op_index = 0;
+                    break;
+                case DW_LNS_set_prologue_end:
+                case DW_LNS_set_epilogue_begin:
+                    break;
+                case DW_LNS_set_isa:
+                    leb128_u(&p, unit_end);
+                    break;
+                default:
+                    for (a = 0; a < std_op_lens[op]; a++)
+                        leb128_u(&p, unit_end);
+                    break;
+                }
+            } else {
+                uint8_t adj = (uint8_t)(op - opcode_base);
+                int line_inc = line_base + (int)(adj % line_range);
+                uint64_t opadv = adj / line_range;
+                address += min_inst * (opadv / max_ops);
+                op_index = (uint8_t)(op_index + (opadv % max_ops));
+                if (op_index >= max_ops) {
+                    address += min_inst;
+                    op_index = (uint8_t)(op_index - max_ops);
+                }
+                line = (uint32_t)((int32_t)line + line_inc);
+                line_emit(f, address, line, file_g, is_stmt);
+            }
+        }
+        p = unit_end;
+    }
+    (void)units;
+    (void)units_ok;
+}
+
+static int path_basename_eq(const char* path, const char* name)
+{
+    const char* b = path;
+    const char* s;
+    size_t i;
+    if (!path || !name) return 0;
+    for (s = path; *s; s++)
+        if (*s == '/' || *s == '\\') b = s + 1;
+    for (i = 0; b[i] || name[i]; i++) {
+        char a = b[i], c = name[i];
+        if (a >= 'A' && a <= 'Z') a += 32;
+        if (c >= 'A' && c <= 'Z') c += 32;
+        if (a != c) return 0;
+    }
+    return 1;
+}
+
+static void path_norm_copy(char* out, int cap, const char* in)
+{
+    int i = 0;
+    if (!out || cap <= 0) return;
+    if (!in) { out[0] = 0; return; }
+    for (; in[i] && i < cap - 1; i++) {
+        char c = in[i];
+        if (c == '/') c = '\\';
+        if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        out[i] = c;
+    }
+    out[i] = 0;
+}
+
+static int path_match_file(const char* dwarf_path, const char* query)
+{
+    char a[512], b[512];
+    const char* qb;
+    const char* s;
+    if (!dwarf_path || !query || !query[0]) return 0;
+    /* 全路径：统一大小写与斜杠后再比 */
+    path_norm_copy(a, sizeof(a), dwarf_path);
+    path_norm_copy(b, sizeof(b), query);
+    if (strcmp(a, b) == 0) return 1;
+    /* 后缀匹配（query 为较短路径时） */
+    {
+        size_t la = strlen(a), lb = strlen(b);
+        if (lb > 0 && la >= lb && strcmp(a + (la - lb), b) == 0) {
+            if (la == lb || a[la - lb - 1] == '\\') return 1;
+        }
+    }
+    qb = query;
+    for (s = query; *s; s++)
+        if (*s == '/' || *s == '\\') qb = s + 1;
+    return path_basename_eq(dwarf_path, qb);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1613,6 +2130,7 @@ OS_ElfFile* os_elf_open(const char* path, char* errbuf, int errbuf_len)
     }
     if (f->dbg_info) parse_dwarf(f);
     if (f->symtab) parse_symtab(f);
+    if (f->dbg_line) parse_debug_line(f);
     if (f->var_count == 0) {
         snprintf(errbuf, errbuf_len, "no global variables found (no debug info / symbols)");
         os_elf_close(f);
@@ -1626,6 +2144,8 @@ void os_elf_close(OS_ElfFile* f)
     OS_Alloc* a;
     if (!f) return;
     free((void*)f->data);
+    free(f->line_recs);
+    free(f->line_files); /* 元素由 os_alloc 释放 */
     a = f->allocs;
     while (a) {
         OS_Alloc* next = a->next;
@@ -1634,6 +2154,90 @@ void os_elf_close(OS_ElfFile* f)
         a = next;
     }
     free(f);
+}
+
+int os_elf_line_count(OS_ElfFile* f)
+{
+    return f ? f->line_rec_count : 0;
+}
+
+int os_elf_line_file_count(OS_ElfFile* f)
+{
+    return f ? f->line_file_count : 0;
+}
+
+const char* os_elf_line_file_at(OS_ElfFile* f, int idx)
+{
+    if (!f || idx < 0 || idx >= f->line_file_count) return NULL;
+    return f->line_files[idx];
+}
+
+int os_elf_addr_of_line(OS_ElfFile* f, const char* path_or_name, int line, uint32_t* out_addr)
+{
+    int i, best_i = -1, file_hits = 0;
+    uint32_t best_line = 0;
+    if (!f || !path_or_name || line <= 0 || !out_addr) return 0;
+    for (i = 0; i < f->line_rec_count; i++) {
+        uint16_t fi = f->line_recs[i].file;
+        const char* fp;
+        if (fi == 0 || (int)fi >= f->line_file_count) continue;
+        fp = f->line_files[fi];
+        if (!fp || !path_match_file(fp, path_or_name)) continue;
+        file_hits++;
+        if ((int)f->line_recs[i].line == line) {
+            *out_addr = f->line_recs[i].addr & ~1u;
+            return 1;
+        }
+        /* 取不超过目标行的最近行；也可取超过目标行最近的一行作为回退 */
+        if (f->line_recs[i].line <= (uint32_t)line &&
+            f->line_recs[i].line >= best_line) {
+            best_line = f->line_recs[i].line;
+            best_i = i;
+        }
+    }
+    if (best_i < 0 && file_hits > 0) {
+        /* 点击行小于该文件所有映射行时：取该文件最小行 */
+        uint32_t min_line = 0xffffffffu;
+        for (i = 0; i < f->line_rec_count; i++) {
+            uint16_t fi = f->line_recs[i].file;
+            const char* fp;
+            if (fi == 0 || (int)fi >= f->line_file_count) continue;
+            fp = f->line_files[fi];
+            if (!fp || !path_match_file(fp, path_or_name)) continue;
+            if (f->line_recs[i].line < min_line) {
+                min_line = f->line_recs[i].line;
+                best_i = i;
+            }
+        }
+    }
+    if (best_i >= 0) {
+        *out_addr = f->line_recs[best_i].addr & ~1u;
+        return 1;
+    }
+    return 0;
+}
+
+int os_elf_line_of_addr(OS_ElfFile* f, uint32_t addr, char* file_out, int file_cap, int* line_out)
+{
+    int i, best = -1;
+    uint32_t best_addr = 0;
+    addr &= ~1u;
+    if (!f || !file_out || file_cap <= 0 || !line_out) return 0;
+    for (i = 0; i < f->line_rec_count; i++) {
+        uint32_t a = f->line_recs[i].addr & ~1u;
+        if (a <= addr && a >= best_addr) {
+            best_addr = a;
+            best = i;
+        }
+    }
+    if (best < 0) return 0;
+    {
+        uint16_t fi = f->line_recs[best].file;
+        const char* fp = (fi > 0 && (int)fi < f->line_file_count) ? f->line_files[fi] : "";
+        snprintf(file_out, file_cap, "%s", fp ? fp : "");
+        *line_out = (int)f->line_recs[best].line;
+    }
+    return 1;
 }
 
 uint16_t os_elf_machine(OS_ElfFile* f) { return f ? f->machine : 0; }

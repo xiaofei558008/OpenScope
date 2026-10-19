@@ -76,11 +76,15 @@
   <ItemGroup>
     <ClCompile Include="xcp_slave.c" />
     <ClCompile Include="xcp_master.c" />
+    <ClCompile Include="xcp_transport.c" />
+    <ClCompile Include="xcp_serial.c" />
+    <ClCompile Include="xcp_tcp.c" />
     <ClCompile Include="xcp_can.c" />
     <ClCompile Include="xcp.c" />
     <ClInclude Include="xcp_proto.h" />
     <ClInclude Include="xcp_slave.h" />
     <ClInclude Include="xcp_master.h" />
+    <ClInclude Include="xcp_transport.h" />
     <ClInclude Include="xcp_can.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
