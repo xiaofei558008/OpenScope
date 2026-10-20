@@ -44,8 +44,8 @@ static void fill_info(void)
 {
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     _snprintf(g_ctx.info.name, sizeof(g_ctx.info.name), "xcp");
-    _snprintf(g_ctx.info.version, sizeof(g_ctx.info.version), "1.27.0");
-    _snprintf(g_ctx.info.dll_version, sizeof(g_ctx.info.dll_version), "1.4");
+    _snprintf(g_ctx.info.version, sizeof(g_ctx.info.version), "1.28.0");
+    _snprintf(g_ctx.info.dll_version, sizeof(g_ctx.info.dll_version), "1.5");
     if (g_ctx.connected && g_ctx.tr)
         _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator),
                   "XCP/%s %s", g_ctx.tr->name, g_ctx.last_opts);
@@ -205,9 +205,11 @@ static int mod_ai_describe(char* out)
     _snprintf(out, 4096,
         "["
         "{\"name\":\"xcp.scan\",\"desc\":\"扫描 XCP 传输端点（串口/CAN/TCP）\",\"params\":\"{}\"},"
-        "{\"name\":\"xcp.connect\",\"desc\":\"连接 XCP\",\"params\":\"{\\\"transport\\\":\\\"serial\\\",\\\"port\\\":\\\"COM3\\\",\\\"baud\\\":115200}\"},"
+        "{\"name\":\"xcp.connect\",\"desc\":\"连接 XCP\",\"params\":\"{\\\"transport\\\":\\\"serial\\\",\\\"port\\\":\\\"COM5\\\",\\\"baud\\\":115200}\"},"
         "{\"name\":\"xcp.disconnect\",\"desc\":\"断开 XCP\",\"params\":\"{}\"},"
-        "{\"name\":\"xcp.status\",\"desc\":\"XCP 连接状态\",\"params\":\"{}\"}"
+        "{\"name\":\"xcp.status\",\"desc\":\"XCP 连接状态\",\"params\":\"{}\"},"
+        "{\"name\":\"xcp.read\",\"desc\":\"XCP SHORT_UPLOAD\",\"params\":\"{\\\"address\\\":\\\"0x20000248\\\",\\\"size\\\":4}\"},"
+        "{\"name\":\"xcp.write\",\"desc\":\"XCP DOWNLOAD\",\"params\":\"{\\\"address\\\":\\\"0x20000248\\\",\\\"data\\\":\\\"58435031\\\"}\"}"
         "]");
     return OS_ERR_OK;
 }
@@ -263,7 +265,7 @@ static const OS_Module g_module = {
     OS_API_VERSION,
     OS_CAP_XCP,
     "xcp",
-    "1.27.0",
+    "1.28.0",
     "XCP 1.3：串口/CAN/TCP 传输（物理层无关），与探针/网络并行",
     NULL,
     mod_init,

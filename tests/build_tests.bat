@@ -120,6 +120,35 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I code\src tests\mapfile_smoke.c code\src\mapfile.c code\src\xcpsym.c ^
+    /Fe:tests\bin\mapfile_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] mapfile_smoke build failed
+  exit /b 1
+)
+
+echo Running mapfile/XCP symbol smoke...
+tests\bin\mapfile_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] mapfile_smoke FAILED
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /D_CRT_SECURE_NO_WARNINGS /I code\src tests\a2l_smoke.c ^
+    code\src\a2l_export.c code\src\util.c ^
+    /Fe:tests\bin\a2l_smoke.exe /link user32.lib gdi32.lib comdlg32.lib
+if errorlevel 1 (
+  echo [ERROR] a2l_smoke build failed
+  exit /b 1
+)
+
+echo Running A2L export smoke...
+tests\bin\a2l_smoke.exe
+if errorlevel 1 (
+  echo [ERROR] a2l_smoke FAILED
+  exit /b 1
+)
+
 cl /nologo /W2 /utf-8 /I code\src tests\spool_smoke.c code\src\datalog.c ^
     /Fe:tests\bin\spool_smoke.exe /link user32.lib
 if errorlevel 1 (
@@ -165,11 +194,16 @@ if errorlevel 1 (
 )
 
 echo Running jlink smoke...
-tests\bin\jlink_smoke.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\run_jlink_smoke.ps1 -Exe tests\bin\jlink_smoke.exe -TimeoutSec 20
+if errorlevel 2 (
+  echo [SKIP] jlink_smoke: no J-Link / DLL timeout
+  goto :jlink_done
+)
 if errorlevel 1 (
   echo [ERROR] jlink_smoke FAILED
   exit /b 1
 )
+:jlink_done
 
 cl /nologo /W2 /utf-8 /I code\src tests\bug9_smoke.c ^
     /Fe:tests\bin\bug9_smoke.exe
@@ -309,11 +343,17 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Running network UI integration (单行工具栏+通道网络选项+按键复用+网络菜单/配置对话框)...
+echo Running network UI integration (单行工具栏+网络独立按钮+网络菜单/配置对话框)...
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\ui_net_ui_drive.ps1
 if errorlevel 1 (
   echo [ERROR] ui_net_ui_drive FAILED
   exit /b 1
+)
+
+echo Detecting J-Link for bug9 (ST-Link-only machines skip J-Link hardware tests)...
+if exist tests\bin\no_jlink.flag (
+  echo [SKIP] bug9 smoke: no J-Link detected
+  goto :tests_ok
 )
 
 echo Running bug9 smoke (J-Link read consistency, one speed per fresh process)...
@@ -338,5 +378,6 @@ if errorlevel 1 (
   exit /b 1
 )
 
+:tests_ok
 echo Tests OK.
 exit /b 0

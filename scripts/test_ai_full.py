@@ -21,6 +21,7 @@ DEFAULT_ELF = r"D:\C_Code\g431kb_for_openscope_d\EWARM\g431rb_tst\Exe\g431rb_tst
 DEFAULT_ROOT = r"D:\C_Code\g431kb_for_openscope_d"
 DEFAULT_SRC = r"D:\C_Code\g431kb_for_openscope_d\Core\Src\main.c"
 DEFAULT_LINE = 100
+DEFAULT_MAP = r"D:\C_Code\g431kb_for_openscope_d\EWARM\g431rb_tst\List\g431rb_tst.map"
 
 
 class Fail(Exception):
@@ -128,6 +129,39 @@ def main() -> int:
                 or call("vars.find", {"needle": "g_", "limit": 8}).get("matches", [])
                 or [1] if call("vars.find", {"needle": "g_", "limit": 8}).get("ok") else []) >= 0,
             "find"))
+
+        print("\n== XCP 符号 / A2L ==")
+        step("xcp.window show", lambda: expect(
+            call("xcp.window", {"show": 1}).get("shown") == 1, "window show"))
+        step("xcp.window hide", lambda: expect(
+            call("xcp.window", {"show": 0}).get("shown") == 0, "window hide"))
+        step("xcp.symbols", lambda: expect(
+            call("xcp.symbols", {"needle": "xcp_cal_mem", "limit": 8}).get("total", 0) > 0,
+            "no xcp symbols"))
+        if os.path.exists(DEFAULT_MAP):
+            step("xcp.load_map", lambda: expect(
+                call("xcp.load_map", {"path": DEFAULT_MAP}).get("count", 0) > 0,
+                "map load"))
+            step("xcp.symbols after map", lambda: expect(
+                int(call("xcp.symbols", {"needle": "xcp_cal_mem", "limit": 8})
+                    .get("total", 0)) > 0, "map symbol"))
+        else:
+            print(f"  SKIP  xcp.load_map (missing {DEFAULT_MAP})")
+        a2l_path = os.path.join(tempfile.gettempdir(), "openscope_ai_test.a2l")
+        step("a2l.export", lambda: expect(
+            call("a2l.export", {"path": a2l_path, "module": "ECU", "calibration": 1})
+            .get("ok"), "export"))
+        def _a2l_check():
+            expect(os.path.getsize(a2l_path) > 100, "a2l too small")
+            with open(a2l_path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            expect("ASAP2_VERSION 1 71" in text, "no ASAP2_VERSION")
+            expect("MEASUREMENT" in text, "no MEASUREMENT")
+            expect("ECU_ADDRESS" in text, "no ECU_ADDRESS")
+        step("a2l content", _a2l_check)
+        step("a2l.export measurements", lambda: expect(
+            call("a2l.export", {"path": a2l_path, "calibration": 0}).get("calibration") == 0,
+            "calibration flag"))
 
         if args.skip_hw:
             print("\n== 硬件（跳过）==")

@@ -12,6 +12,8 @@
 #include "version.h"
 #include "elf.h"
 #include "srcwin.h"
+#include "a2l_export.h"
+#include "xcpsym.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -181,9 +183,18 @@ static const AI_Tool g_tools[] = {
     {"drivers.select", "选择探针驱动", "{\"index\":0}"},
     {"probe.scan", "扫描仿真器", "{}"},
     {"xcp.scan", "扫描 XCP 传输端点（串口/CAN/TCP）", "{}"},
-    {"xcp.connect", "连接 XCP（与探针/网络并行）", "{\"transport\":\"serial\",\"port\":\"COM3\",\"baud\":115200}"},
+    {"xcp.connect", "连接 XCP（与探针/网络并行；界面工具栏同步）", "{\"transport\":\"serial\",\"port\":\"COM5\",\"baud\":115200}"},
     {"xcp.disconnect", "断开 XCP", "{}"},
     {"xcp.status", "XCP 连接状态", "{}"},
+    {"xcp.read", "经 XCP SHORT_UPLOAD 读内存", "{\"address\":\"0x20000248\",\"size\":4}"},
+    {"xcp.write", "经 XCP DOWNLOAD 写内存", "{\"address\":\"0x20000248\",\"data\":\"58435031\"}"},
+    {"xcp.symbols", "列出 XCP 符号（ELF 叶 + .map，可按名过滤）", "{\"needle\":\"g_\",\"limit\":50,\"offset\":0}"},
+    {"xcp.window", "显示/隐藏 XCP 标定页（界面同步）", "{\"show\":1}"},
+    {"xcp.load_map", "加载 .map 链接映射文件到 XCP 符号表", "{\"path\":\"D:\\\\fw.map\"}"},
+    {"xcp.clear_map", "清除已加载的 .map 符号", "{}"},
+    {"xcp.read_sym", "按符号名经 XCP 读值（自动识别类型）", "{\"name\":\"g_counter\"}"},
+    {"xcp.write_sym", "按符号名经 XCP 写值（十进制/0x/浮点，位域 RMW）", "{\"name\":\"g_gain\",\"value\":1.5}"},
+    {"a2l.export", "导出当前叶变量为 ASAP2 .a2l（CANape）", "{\"path\":\"D:\\\\out.a2l\",\"module\":\"ECU\",\"calibration\":1}"},
     {"connect", "连接 MCU（attach=1 非侵入接入）", "{\"device\":\"Cortex-M4\",\"iface\":0,\"speed_khz\":4000,\"probe_index\":-1,\"attach\":0}"},
     {"disconnect", "断开 MCU", "{}"},
     {"halt", "Halt CPU（停住）", "{}"},
@@ -412,7 +423,7 @@ static int method_connect(const char* params, char* out, int cap)
     g_app.connected = c;
     memset(&info, 0, sizeof(info));
     g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
-    os_mainwin_update_buttons();
+    os_mainwin_request_ui_sync();
     /* Attach 且有监视变量时自动开采集 */
     if (cfg.attach && c && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
         os_fw_acq_start();
@@ -428,7 +439,7 @@ static int method_disconnect(char* out, int cap)
     if (g_app.driver && g_app.driver->command)
         g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
     g_app.connected = 0;
-    os_mainwin_update_buttons();
+    os_mainwin_request_ui_sync();
     return ai_ok(out, cap, "\"connected\":0");
 }
 
@@ -583,6 +594,8 @@ static int method_vars_watch(const char* params, char* out, int cap)
     json_get_int(params, "on", &on);
     if (os_fw_set_watch(id, on ? 1 : 0) != 0)
         return ai_fail(out, cap, OS_ERR_FAIL, "watch failed");
+    /* 界面同步：左侧变量树勾选框 + 状态栏/开始采集按钮 */
+    os_mainwin_sync_watch(id, on);
     _snprintf(out, cap, "{\"ok\":true,\"id\":%d,\"watched\":%d,\"watch_count\":%d}",
               id, on ? 1 : 0, g_app.watch_count);
     return OS_ERR_OK;
@@ -674,6 +687,7 @@ static int method_flash(const char* params, int erase, char* out, int cap)
         erase ? OS_CMD_FLASH_ERASE : OS_CMD_FLASH_DOWNLOAD, &req, NULL);
     if (was_running) os_ds_start();
     if (rc != OS_ERR_OK) return ai_fail(out, cap, rc, erase ? "erase failed" : "download failed");
+    os_mainwin_request_ui_sync();
     return ai_ok(out, cap, erase ? "\"erased\":1" : "\"downloaded\":1");
 }
 
@@ -691,7 +705,7 @@ static int method_recording_start(char* out, int cap)
         g_app.recording = 0;
         return ai_fail(out, cap, OS_ERR_FAIL, "spool begin failed");
     }
-    os_mainwin_update_buttons();
+    os_mainwin_request_ui_sync();
     return ai_ok(out, cap, "\"recording\":1");
 }
 
@@ -714,7 +728,7 @@ static int method_recording_stop(const char* params, char* out, int cap)
         }
         os_spool_clear();
         if (was_running) os_ds_start();
-        os_mainwin_update_buttons();
+        os_mainwin_request_ui_sync();
         {
             char esc[MAX_PATH * 2];
             json_escape(path8, esc, sizeof(esc));
@@ -723,7 +737,7 @@ static int method_recording_stop(const char* params, char* out, int cap)
         return OS_ERR_OK;
     }
     if (was_running) os_ds_start();
-    os_mainwin_update_buttons();
+    os_mainwin_request_ui_sync();
     return ai_ok(out, cap, "\"recording\":0,\"saved\":0");
 }
 
@@ -903,7 +917,7 @@ int os_ai_call(const char* method, const char* params_json,
             return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "index required");
         if (os_modmgr_select_driver(idx) != OS_ERR_OK)
             return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "bad index");
-        os_mainwin_update_buttons();
+        os_mainwin_request_ui_sync();
         return method_drivers_list(result_json, result_cap);
     }
     if (strcmp(method, "xcp.scan") == 0) {
@@ -947,6 +961,10 @@ int os_ai_call(const char* method, const char* params_json,
             return ai_fail(result_json, result_cap, rc, "xcp.connect failed");
         g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
         g_app.xcp_connected = c;
+        _snprintf(g_app.xcp_transport, sizeof(g_app.xcp_transport), "%s", cfg.device);
+        _snprintf(g_app.xcp_port, sizeof(g_app.xcp_port), "%s", cfg.serial);
+        g_app.xcp_baud = baud;
+        os_mainwin_request_ui_sync();
         _snprintf(baud_s, sizeof(baud_s), "%d", baud);
         {
             char te[40], pe[140];
@@ -963,7 +981,265 @@ int os_ai_call(const char* method, const char* params_json,
             return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
         g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
         g_app.xcp_connected = 0;
+        os_mainwin_request_ui_sync();
         return ai_ok(result_json, result_cap, "\"connected\":0");
+    }
+    if (strcmp(method, "xcp.read") == 0) {
+        uint64_t addr = 0;
+        int size = 0, rc, i, n = 0;
+        OS_MemReq req;
+        uint8_t* buf;
+        char hex[4096];
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        if (!g_app.xcp_connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "xcp not connected");
+        if (json_get_u64(params, "address", &addr) != 0 ||
+            json_get_int(params, "size", &size) != 0 || size <= 0 || size > 256)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "address/size");
+        buf = (uint8_t*)malloc((size_t)size);
+        if (!buf) return ai_fail(result_json, result_cap, OS_ERR_FAIL, "oom");
+        memset(&req, 0, sizeof(req));
+        req.address = addr; req.size = (uint32_t)size; req.data = buf;
+        rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
+        if (rc < 0) { free(buf); return ai_fail(result_json, result_cap, rc, "xcp read failed"); }
+        for (i = 0; i < size && n < (int)sizeof(hex) - 3; i++)
+            n += _snprintf(hex + n, sizeof(hex) - n, "%02x", buf[i]);
+        free(buf);
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"address\":\"0x%llX\",\"size\":%d,\"data\":\"%s\"}",
+            (unsigned long long)addr, size, hex);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.write") == 0) {
+        uint64_t addr = 0;
+        char data_hex[520];
+        uint8_t buf[256];
+        int i, n = 0, hi = -1, v, rc;
+        OS_MemReq req;
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        if (!g_app.xcp_connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "xcp not connected");
+        if (json_get_u64(params, "address", &addr) != 0 ||
+            json_get_str(params, "data", data_hex, sizeof(data_hex)) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "address/data");
+        for (i = 0; data_hex[i] && n < 256; i++) {
+            char c = data_hex[i];
+            if (c == ' ' || c == '\t' || c == ',') continue;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+            else { return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "bad hex"); }
+            if (hi < 0) hi = v;
+            else { buf[n++] = (uint8_t)((hi << 4) | v); hi = -1; }
+        }
+        if (hi >= 0 || n <= 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "bad hex");
+        memset(&req, 0, sizeof(req));
+        req.address = addr; req.size = (uint32_t)n; req.data = buf;
+        rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "xcp write failed");
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"address\":\"0x%llX\",\"size\":%d}",
+            (unsigned long long)addr, n);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.window") == 0) {
+        int show = 1;
+        if (params) json_get_int(params, "show", &show);
+        if (g_app.hMain && IsWindow(g_app.hMain))
+            PostMessageW(g_app.hMain, WM_OS_XCP_SHOW, show ? 1 : 0, 0);
+        return ai_ok(result_json, result_cap, show ? "\"shown\":1" : "\"shown\":0");
+    }
+    if (strcmp(method, "xcp.symbols") == 0) {
+        char needle[128] = "";
+        int limit = 50, offset = 0, i, n = 0, got, total;
+        OS_XcpSym* syms;
+        if (params) {
+            json_get_str(params, "needle", needle, sizeof(needle));
+            json_get_int(params, "limit", &limit);
+            json_get_int(params, "offset", &offset);
+        }
+        if (limit <= 0) limit = 50;
+        if (limit > 500) limit = 500;
+        if (offset < 0) offset = 0;
+        total = os_xcpsym_count();
+        if (total <= 0)
+            return ai_ok(result_json, result_cap, "\"count\":0,\"symbols\":[]");
+        syms = (OS_XcpSym*)malloc((size_t)total * sizeof(OS_XcpSym));
+        if (!syms) return ai_fail(result_json, result_cap, OS_ERR_FAIL, "oom");
+        got = os_xcpsym_search(needle, offset, limit, syms, total);
+        n += _snprintf(result_json + n, result_cap - n,
+                       "{\"ok\":true,\"total\":%d,\"count\":%d,\"symbols\":[",
+                       total, got);
+        for (i = 0; i < got && n < result_cap - 300; i++) {
+            char nm[300];
+            json_escape(syms[i].name, nm, sizeof(nm));
+            n += _snprintf(result_json + n, result_cap - n,
+                "%s{\"name\":\"%s\",\"addr\":\"0x%llX\",\"size\":%u,"
+                "\"signed\":%d,\"float\":%d,\"bitfield\":%d,"
+                "\"source\":\"%s\",\"leaf_id\":%d}",
+                i ? "," : "", nm,
+                (unsigned long long)syms[i].address, (unsigned)syms[i].size,
+                syms[i].is_signed, syms[i].is_float, syms[i].is_bitfield,
+                syms[i].from_map ? "map" : "elf", syms[i].leaf_id);
+        }
+        free(syms);
+        if (n < result_cap - 2) { result_json[n++] = ']'; result_json[n++] = '}'; result_json[n] = 0; }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.load_map") == 0) {
+        char path8[MAX_PATH], err[256], esc[MAX_PATH * 2];
+        wchar_t pathw[MAX_PATH];
+        int n;
+        if (json_get_str(params, "path", path8, sizeof(path8)) != 0 || !path8[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "path required");
+        os_utf8_to_wide_buf(path8, pathw, MAX_PATH);
+        n = os_xcpsym_load_map(pathw, err, sizeof(err));
+        if (n < 0)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL,
+                           err[0] ? err : "map load failed");
+        os_mainwin_request_ui_sync();
+        json_escape(path8, esc, sizeof(esc));
+        _snprintf(result_json, result_cap,
+                  "{\"ok\":true,\"count\":%d,\"path\":\"%s\"}", n, esc);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.clear_map") == 0) {
+        os_xcpsym_clear_map();
+        os_mainwin_request_ui_sync();
+        return ai_ok(result_json, result_cap, "\"count\":0");
+    }
+    if (strcmp(method, "xcp.read_sym") == 0) {
+        char name[256];
+        OS_XcpSym s;
+        OS_MemReq req;
+        uint8_t buf[1024];
+        char value[128], hex[2200];
+        int rc;
+        if (json_get_str(params, "name", name, sizeof(name)) != 0 || !name[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "name required");
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        if (!g_app.xcp_connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "xcp not connected");
+        if (os_xcpsym_find(name, &s) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "symbol not found");
+        if (s.size == 0 || s.size > sizeof(buf))
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "symbol size unsupported");
+        memset(&req, 0, sizeof(req));
+        req.address = s.address;
+        req.size = s.size;
+        req.data = buf;
+        rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
+        if (rc < 0)
+            return ai_fail(result_json, result_cap, rc, "xcp read failed");
+        value[0] = 0;
+        os_xcpsym_format_value(&s, buf, (int)s.size, value, sizeof(value));
+        hex_encode(buf, (int)s.size, hex, sizeof(hex));
+        {
+            char nm[300], val[300];
+            json_escape(s.name, nm, sizeof(nm));
+            json_escape(value, val, sizeof(val));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"name\":\"%s\",\"address\":\"0x%llX\",\"size\":%u,"
+                "\"value\":\"%s\",\"hex\":\"%s\"}",
+                nm, (unsigned long long)s.address, (unsigned)s.size, val, hex);
+        }
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "xcp.write_sym") == 0) {
+        char name[256], text[128], err[128], name_json[300], val_json[200];
+        const char* pv = NULL;
+        OS_XcpSym s;
+        uint8_t enc[8], raw[8];
+        OS_MemReq req;
+        int n, rc;
+        if (json_get_str(params, "name", name, sizeof(name)) != 0 || !name[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "name required");
+        text[0] = 0;
+        if (json_get_str(params, "value", text, sizeof(text)) != 0) {
+            if (json_find_key(params, "value", &pv) == 0) {
+                int i = 0;
+                while (pv[i] && pv[i] != ',' && pv[i] != '}' &&
+                       pv[i] != ' ' && pv[i] != '\t' && i < (int)sizeof(text) - 1) {
+                    text[i] = pv[i];
+                    i++;
+                }
+                text[i] = 0;
+            }
+        }
+        if (!text[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "value required");
+        if (!g_app.xcpmod || !g_app.xcpmod->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no xcp");
+        if (!g_app.xcp_connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "xcp not connected");
+        if (os_xcpsym_find(name, &s) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "symbol not found");
+        n = os_xcpsym_encode_value(&s, text, enc, (int)sizeof(enc), err, sizeof(err));
+        if (n <= 0)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG,
+                           err[0] ? err : "bad value");
+        if (s.is_bitfield && s.size <= 8) {
+            uint64_t mask = os_xcpsym_bit_mask(&s), base, val;
+            int i;
+            memset(&req, 0, sizeof(req));
+            req.address = s.address;
+            req.size = s.size;
+            req.data = raw;
+            rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
+            if (rc < 0)
+                return ai_fail(result_json, result_cap, rc, "bitfield read failed");
+            base = 0;
+            for (i = 0; i < (int)s.size; i++) base |= ((uint64_t)raw[i]) << (8 * i);
+            val = 0;
+            for (i = 0; i < n; i++) val |= ((uint64_t)enc[i]) << (8 * i);
+            base = (base & ~mask) | ((val << s.bit_offset) & mask);
+            for (i = 0; i < (int)s.size; i++) raw[i] = (uint8_t)((base >> (8 * i)) & 0xFF);
+            memset(&req, 0, sizeof(req));
+            req.address = s.address;
+            req.size = s.size;
+            req.data = raw;
+            rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
+        } else {
+            memset(&req, 0, sizeof(req));
+            req.address = s.address;
+            req.size = (uint32_t)n;
+            req.data = enc;
+            rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
+        }
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, "xcp write failed");
+        json_escape(s.name, name_json, sizeof(name_json));
+        json_escape(text, val_json, sizeof(val_json));
+        _snprintf(result_json, result_cap,
+            "{\"ok\":true,\"name\":\"%s\",\"address\":\"0x%llX\",\"size\":%u,"
+            "\"value\":\"%s\"}",
+            name_json, (unsigned long long)s.address, (unsigned)s.size, val_json);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "a2l.export") == 0) {
+        char path8[MAX_PATH], mod[64] = "ECU";
+        wchar_t pathw[MAX_PATH];
+        int calibration = 1;
+        if (json_get_str(params, "path", path8, sizeof(path8)) != 0 || !path8[0])
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "path required");
+        json_get_str(params, "module", mod, sizeof(mod));
+        json_get_int(params, "calibration", &calibration);
+        os_utf8_to_wide_buf(path8, pathw, MAX_PATH);
+        if (os_a2l_export(pathw, mod[0] ? mod : "ECU", calibration ? 1 : 0) != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "a2l export failed");
+        {
+            char pe[MAX_PATH * 2];
+            json_escape(path8, pe, sizeof(pe));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"path\":\"%s\",\"leaf_count\":%d,\"calibration\":%d}",
+                pe, g_app.leaf_count, calibration ? 1 : 0);
+        }
+        return OS_ERR_OK;
     }
     if (strcmp(method, "xcp.status") == 0) {
         int c = 0;
@@ -1306,12 +1582,12 @@ int os_ai_call(const char* method, const char* params_json,
     if (strcmp(method, "acq.start") == 0) {
         int rc = os_fw_acq_start();
         if (rc != 0) return ai_fail(result_json, result_cap, rc, "acq start failed");
-        os_mainwin_update_buttons();
+        os_mainwin_request_ui_sync();
         return ai_ok(result_json, result_cap, "\"acq_state\":1");
     }
     if (strcmp(method, "acq.stop") == 0) {
         os_fw_acq_stop();
-        os_mainwin_update_buttons();
+        os_mainwin_request_ui_sync();
         return ai_ok(result_json, result_cap, "\"acq_state\":0");
     }
     if (strcmp(method, "acq.state") == 0) {

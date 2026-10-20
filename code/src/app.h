@@ -67,6 +67,13 @@ typedef struct {
 #define WM_OS_FLASH_PROGRESS (WM_APP + 47) /* 烧录进度：wParam=0..100 或 0xFFFFFFFF=滚动；lParam=heap UTF-8 阶段串（接收方 free） */
 #define WM_OS_FLASH_DONE     (WM_APP + 48) /* 烧录/擦除完成：wParam=rc，lParam=FlashJob* */
 #define WM_OS_SRC_UI         (WM_APP + 49) /* 源码 UI：lParam=OS_SrcUiReq*（SendMessage 同步，主线程执行） */
+#define WM_OS_UI_SYNC        (WM_APP + 50) /* AI/工作线程 → 主线程：同步工具栏/状态栏/XCP 控件 */
+#define WM_OS_WATCH_SYNC     (WM_APP + 51) /* AI → 主线程：同步单个叶变量的观测勾选 (wParam=id, lParam=on) */
+#define WM_OS_ELF_OPEN       (WM_APP + 52) /* AI/工作线程 → 主线程：同步加载 ELF (lParam=heap wchar_t*，SendMessage 同步) */
+#define WM_OS_XCP_SHOW       (WM_APP + 53) /* AI → 主线程：显示/隐藏 XCP 标定页 (wParam=1/0) */
+#define IDM_XCP_WIN          2706          /* XCP 标定窗口 */
+#define IDM_A2L_EXPORT       2707          /* 导出 A2L（含标定量） */
+#define IDM_A2L_EXPORT_MEAS  2708          /* 导出 A2L（全部为测量量） */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 #define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */
@@ -155,6 +162,9 @@ typedef struct OS_App {
     OS_Module* xcpmod;      /* XCP 模块（OS_CAP_XCP）——与探针/网络并行 */
     void* xcpmod_ctx;
     int  xcp_connected;     /* UI 镜像：XCP 是否已连接 */
+    char xcp_transport[16]; /* serial/can/tcp —— AI/UI 同步 */
+    char xcp_port[64];      /* COM5 / host:port */
+    int  xcp_baud;          /* 波特率或等效 */
     OS_Framework fw;
 
     volatile LONG acq_state;
@@ -255,6 +265,8 @@ int os_ai_call(const char* method, const char* params_json,
 
 /* 主窗口控制（mainwin.c） */
 void os_mainwin_update_buttons(void);
+/** AI/工作线程安全：投递 WM_OS_UI_SYNC，主线程刷新工具栏/状态栏/XCP 控件 */
+void os_mainwin_request_ui_sync(void);
 void os_mainwin_append_log(int level, const wchar_t* line);
 void os_mainwin_tile(void);
 int os_mainwin_reload_elf(void);

@@ -160,6 +160,19 @@ static int ser_read_exact(HANDLE h, uint8_t* p, int n, int timeout_ms)
     return 0;
 }
 
+/* 收到的帧大于调用方缓冲：读走丢弃，保持后续帧边界不撕裂 */
+static void ser_discard(HANDLE h, int n, int timeout_ms)
+{
+    uint8_t tmp[64];
+    DWORD t0 = GetTickCount();
+    while (n > 0) {
+        int chunk = n > (int)sizeof(tmp) ? (int)sizeof(tmp) : n;
+        if (ser_read_exact(h, tmp, chunk, timeout_ms) != 0) return;
+        n -= chunk;
+        if ((int)(GetTickCount() - t0) > timeout_ms * 2) return;
+    }
+}
+
 static int ser_send(void* ctx, const uint8_t* data, int len)
 {
     SerCtx* s = (SerCtx*)ctx;
@@ -186,7 +199,12 @@ static int ser_recv(void* ctx, uint8_t* data, int cap, int timeout_ms)
     rc = ser_read_exact(s->h, hdr, 2, timeout_ms);
     if (rc != 0) { LeaveCriticalSection(&s->cs); return -1; }
     len = (int)hdr[0] | ((int)hdr[1] << 8);
-    if (len <= 0 || len > cap) { LeaveCriticalSection(&s->cs); return -1; }
+    if (len <= 0) { LeaveCriticalSection(&s->cs); return -1; }
+    if (len > cap) {
+        ser_discard(s->h, len, timeout_ms);
+        LeaveCriticalSection(&s->cs);
+        return -1;
+    }
     rc = ser_read_exact(s->h, data, len, timeout_ms);
     LeaveCriticalSection(&s->cs);
     return rc == 0 ? len : -1;

@@ -29,6 +29,7 @@ public class NetUi2 {
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
+    [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr h);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr SendMessageW(IntPtr h, uint msg, IntPtr wp, StringBuilder lp);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder sb, int max);
@@ -48,6 +49,18 @@ public class NetUi2 {
     public struct RECT { public int left, top, right, bottom; }
 }
 "@
+
+function Get-Ctl([IntPtr]$h, [int]$id) {
+    $c = [NetUi2]::GetDlgItem($h, $id)
+    if ($c -ne [IntPtr]::Zero) { return $c }
+    $script:found = [IntPtr]::Zero
+    [NetUi2]::EnumChildWindows($h, {
+        param($w, $l)
+        if ([NetUi2]::GetDlgCtrlID($w) -eq $id) { $script:found = [IntPtr]$w; return $false }
+        return $true
+    }, [IntPtr]::Zero) | Out-Null
+    return $script:found
+}
 
 function Get-LBText([IntPtr]$hCombo, [int]$idx) {
     $sb = New-Object System.Text.StringBuilder 128
@@ -94,7 +107,7 @@ function Cmd([IntPtr]$hMain, [int]$id) {
 }
 
 function Click([IntPtr]$hDlg, [int]$id) {
-    $b = [NetUi2]::GetDlgItem($hDlg, $id)
+    $b = Get-Ctl $hDlg $id
     if ($b -ne [IntPtr]::Zero) {
         [NetUi2]::SendMessage($b, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null  # BM_CLICK
     }
@@ -148,18 +161,17 @@ if ($hA -eq [IntPtr]::Zero) { Write-Output "FAIL A 主窗口未出现"; exit 1 }
 Start-Sleep -Milliseconds 1200
 
 # ---- 1. 单行工具栏：网络 IP 编辑框与刷新按钮同一行 ----
-$rIp = New-Object -TypeName "NetUi2+RECT";  $bIp = [NetUi2]::GetDlgItem($hA, 2110)
-$rRef = New-Object -TypeName "NetUi2+RECT"; $bRef = [NetUi2]::GetDlgItem($hA, 2105)
+$rIp = New-Object -TypeName "NetUi2+RECT";  $bIp = Get-Ctl $hA 2110
+$rRef = New-Object -TypeName "NetUi2+RECT"; $bRef = Get-Ctl $hA 2105
 [NetUi2]::GetWindowRect($bIp, [ref]$rIp) | Out-Null
 [NetUi2]::GetWindowRect($bRef, [ref]$rRef) | Out-Null
 $sameRow = ([Math]::Abs($rIp.top - $rRef.top) -le 12) -and ($rIp.top -gt 0)
 Check "单行工具栏（IP编辑与刷新同排 y差=$([Math]::Abs($rIp.top - $rRef.top)) top=$($rIp.top)）" $sameRow
 
-# ---- 2. 通道下拉含"网络"选项 ----
-$bDrv = [NetUi2]::GetDlgItem($hA, 2106)
-$cnt = [NetUi2]::SendMessage($bDrv, 0x0146, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()  # CB_GETCOUNT
-$lastItem = Get-LBText $bDrv ($cnt - 1)
-Check "通道下拉含'网络'选项（末项='$lastItem'）" ($lastItem -eq "网络")
+# ---- 2. 网络独立连接按钮（1.27+ 三通道并行：不再占用探针下拉） ----
+$netBtn = Get-Ctl $hA 2113
+$netBtnText = Get-Text $netBtn
+Check "网络独立按钮存在（'$netBtnText'）" ($netBtnText -eq "网络连接")
 
 # ---- 3. 菜单栏含"网络"菜单 ----
 $menu = [NetUi2]::GetMenu($hA)
@@ -174,25 +186,18 @@ for ($i = 0; $i -lt [NetUi2]::GetMenuItemCount($menu); $i++) {
 }
 Check "菜单栏含'网络'菜单（$($subNames -join '/')）" ($subNames -contains "网络(&N)")
 
-# ---- 4. 通道切换到"网络"：硬件配置控件禁用 ----
-[NetUi2]::SendMessage($bDrv, 0x014E, [IntPtr]($cnt - 1), [IntPtr]::Zero) | Out-Null  # CB_SETCURSEL
-# 显式投递 CBN_SELCHANGE 通知（CB_SETCURSEL 不保证触发）
-$selCmd = [IntPtr](0x00010000 -bor 2106)  # MAKEWPARAM(2106, CBN_SELCHANGE=1)
-[NetUi2]::PostMessage($hA, 0x0111, $selCmd, $bDrv) | Out-Null
-Start-Sleep -Milliseconds 400
-$bIface = [NetUi2]::GetDlgItem($hA, 2102)
-$bEmu = [NetUi2]::GetDlgItem($hA, 2104)
-$ifaceDisabled = -not [NetUi2]::IsWindowEnabled($bIface)
-$emuDisabled = -not [NetUi2]::IsWindowEnabled($bEmu)
-Check "网络通道下接口/设备下拉禁用（iface=$ifaceDisabled emu=$emuDisabled）" ($ifaceDisabled -and $emuDisabled)
+# ---- 4. 网络与探针并行：接口/设备下拉保持可用 ----
+$bIface = Get-Ctl $hA 2102
+$bEmu = Get-Ctl $hA 2104
+Check "网络并行时接口/设备下拉仍可用" ([NetUi2]::IsWindowEnabled($bIface) -and [NetUi2]::IsWindowEnabled($bEmu))
 
 # ---- 5. 网络配置对话框：改 IP/端口 -> 确定 -> 回写内联编辑框 ----
 Cmd $hA 2801  # IDM_NET_CFG
 $dlg = Wait-ByClass $a.Id "OSDlgNetCfg" 3000
 Check "网络配置对话框打开 (OSDlgNetCfg)" ($dlg -ne [IntPtr]::Zero)
 if ($dlg -ne [IntPtr]::Zero) {
-    $ipIn = [NetUi2]::GetDlgItem($dlg, 2421)
-    $portIn = [NetUi2]::GetDlgItem($dlg, 2422)
+    $ipIn = Get-Ctl $dlg 2421
+    $portIn = Get-Ctl $dlg 2422
     $dlgIp = Get-Text $ipIn
     $dlgPort = Get-Text $portIn
     Check "对话框初值与内联一致 IP/端口（'$dlgIp`:$dlgPort'）" ($dlgIp -eq "127.0.0.1" -and $dlgPort -eq "10005")
@@ -200,11 +205,11 @@ if ($dlg -ne [IntPtr]::Zero) {
     Start-Sleep -Milliseconds 500
 }
 $inlineIp = Get-Text $bIp
-$inlinePort = Get-Text ([NetUi2]::GetDlgItem($hA, 2111))
+$inlinePort = Get-Text (Get-Ctl $hA 2111)
 $logAText = Read-Log $logA
 Check "对话框确定回写内联 IP/端口（'$inlineIp`:$inlinePort'）+ 日志确认" ($inlineIp -eq "127.0.0.1" -and $inlinePort -eq "10005" -and $logAText -match "网络配置: 127.0.0.1:10005")
 
-# ---- 6. 菜单"网络→监听"（通道=网络时按键复用同样走此路径） ----
+# ---- 6. 菜单"网络→监听" ----
 Cmd $hA 2802  # IDM_NET_LISTEN
 Start-Sleep -Milliseconds 800
 $logAText = Read-Log $logA
@@ -215,32 +220,26 @@ $b = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logB"
 $hB = Wait-Main $b.Id 8000
 if ($hB -eq [IntPtr]::Zero) { Write-Output "FAIL B 主窗口未出现"; Get-Process OpenScope -ErrorAction SilentlyContinue | Stop-Process -Force; exit 1 }
 Start-Sleep -Milliseconds 1200
-$bDrvB = [NetUi2]::GetDlgItem($hB, 2106)
-$cntB = [NetUi2]::SendMessage($bDrvB, 0x0146, [IntPtr]::Zero, [IntPtr]::Zero).ToInt32()
-[NetUi2]::SendMessage($bDrvB, 0x014E, [IntPtr]($cntB - 1), [IntPtr]::Zero) | Out-Null  # 切到网络
-$selCmdB = [IntPtr](0x00010000 -bor 2106)
-[NetUi2]::PostMessage($hB, 0x0111, $selCmdB, $bDrvB) | Out-Null
-Start-Sleep -Milliseconds 400
 
-# ---- 7. 按键复用：B 点"连接"按钮 = 网络连接（连 A 的 10005，--net-set 已进程内对齐） ----
-Click $hB 2002  # IDC_BTN_CONNECT
+# ---- 7. 网络独立按钮：B 点"网络连接"（连 A 的 10005，--net-set 已进程内对齐） ----
+Click $hB 2113  # IDD_NET_CONNECT
 Start-Sleep -Milliseconds 800
 $logBText = Read-Log $logB
 $logAText = Read-Log $logA
-Check "B 连接按钮复用=网络连接（'连接 127.0.0.1:10005 rc=0'）" ($logBText -match "10005 rc=0")
+Check "B 网络连接按钮（'连接 127.0.0.1:10005 rc=0'）" ($logBText -match "10005 rc=0")
 Check "A 收到客户端接入" ($logAText -match "客户端接入")
 
-# ---- 8. 按键复用：B 点"开始采集" = 下达监视列表 ----
-Click $hB 2004  # IDC_BTN_START
+# ---- 8. 网络菜单：下达监视列表 ----
+Cmd $hB 2805  # IDM_NET_WATCH
 Start-Sleep -Milliseconds 800
 $logBText = Read-Log $logB
-Check "B 开始采集复用=下达监视列表（'发送监视列表 2 项 -> 1 个对端'）" ($logBText -match "发送监视列表 2 项 -> 1 个对端")
+Check "B 下达监视列表（'发送监视列表 2 项 -> 1 个对端'）" ($logBText -match "发送监视列表 2 项 -> 1 个对端")
 
-# ---- 9. 按键复用：B 点"停止采集" = 停止下达（空监视列表） ----
-Click $hB 2005  # IDC_BTN_STOP
+# ---- 9. 网络菜单：停止下达（空监视列表） ----
+Cmd $hB 2806  # IDM_NET_WATCHSTOP
 Start-Sleep -Milliseconds 800
 $logBText = Read-Log $logB
-Check "B 停止采集复用=停止下达（'停止下达'）" ($logBText -match "停止下达")
+Check "B 停止下达（'停止下达'）" ($logBText -match "停止下达")
 
 # ---- 10. B 菜单"网络→断开" = 网络停止 ----
 Cmd $hB 2804  # IDM_NET_STOP

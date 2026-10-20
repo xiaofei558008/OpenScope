@@ -573,19 +573,138 @@ static int stlink_step_out(void)
     return OS_ERR_OK;
 }
 
-/* 烧录前切 Under Reset（硬件复位）；失败则尝试 NORMAL */
+/* 烧录前：尽量不切换连接模式。
+ * 本机 CubeProgrammer 在 HOTPLUG 下调用 Halt/massErase/UNDER_RESET 重连
+ * 曾出现 0xC0000005 @ 0x100000000；因此默认保持连接，由 downloadFile 做扇区擦除。 */
 static int stlink_enter_flash_mode(void)
 {
     int rc;
     if (g_ctx.connected) {
-        if (g_ctx.api.disconnect) g_ctx.api.disconnect();
+        if (g_ctx.api.check_device_connection) {
+            int ok = 0;
+            __try { ok = g_ctx.api.check_device_connection(); }
+            __except (EXCEPTION_EXECUTE_HANDLER) { ok = 0; }
+            if (ok) {
+                if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录: 保持当前连接（跳过 Halt/重连）");
+                return OS_ERR_OK;
+            }
+        } else {
+            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录: 保持当前连接");
+            return OS_ERR_OK;
+        }
+        if (g_ctx.api.disconnect) {
+            __try { g_ctx.api.disconnect(); }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
         g_ctx.connected = 0;
     }
-    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录: 切换 Under Reset 连接（Halt+复位，避免擦除失败）");
-    rc = mod_connect_mode(OS_STLINK_MODE_UNDER_RESET, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录: NORMAL 连接（硬件复位）");
+    rc = mod_connect_mode(OS_STLINK_MODE_NORMAL, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
     if (rc == OS_ERR_OK) return OS_ERR_OK;
-    if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link 烧录: Under Reset 失败，改试 NORMAL");
-    return mod_connect_mode(OS_STLINK_MODE_NORMAL, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
+    if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link 烧录: NORMAL 失败，改试 Under Reset");
+    return mod_connect_mode(OS_STLINK_MODE_UNDER_RESET, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
+}
+
+/* 查找 STM32_Programmer_CLI.exe（CubeProgrammer API 烧录在本机易 AV，改走 CLI） */
+static int stlink_find_cli(wchar_t* out, int out_cch)
+{
+    static const wchar_t* cands[] = {
+        L"C:\\Program Files\\STMicroelectronics\\STM32Cube\\STM32CubeProgrammer\\bin\\STM32_Programmer_CLI.exe",
+        L"C:\\Program Files (x86)\\STMicroelectronics\\STM32Cube\\STM32CubeProgrammer\\bin\\STM32_Programmer_CLI.exe",
+        NULL
+    };
+    int i;
+    wchar_t env[MAX_PATH];
+    DWORD n;
+    if (!out || out_cch < 8) return -1;
+    n = GetEnvironmentVariableW(L"STM32_PROGRAMMER_CLI", env, MAX_PATH);
+    if (n > 0 && n < MAX_PATH && GetFileAttributesW(env) != INVALID_FILE_ATTRIBUTES) {
+        wcsncpy(out, env, (size_t)out_cch - 1);
+        out[out_cch - 1] = 0;
+        return 0;
+    }
+    for (i = 0; cands[i]; i++) {
+        if (GetFileAttributesW(cands[i]) != INVALID_FILE_ATTRIBUTES) {
+            wcsncpy(out, cands[i], (size_t)out_cch - 1);
+            out[out_cch - 1] = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+/* 通过 CLI 烧录/擦除：先断开 API 占用的 SWD，再 CreateProcess */
+static int stlink_cli_run(const wchar_t* args_extra)
+{
+    wchar_t cli[MAX_PATH], cmdline[2048];
+    STARTUPINFOW si;
+    PROCESS_INFORMATION pi;
+    DWORD exit_code = 1;
+    int speed;
+    if (stlink_find_cli(cli, MAX_PATH) != 0) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link: 未找到 STM32_Programmer_CLI.exe");
+        return OS_ERR_FAIL;
+    }
+    if (g_ctx.connected) {
+        if (g_ctx.api.disconnect) {
+            __try { g_ctx.api.disconnect(); }
+            __except (EXCEPTION_EXECUTE_HANDLER) {}
+        }
+        g_ctx.connected = 0;
+        Sleep(200);
+    }
+    speed = g_ctx.cfg.speed_khz > 0 ? g_ctx.cfg.speed_khz : 4000;
+    if (speed > 8000) speed = 8000;
+    _snwprintf(cmdline, 2048,
+               L"\"%s\" -c port=SWD freq=%d mode=UR %s",
+               cli, speed, args_extra ? args_extra : L"");
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    memset(&pi, 0, sizeof(pi));
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link CLI: %ls", cmdline);
+    if (!CreateProcessW(NULL, cmdline, NULL, NULL, FALSE, CREATE_NO_WINDOW,
+                        NULL, NULL, &si, &pi)) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link CLI CreateProcess 失败 err=%lu", GetLastError());
+        return OS_ERR_FAIL;
+    }
+    WaitForSingleObject(pi.hProcess, 180000);
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link CLI 退出码=%lu", (unsigned long)exit_code);
+    return (exit_code == 0) ? OS_ERR_OK : OS_ERR_FAIL;
+}
+
+static int stlink_cli_download(const wchar_t* path, uint32_t addr, int verify, int reset_run)
+{
+    wchar_t extra[1536];
+    const wchar_t* ext;
+    int is_bin = 0;
+    if (!path || !path[0]) return OS_ERR_INVALID_ARG;
+    ext = wcsrchr(path, L'.');
+    if (ext && (_wcsicmp(ext, L".bin") == 0 || _wcsicmp(ext, L".BIN") == 0))
+        is_bin = 1;
+    if (is_bin) {
+        _snwprintf(extra, 1536, L"-w \"%s\" 0x%08X %s %s",
+                   path, addr ? addr : 0x08000000u,
+                   verify ? L"-v" : L"",
+                   reset_run ? L"-rst" : L"");
+    } else {
+        _snwprintf(extra, 1536, L"-w \"%s\" %s %s",
+                   path,
+                   verify ? L"-v" : L"",
+                   reset_run ? L"-rst" : L"");
+    }
+    return stlink_cli_run(extra);
+}
+
+static int stlink_cli_erase(int reset_run)
+{
+    wchar_t extra[128];
+    _snwprintf(extra, 128, L"-e all %s", reset_run ? L"-rst" : L"");
+    return stlink_cli_run(extra);
 }
 
 /* 烧录后恢复 HOTPLUG，便于继续采变量 */
@@ -888,95 +1007,34 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     }
     case OS_CMD_FLASH_ERASE: {
         const OS_FlashReq* req = (const OS_FlashReq*)in;
-        int rc, ok;
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (!g_ctx.api.mass_erase) {
-            if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 不支持 massErase");
-            return OS_ERR_FAIL;
-        }
+        int rc;
+        /* CubeProgrammer API massErase 在本机易 AV；统一走 CLI */
+        if (!g_ctx.api.h) return OS_ERR_FAIL;
+        if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         EnterCriticalSection(&g_ctx.cs);
-        rc = stlink_enter_flash_mode();
-        if (rc != OS_ERR_OK) {
-            LeaveCriticalSection(&g_ctx.cs);
-            return rc;
-        }
-        if (g_fw && g_fw->flash_progress) g_fw->flash_progress(0, "整片擦除…");
-        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase…");
-        InterlockedExchange(&g_accept_flash_progress, 1);
-        rc = g_ctx.api.mass_erase(NULL);
-        InterlockedExchange(&g_accept_flash_progress, 0);
-        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
-        ok = (rc == 0);
-        if (ok && g_fw && g_fw->flash_progress) g_fw->flash_progress(100, "擦除完成");
-        if (ok && req && req->reset_run && g_ctx.api.reset)
-            g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
+        /* 勿调用 g_fw->flash_progress：旧宿主 OS_Framework 无此字段会野指针崩溃 */
+        rc = stlink_cli_erase(req ? req->reset_run : 1);
         stlink_leave_flash_mode();
         LeaveCriticalSection(&g_ctx.cs);
-        return ok ? OS_ERR_OK : OS_ERR_FAIL;
+        return rc;
     }
     case OS_CMD_FLASH_DOWNLOAD: {
         const OS_FlashReq* req = (const OS_FlashReq*)in;
         uint32_t addr;
-        int rc, ok, skip;
+        int rc;
         if (!req || !req->path[0]) return OS_ERR_INVALID_ARG;
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (!g_ctx.api.download_file) {
-            if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 不支持 downloadFile");
-            return OS_ERR_FAIL;
-        }
+        if (!g_ctx.api.h) return OS_ERR_FAIL;
+        if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         addr = req->address ? req->address : 0x08000000u;
-        skip = req->skip_erase ? 1 : 0;
         EnterCriticalSection(&g_ctx.cs);
-        rc = stlink_enter_flash_mode();
-        if (rc != OS_ERR_OK) {
-            LeaveCriticalSection(&g_ctx.cs);
-            return rc;
-        }
-        /* 需要擦除时：先 massErase，再 downloadFile(skipErase=1)。
-         * HOTPLUG 下 downloadFile 自带扇区擦除常报 failed to erase memory；
-         * Under Reset + 整片擦除更稳（与 CubeProgrammer GUI 流程一致）。 */
-        if (!skip && g_ctx.api.mass_erase) {
-            if (g_fw && g_fw->flash_progress) g_fw->flash_progress(0, "烧录前擦除…");
-            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录前 massErase…");
-            InterlockedExchange(&g_accept_flash_progress, 1);
-            rc = g_ctx.api.mass_erase(NULL);
-            InterlockedExchange(&g_accept_flash_progress, 0);
-            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link massErase rc=%d", rc);
-            if (rc != 0) {
-                stlink_leave_flash_mode();
-                LeaveCriticalSection(&g_ctx.cs);
-                return OS_ERR_FAIL;
-            }
-            skip = 1;
-        }
-        if (g_fw && g_fw->flash_progress) g_fw->flash_progress(0, "下载固件…");
-        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile '%ls' @0x%08X skipErase=%d verify=%d",
-                            req->path, addr, skip, req->verify);
-        InterlockedExchange(&g_accept_flash_progress, 1);
-        rc = g_ctx.api.download_file(req->path, addr,
-                                     (unsigned)skip,
-                                     (unsigned)(req->verify ? 1 : 0), NULL);
-        InterlockedExchange(&g_accept_flash_progress, 0);
-        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile rc=%d", rc);
-        /* 若未先 massErase 且仍失败：再试 massErase + skip 下载 */
-        if (rc != 0 && !req->skip_erase && g_ctx.api.mass_erase) {
-            if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link downloadFile 失败，重试 massErase+skipErase");
-            InterlockedExchange(&g_accept_flash_progress, 1);
-            if (g_ctx.api.mass_erase(NULL) == 0) {
-                rc = g_ctx.api.download_file(req->path, addr, 1,
-                                             (unsigned)(req->verify ? 1 : 0), NULL);
-                if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link downloadFile 重试 rc=%d", rc);
-            }
-            InterlockedExchange(&g_accept_flash_progress, 0);
-        }
-        ok = (rc == 0);
-        if (ok && req->reset_run) {
-            if (g_ctx.api.reset) g_ctx.api.reset(OS_STLINK_RST_SOFTWARE);
-            if (g_ctx.api.execute) g_ctx.api.execute(addr);
-        }
+        /* CubeProgrammer_API downloadFile 在本机 AV；改走 STM32_Programmer_CLI。
+         * 勿调 flash_progress（与旧宿主 ABI 不兼容时会崩在 0x100000000）。 */
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录(CLI) '%ls' @0x%08X verify=%d",
+                            req->path, addr, req->verify);
+        rc = stlink_cli_download(req->path, addr, req->verify, req->reset_run);
         stlink_leave_flash_mode();
         LeaveCriticalSection(&g_ctx.cs);
-        return ok ? OS_ERR_OK : OS_ERR_FAIL;
+        return rc;
     }
     case OS_CMD_ELF_RELOADED:
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 模块: ELF 已重载");

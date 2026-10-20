@@ -15,6 +15,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
 void os_mainwin_register(void);
 void os_mainwin_rebuild_window_menu(void);
 void os_mainwin_update_buttons(void);
+void os_mainwin_request_ui_sync(void);
+/** AI/工作线程安全：同步某个叶变量的观测勾选到左侧变量树 */
+void os_mainwin_sync_watch(int leaf_id, int on);
 void os_mainwin_refresh_status(void);
 int os_mainwin_open_elf(const wchar_t* path);
 /* N9(b): 变量是否仍被任一窗口引用；从窗口移除后自动取消观测 */

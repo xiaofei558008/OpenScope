@@ -151,9 +151,18 @@ OpenScope 是一款专为嵌入式开发设计的高性能调试与数据采集�
 
 **XCP**（ASAM 1.3）经物理层无关接口 `XcpTransport`/`XcpIo`：内置 **串口**（`[u16 LE len][payload]`）、**TCP**（`[u16 len][u16 ctr][payload]`）、**CAN** 占位（周立功/Kvaser 待接）。主机侧写运行日志；MCU 示例与端口在 `module/xcp/mcu/`。AI：`xcp.scan` / `xcp.connect` / `xcp.disconnect` / `xcp.status`。
 
+**XCP 标定 / 调试页**（菜单「采集 → XCP 标定 / 调试...」）提供手工标定闭环：
+
+- 传输选择 `serial` / `can` / `tcp`，填端口（`COM5` 或 `host:port`）与波特率，扫描/连接/断开。
+- **符号来源可直接加载**：`加载 ELF/out...`（走主框架 ELF/DWARF，带类型）或 `加载 MAP...`（GNU ld / Keil armlink / IAR，支持 `0x2000'0248` 千位分隔格式）。
+- 选中符号后显示地址、长度、类型；`XCP读` 做 SHORT_UPLOAD 并同时显示 HEX 与十进制/浮点值；`写值` 按类型写 DOWNLOAD（位域自动 read-modify-write），`写 HEX` 写原始字节。
+- 符号注册表同时供 AI 使用：`xcp.symbols` / `xcp.load_map` / `xcp.clear_map` / `xcp.read_sym` / `xcp.write_sym`。
+
 ### 3.9 AI / CLI / MCP 自动化接口
 
 全部主机操作可通过本机 **WebSocket JSON-RPC 2.0** 调用（无需点界面），便于 AI 工具与脚本自动化调试 MCU。
+
+> 接口形态：主接口是 `aiapi.dll` 提供的 **WebSocket JSON-RPC 2.0**；`scripts/os_cli.py` 是命令行薄封装，`scripts/openscope_mcp.py` 是 MCP stdio 桥，三者最终都调用宿主 `ai_bridge.c` 的同一套 `os_ai_call` 方法，不是独立的 CLI 实现。
 
 | 项 | 说明 |
 | :--- | :--- |
@@ -162,7 +171,7 @@ OpenScope 是一款专为嵌入式开发设计的高性能调试与数据采集�
 | 改端口 | 环境变量 `OPENSCOPE_AI_PORT`，或启动参数 `--ai-port=端口` |
 | 静默 UI | 启动 `--ai-silent` 或环境变量 `OPENSCOPE_AI_SILENT=1`；运行中可用 `ui.silent` |
 | 协议 | 文本帧 JSON-RPC：`{"jsonrpc":"2.0","id":1,"method":"status","params":{}}` |
-| MCP | 同端口支持 `tools/list`、`tools/call`；stdio 桥：`tools/openscope_mcp.py` |
+| MCP | 同端口支持 `tools/list`、`tools/call`；stdio 桥：`scripts/openscope_mcp.py` |
 | CLI | `python scripts/os_cli.py <method> [json_params]` |
 
 **常用方法（调用 `help` / `tools.list` 可获得实时完整表）**：`status`、`modules.list`、`drivers.list` / `drivers.select`、`probe.scan`、`connect` / `disconnect`、`halt` / `go` / `step` / `step_in` / `step_over` / `step_out`、`bp.set` / `bp.clear` / `bp.list` / **`bp.set_line` / `bp.clear_line`**、`cpu.state`、`elf.load`、**`src.status` / `src.roots` / `src.files` / `src.open` / `src.line_to_addr` / `src.addr_to_line`**、`vars.list` / `vars.find` / `vars.watch` / `vars.read` / `vars.write`、`mem.read` / `mem.write`、`acq.start` / `acq.stop`、`flash.download` / `flash.erase`、`recording.start` / `recording.stop`、**`log.read` / `log.clear` / `log.subscribe` / `log.unsubscribe`**、**`alerts.read` / `ui.silent`**。
@@ -201,6 +210,17 @@ python scripts/os_cli.py elf.load "{\"path\":\"D:/fw.elf\"}"
 python scripts/os_cli.py vars.watch "{\"name\":\"g_counter\",\"on\":1}"
 python scripts/os_cli.py acq.start
 ```
+
+**AI 操作与界面同步**：`connect`/`disconnect`、`drivers.select`、`acq.start`/`acq.stop`、`recording.*`、`vars.watch`、`xcp.connect`/`xcp.disconnect`、`elf.load`/`elf.reload` 等会修改界面状态的方法，均通过主线程消息（`WM_OS_UI_SYNC` / `WM_OS_WATCH_SYNC` / `WM_OS_ELF_OPEN`）同步工具栏、状态栏、XCP 页和左侧变量树勾选，AI 远程操作时界面会跟着变化。ELF 加载统一编组到主线程执行，避免跨线程重建树/窗口。
+
+### 3.10 A2L 导出（CANape / INCA）
+
+菜单「文件 → 导出 A2L」提供两种模式：
+
+- **含标定量**：RAM 中的标量导出为 `CHARACTERISTIC`（CANape 可写标定），Flash 常量与数组导出为 `MEASUREMENT`。
+- **全部为测量量**：全部导出为 `MEASUREMENT`（只读观测）。
+
+导出内容包含正确的 ASAM 数据类型（`UBYTE/SWORD/ULONG/FLOAT32_IEEE/A_UINT64` 等）、`ECU_ADDRESS` 绝对地址、`RECORD_LAYOUT`、枚举 `COMPU_VTAB`、位域 `BIT_MASK`、一维字节数组 `MATRIX_DIM`，使用小端 `BYTE_ORDER MSB_LAST`。地址与 XCP 页 / 仿真器读写的绝对地址一致。A2L 不含 `IF_DATA XCP`，在 CANape 中按实际 ECU 传输（CAN/以太网/串口）配置 XCP 连接即可。AI：`a2l.export {"path":"D:/ecu.a2l","module":"ECU","calibration":1}`。
 
 ---
 

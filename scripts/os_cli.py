@@ -3,13 +3,13 @@
 """OpenScope CLI — 通过本机 WebSocket JSON-RPC 调用 OpenScope（aiapi.dll）。
 
 用法:
-  python tools/os_cli.py help
-  python tools/os_cli.py status
-  python tools/os_cli.py tools.list
-  python tools/os_cli.py connect '{"device":"Cortex-M4","speed_khz":4000}'
-  python tools/os_cli.py elf.load '{"path":"D:/fw.elf"}'
-  python tools/os_cli.py vars.watch '{"name":"g_counter","on":1}'
-  python tools/os_cli.py acq.start
+  python scripts/os_cli.py help
+  python scripts/os_cli.py status
+  python scripts/os_cli.py tools.list
+  python scripts/os_cli.py connect '{"device":"Cortex-M4","speed_khz":4000}'
+  python scripts/os_cli.py elf.load '{"path":"D:/fw.elf"}'
+  python scripts/os_cli.py vars.watch '{"name":"g_counter","on":1}'
+  python scripts/os_cli.py acq.start
 
 环境变量 OPENSCOPE_AI_URL 默认 ws://127.0.0.1:18765
 """

@@ -199,21 +199,22 @@ static void send_rpc_result(OS_WSConn* c, const char* id, const char* result_jso
 
 static void send_rpc_error(OS_WSConn* c, const char* id, int code, const char* message)
 {
-    char msg[512];
+    char msg[1024], esc[900];
     int id_is_num = 1, i;
     if (!c) return;
     if (!id || !id[0]) return;
+    json_escape_text(message ? message : "error", esc, sizeof(esc));
     for (i = 0; id[i]; i++) {
         if (!((id[i] >= '0' && id[i] <= '9') || id[i] == '-')) { id_is_num = 0; break; }
     }
     if (id_is_num)
         _snprintf(msg, sizeof(msg),
             "{\"jsonrpc\":\"2.0\",\"id\":%s,\"error\":{\"code\":%d,\"message\":\"%s\"}}",
-            id, code, message ? message : "error");
+            id, code, esc);
     else
         _snprintf(msg, sizeof(msg),
             "{\"jsonrpc\":\"2.0\",\"id\":\"%s\",\"error\":{\"code\":%d,\"message\":\"%s\"}}",
-            id, code, message ? message : "error");
+            id, code, esc);
     os_ws_send_text(c, msg);
 }
 

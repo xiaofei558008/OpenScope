@@ -1,5 +1,5 @@
 ﻿# 需求14 网络远程操作全功能 E2E（三实例，真实硬件）：
-#   A=探针侧：监听 127.0.0.1:10000 + UI 点击连接 J-Link + 采集 + 广播（一对多 fan-out）
+#   A=探针侧：监听 127.0.0.1:<空闲端口> + UI 点击连接 J-Link + 采集 + 广播（一对多 fan-out）
 #   B=远端显示侧：连接 + ELF 双向同步 + 勾选变量 + 建波形窗口 + 发监视列表（驱动 A 采集）
 #                 + 网络写变量（回 ACK）+ 下载采集历史（异步 CHUNK）+ 窗口截图
 #   C=第二个远端：连接 + 发监视列表（验证一对多）
@@ -12,6 +12,19 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 if ($ExePath) { $exe = $ExePath } else { $exe = Join-Path $root "bin\Release\OpenScope.exe" }
+
+# 端口 10000 可能被常驻服务占用（如百度网盘 YunDetectService）；自动选空闲端口。
+function Get-FreeTcpPort {
+    foreach ($p in @(10000, 10001, 10010, 20000, 23456)) {
+        try {
+            $l = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $p)
+            $l.Start(); $l.Stop(); return $p
+        } catch { }
+    }
+    return 10000
+}
+$netPort = Get-FreeTcpPort
+Write-Output "INFO network test port=$netPort"
 $outDir = Join-Path $PSScriptRoot "out"
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 $logA = Join-Path $outDir "net_a.log"   # 探针侧实例日志
@@ -35,6 +48,8 @@ public class NetUi {
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
     [DllImport("user32.dll")] public static extern IntPtr GetDlgItem(IntPtr h, int id);
+    [DllImport("user32.dll")] public static extern int GetDlgCtrlID(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr p, EnumProc cb, IntPtr l);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr h, uint msg, IntPtr wp, IntPtr lp);
     [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder sb, int max);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
@@ -72,8 +87,18 @@ function Wait-Main([int]$ProcId, [int]$TimeoutMs) {
     return [IntPtr]::Zero
 }
 
+function Find-ChildById([IntPtr]$hParent, [int]$id) {
+    $script:childHit = [IntPtr]::Zero
+    [NetUi]::EnumChildWindows($hParent, {
+        param($h, $l)
+        if ([NetUi]::GetDlgCtrlID($h) -eq $id) { $script:childHit = [IntPtr]$h; return $false }
+        return $true
+    }, [IntPtr]::Zero) | Out-Null
+    return $script:childHit
+}
+
 function Click-Button([IntPtr]$hMain, [int]$id) {
-    $b = [NetUi]::GetDlgItem($hMain, $id)
+    $b = Find-ChildById $hMain $id
     if ($b -ne [IntPtr]::Zero) {
         [NetUi]::SendMessage($b, 0x00F5, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null  # BM_CLICK
         return $true
@@ -82,7 +107,7 @@ function Click-Button([IntPtr]$hMain, [int]$id) {
 }
 
 function Get-ButtonText([IntPtr]$hMain, [int]$id) {
-    $b = [NetUi]::GetDlgItem($hMain, $id)
+    $b = Find-ChildById $hMain $id
     if ($b -eq [IntPtr]::Zero) { return "" }
     $sb = New-Object System.Text.StringBuilder 256
     [NetUi]::GetWindowTextW($b, $sb, 256) | Out-Null
@@ -108,7 +133,7 @@ function Save-WindowPng([IntPtr]$h, [string]$path) {
 }
 
 # ---- 阶段 1：A（探针）启动 + UI 点击连接 J-Link（本地勾选 g_counter 验证"本地+远端监视叠加"） ----
-$a = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logA","--net-listen=10000","--watch=g_counter" -PassThru
+$a = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logA","--net-listen=$netPort","--watch=g_counter" -PassThru
 $hA = Wait-Main $a.Id 8000
 if ($hA -eq [IntPtr]::Zero) { Write-Output "FAIL A 主窗口未出现"; exit 1 }
 Start-Sleep -Milliseconds 1500   # 等模块加载/设备扫描完成
@@ -125,7 +150,7 @@ if ($hw) { Write-Output "INFO A 已连接 J-Link（硬件就绪）" } else { Wri
 
 # ---- 阶段 2：B（远端显示侧）启动——不加载本地 ELF，变量列表全靠"下载ELF"同步应用 ----
 $bArgs = @(
-    "--no-layout","--log=$logB","--net-connect=127.0.0.1:10000","--net-sync",
+    "--no-layout","--log=$logB","--net-connect=127.0.0.1:$netPort","--net-sync",
     "--watch=g_counter,g_cfg.a","--net-win=chart,g_counter,g_cfg.a","--net-watch",
     "--net-write=g_cfg.b=123","--net-download","--net-watchstop=7000",
     "--net-shot-at=$shotBmp,10500","--net-exit=13500"
@@ -141,13 +166,13 @@ $btDown = Get-ButtonText $hB 2116
 if ($btListen -eq "监听") { Write-Output "PASS UI 按钮 监听 (2112)" } else { Write-Output "FAIL UI 按钮 2112 文本='$btListen'" }
 if ($btUp -eq "上传ELF") { Write-Output "PASS UI 按钮 上传ELF (2115)" } else { Write-Output "FAIL UI 按钮 2115 文本='$btUp'" }
 if ($btDown -eq "下载ELF") { Write-Output "PASS UI 按钮 下载ELF (2116)" } else { Write-Output "FAIL UI 按钮 2116 文本='$btDown'" }
-$ipEdit = [NetUi]::GetDlgItem($hB, 2110)
-$portEdit = [NetUi]::GetDlgItem($hB, 2111)
+$ipEdit = Find-ChildById $hB 2110
+$portEdit = Find-ChildById $hB 2111
 if ($ipEdit -ne [IntPtr]::Zero -and $portEdit -ne [IntPtr]::Zero) { Write-Output "PASS UI IP/端口编辑框存在" } else { Write-Output "FAIL UI IP/端口编辑框缺失" }
 
 # ---- 阶段 3：C（第二个远端，一对多 fan-out）----
 Start-Sleep -Seconds 2
-$c = Start-Process -FilePath $exe -ArgumentList "--no-layout","--log=$logC","--net-connect=127.0.0.1:10000","--net-sync","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
+$c = Start-Process -FilePath $exe -ArgumentList "--no-layout","--log=$logC","--net-connect=127.0.0.1:$netPort","--net-sync","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
 
 # ---- 阶段 3.5：采集运行中抓取两个主窗口（报告用，WM_PRINT 抓取）----
 Start-Sleep -Seconds 5
@@ -174,9 +199,9 @@ function Check([string]$name, [bool]$cond) {
 }
 
 # 1. 监听 + 2 个客户端连接均 rc=0（各实例各自日志）
-Check "A 监听 rc=0" (([regex]::Matches($logAText, "10000 rc=0")).Count -ge 1)
-Check "B 连接 rc=0" (([regex]::Matches($logBText, "10000 rc=0")).Count -ge 1)
-Check "C 连接 rc=0" (([regex]::Matches($logCText, "10000 rc=0")).Count -ge 1)
+Check "A 监听 rc=0" (([regex]::Matches($logAText, "$netPort rc=0")).Count -ge 1)
+Check "B 连接 rc=0" (([regex]::Matches($logBText, "$netPort rc=0")).Count -ge 1)
+Check "C 连接 rc=0" (([regex]::Matches($logCText, "$netPort rc=0")).Count -ge 1)
 
 # 2. 一对多 fan-out：A 收到 2 个客户端接入
 $joined = ([regex]::Matches($logAText, "客户端接入")).Count
@@ -200,7 +225,11 @@ Check "B 监视列表 2 项下达并被 A 接收 (count=$watchB)" ($watchB -ge 1
 $watchC = ([regex]::Matches($logAText, "WATCH_LIST 1 项")).Count + ([regex]::Matches($logAText, "远端监视 1 项")).Count
 Check "C 监视列表 1 项下达并被 A 接收 (count=$watchC)" ($watchC -ge 1)
 $acq = ([regex]::Matches($logAText, "采集启动 rc=0")).Count
-Check "远端监视驱动采集启动 rc=0 (count=$acq)" ($acq -ge 1)
+if ($hw) {
+    Check "远端监视驱动采集启动 rc=0 (count=$acq)" ($acq -ge 1)
+} else {
+    Write-Output "SKIP 远端监视驱动采集启动（无 J-Link 硬件）"
+}
 
 if ($hw) {
     # 5. A 实际采集（J-Link 硬件路径）

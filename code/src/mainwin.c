@@ -16,6 +16,9 @@
 #include "version.h"
 #include "helpwin.h"
 #include "tilecalc.h"
+#include "xcpwin.h"
+#include "a2l_export.h"
+#include "xcpsym.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <stdio.h>
@@ -558,6 +561,74 @@ void os_mainwin_refresh_status(void)
     refresh_status();
 }
 
+/** 主线程：把 g_app 中的连接/采集/XCP 状态刷到工具栏控件 */
+static void apply_ui_sync(void)
+{
+    HWND ht = main_ctrl(IDC_XCP_TRANSPORT);
+    HWND hp = main_ctrl(IDC_XCP_PORT);
+    HWND hb = main_ctrl(IDC_XCP_BAUD);
+    HWND hd = main_ctrl(IDC_CFG_DRIVER);
+    HWND hs = main_ctrl(IDC_CFG_SPEED);
+    int di = os_modmgr_driver_index();
+    if (hd && di >= 0)
+        SendMessageW(hd, CB_SETCURSEL, (WPARAM)di, 0);
+    if (hs && g_app.speed_khz > 0) {
+        wchar_t w[32];
+        _snwprintf(w, 32, L"%d", g_app.speed_khz);
+        SetWindowTextW(hs, w);
+    }
+    if (ht && g_app.xcp_transport[0]) {
+        int sel = 0;
+        if (strcmp(g_app.xcp_transport, "can") == 0) sel = 1;
+        else if (strcmp(g_app.xcp_transport, "tcp") == 0) sel = 2;
+        SendMessageW(ht, CB_SETCURSEL, (WPARAM)sel, 0);
+    }
+    if (hp && g_app.xcp_port[0]) {
+        wchar_t w[64];
+        os_utf8_to_wide_buf(g_app.xcp_port, w, 64);
+        SetWindowTextW(hp, w);
+    }
+    if (hb && g_app.xcp_baud > 0) {
+        wchar_t w[32];
+        _snwprintf(w, 32, L"%d", g_app.xcp_baud);
+        SetWindowTextW(hb, w);
+    }
+    refresh_status();
+    os_mainwin_update_buttons();
+    os_xcpwin_refresh();
+}
+
+void os_mainwin_request_ui_sync(void)
+{
+    if (!g_app.hMain || !IsWindow(g_app.hMain)) {
+        apply_ui_sync();
+        return;
+    }
+    if (GetCurrentThreadId() == GetWindowThreadProcessId(g_app.hMain, NULL))
+        apply_ui_sync();
+    else
+        PostMessageW(g_app.hMain, WM_OS_UI_SYNC, 0, 0);
+}
+
+/* AI/工作线程安全：把 vars.watch 的观测状态同步到左侧树勾选框 */
+void os_mainwin_sync_watch(int leaf_id, int on)
+{
+    if (leaf_id < 0 || leaf_id >= g_app.leaf_count) return;
+    if (!g_app.hMain || !IsWindow(g_app.hMain)) {
+        os_vartree_set_check_ui(g_app.hTree, leaf_id, on ? 1 : 0);
+        refresh_status();
+        os_mainwin_update_buttons();
+        return;
+    }
+    if (GetCurrentThreadId() == GetWindowThreadProcessId(g_app.hMain, NULL)) {
+        os_vartree_set_check_ui(g_app.hTree, leaf_id, on ? 1 : 0);
+        refresh_status();
+        os_mainwin_update_buttons();
+    } else {
+        PostMessageW(g_app.hMain, WM_OS_WATCH_SYNC, (WPARAM)leaf_id, (LPARAM)(on ? 1 : 0));
+    }
+}
+
 /* N9(b): 判断 leaf_id 是否仍被任一窗口（含模块窗口）使用 */
 int os_win_leaf_used(int leaf_id)
 {
@@ -928,8 +999,10 @@ static LRESULT CALLBACK right_panel_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM 
 }
 
 
+typedef struct BarItem { int id; int fixed_w; int combo; } BarItem;
+
 static void layout_bar_controls(HWND bar, HWND fallback,
-    const struct { int id; int fixed_w; int combo; }* items, int n)
+    const BarItem* items, int n)
 {
     int i, x = OS_DOCKBAR_GRIP + 4;
     RECT br;
@@ -988,7 +1061,7 @@ static void layout(void)
     {
         HWND hMainBar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
         HWND hDbgBar = os_dockbar_hwnd(OS_DOCKBAR_DEBUG);
-        static const struct { int id; int fixed_w; int combo; } main_items[] = {
+        static const BarItem main_items[] = {
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_ATTACH, 0, 0 },
             { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
@@ -998,14 +1071,15 @@ static void layout(void)
             { IDC_CFG_SPEED, 80, 1 }, { IDC_CFG_EMU, 170, 1 }, { IDC_CFG_REFRESH, 48, 0 },
             { IDD_NET_IP, 96, 0 }, { IDD_NET_PORT, 44, 0 },
             { IDD_NET_LISTEN, 0, 0 }, { IDD_NET_CONNECT, 0, 0 }, { IDD_NET_UPELF, 0, 0 }, { IDD_NET_DOWNELF, 0, 0 },
-            { IDC_XCP_TRANSPORT, 72, 1 }, { IDC_XCP_PORT, 72, 0 }, { IDC_XCP_BAUD, 56, 0 },
-            { IDC_XCP_SCAN, 0, 0 }, { IDC_XCP_CONNECT, 0, 0 }, { IDC_XCP_DISCONNECT, 0, 0 },
         };
-        static const struct { int id; int fixed_w; int combo; } dbg_items[] = {
+        static const BarItem dbg_items[] = {
             { IDC_BTN_CPU_RUN, 0, 0 }, { IDC_BTN_CPU_STOP, 0, 0 },
             { IDC_BTN_CPU_RHALT, 0, 0 }, { IDC_BTN_CPU_STEP, 0, 0 },
             { IDC_BTN_CPU_STEPIN, 0, 0 }, { IDC_BTN_CPU_STEPOUT, 0, 0 },
             { IDC_BTN_CPU_STEPOVER, 0, 0 }, { IDC_BTN_BP, 0, 0 },
+            /* XCP 并行通道放调试栏，避免主工具栏（网络控件已占满）被裁切 */
+            { IDC_XCP_TRANSPORT, 72, 1 }, { IDC_XCP_PORT, 72, 0 }, { IDC_XCP_BAUD, 56, 0 },
+            { IDC_XCP_SCAN, 0, 0 }, { IDC_XCP_CONNECT, 0, 0 }, { IDC_XCP_DISCONNECT, 0, 0 },
         };
         if (hMainBar) layout_bar_controls(hMainBar, g_app.hMain, main_items,
             (int)(sizeof(main_items)/sizeof(main_items[0])));
@@ -1394,6 +1468,8 @@ static LRESULT CALLBACK tree_pin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
 /* ---------- ELF ---------- */
 
+static int on_ui_thread(void);
+
 static int load_elf_path(const wchar_t* path)
 {
     char utf8[MAX_PATH];
@@ -1418,6 +1494,7 @@ static int load_elf_path(const wchar_t* path)
     g_app.elf_mtime = os_file_mtime_ms(path);
     os_vartree_build();
     os_vartree_fill_tree(g_app.hTree);
+    os_xcpsym_invalidate(); /* XCP 符号表按新 ELF 重建 */
     os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
     refresh_src_tree();
     os_log(OS_LOG_INFO, "源码行表: %d 条 / %d 个文件%s",
@@ -1447,7 +1524,7 @@ static int load_elf_path(const wchar_t* path)
         }
         _snwprintf(wmsg, 2048, L"以下 %d 个变量在新 ELF 中未找到，是否忽略？\n\n%s",
                    os_vartree_missing_count(), list);
-        MessageBoxW(g_app.hMain, wmsg, L"变量缺失", MB_YESNO | MB_ICONWARNING);
+        os_msgbox(g_app.hMain, wmsg, L"变量缺失", MB_YESNO | MB_ICONWARNING);
     }
     /* 通知模块 */
     for (i = 0; i < g_app.winmod_count; i++) {
@@ -1467,16 +1544,32 @@ static int load_elf_path(const wchar_t* path)
     return 0;
 }
 
+/* AI/工作线程也会调用：统一编组到主线程执行（树/窗口/布局都是 UI 线程资源）。 */
+static int elf_open_invoke(const wchar_t* path)
+{
+    wchar_t* copy;
+    LRESULT rc;
+    if (!path || !path[0]) return -1;
+    if (on_ui_thread() || !g_app.hMain || !IsWindow(g_app.hMain))
+        return load_elf_path(path);
+    copy = (wchar_t*)malloc((wcslen(path) + 1) * sizeof(wchar_t));
+    if (!copy) return -1;
+    wcscpy(copy, path);
+    rc = SendMessageW(g_app.hMain, WM_OS_ELF_OPEN, 0, (LPARAM)copy);
+    free(copy);
+    return (int)rc;
+}
+
 int os_mainwin_reload_elf(void)
 {
     if (!g_app.elf_path[0]) return -1;
-    return load_elf_path(g_app.elf_path);
+    return elf_open_invoke(g_app.elf_path);
 }
 
 int os_mainwin_open_elf(const wchar_t* path)
 {
     if (!path || !path[0]) return -1;
-    return load_elf_path(path);
+    return elf_open_invoke(path);
 }
 
 static void cmd_open_elf(void)
@@ -1938,8 +2031,12 @@ static void cmd_xcp_connect(void)
     }
     g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
     g_app.xcp_connected = c;
+    _snprintf(g_app.xcp_transport, sizeof(g_app.xcp_transport), "%s", cfg.device);
+    _snprintf(g_app.xcp_port, sizeof(g_app.xcp_port), "%s", port8);
+    g_app.xcp_baud = cfg.speed_khz;
     os_log(OS_LOG_INFO, "XCP 连接成功（与探针/网络并行）");
     refresh_status();
+    os_xcpwin_refresh();
 }
 
 static void cmd_xcp_disconnect(void)
@@ -1949,6 +2046,7 @@ static void cmd_xcp_disconnect(void)
     g_app.xcp_connected = 0;
     os_log(OS_LOG_INFO, "XCP 已断开");
     refresh_status();
+    os_xcpwin_refresh();
 }
 
 static void cmd_select_driver(int idx)
@@ -3989,8 +4087,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         {
             HWND bar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
             int ids[] = { IDC_CFG_DRIVER, IDC_CFG_DEVICE, IDC_CFG_IFACE, IDC_CFG_SPEED, IDC_CFG_EMU, IDC_CFG_REFRESH,
-                          IDD_NET_IP, IDD_NET_PORT, IDD_NET_LISTEN, IDD_NET_CONNECT, IDD_NET_UPELF, IDD_NET_DOWNELF,
-                          IDC_XCP_TRANSPORT, IDC_XCP_PORT, IDC_XCP_BAUD, IDC_XCP_SCAN, IDC_XCP_CONNECT, IDC_XCP_DISCONNECT };
+                          IDD_NET_IP, IDD_NET_PORT, IDD_NET_LISTEN, IDD_NET_CONNECT, IDD_NET_UPELF, IDD_NET_DOWNELF };
+            /* XCP 控件由 layout() 归入调试栏，不在此处挂主栏 */
             int k;
             if (bar) for (k = 0; k < (int)(sizeof(ids)/sizeof(ids[0])); k++) {
                 HWND c = GetDlgItem(hwnd, ids[k]);
@@ -4086,6 +4184,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         mHelp = CreateMenu();
         g_menu_file = mFile;
         AppendMenuW(mFile, MF_STRING, IDC_BTN_OPEN, L"打开 ELF 文件...\tCtrl+O");
+        AppendMenuW(mFile, MF_STRING, IDM_A2L_EXPORT, L"导出 A2L（CANape，含标定量）...");
+        AppendMenuW(mFile, MF_STRING, IDM_A2L_EXPORT_MEAS, L"导出 A2L（全部为测量量）...");
         AppendMenuW(mFile, MF_STRING, IDM_SRCMAP, L"源码目录关联...");
         AppendMenuW(mFile, MF_STRING, IDM_SRC_QUICK, L"快速打开源码...\tCtrl+P");
         AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_SAVE, L"保存布局为...");
@@ -4107,6 +4207,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STEPOUT, L"Step Out");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_CPU_STEPOVER, L"Step Over");
         AppendMenuW(mAcq, MF_STRING, IDM_BP, L"断点...");
+        AppendMenuW(mAcq, MF_STRING, IDM_XCP_WIN, L"XCP 标定 / 调试...");
         AppendMenuW(mAcq, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_START, L"开始采集\tF7");
         AppendMenuW(mAcq, MF_STRING, IDC_BTN_STOP, L"停止采集\tF8");
@@ -4420,6 +4521,20 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_layout_apply_pending();
         os_mainwin_refresh_status();
         return 0;
+    case WM_OS_UI_SYNC:
+        apply_ui_sync();
+        return 0;
+    case WM_OS_WATCH_SYNC:
+        os_vartree_set_check_ui(g_app.hTree, (int)wParam, (int)lParam ? 1 : 0);
+        refresh_status();
+        os_mainwin_update_buttons();
+        return 0;
+    case WM_OS_ELF_OPEN:
+        return load_elf_path((const wchar_t*)lParam);
+    case WM_OS_XCP_SHOW:
+        if (wParam) os_xcpwin_show(hwnd);
+        else os_xcpwin_hide();
+        return 0;
     case WM_OS_SRC_UI:
         return os_mainwin_src_ui((OS_SrcUiReq*)lParam);
     case WM_NOTIFY: {
@@ -4529,6 +4644,17 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 os_msgbox(hwnd, L"请先连接仿真器", L"断点", MB_OK | MB_ICONINFORMATION);
             else
                 os_bpwin_dialog(hwnd);
+            break;
+        case IDM_XCP_WIN:
+            os_xcpwin_show(hwnd);
+            break;
+        case IDM_A2L_EXPORT:
+            if (os_a2l_export_dialog(hwnd, 1) == 0)
+                os_log(OS_LOG_INFO, "A2L 导出完成（含标定量）");
+            break;
+        case IDM_A2L_EXPORT_MEAS:
+            if (os_a2l_export_dialog(hwnd, 0) == 0)
+                os_log(OS_LOG_INFO, "A2L 导出完成（全部测量量）");
             break;
         case IDM_SRCMAP:
             os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);

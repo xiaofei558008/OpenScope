@@ -43,6 +43,10 @@ int xcp_master_connect(XcpMaster* m)
     m->max_cto = rsp[3] >= 8 ? rsp[3] : 8;
     m->max_dto = xcp_rd16(rsp + 4);
     if (m->max_dto < 8) m->max_dto = 8;
+    /* 主机收发缓冲区上限：从机可能声明 255，但本实现每帧缓冲为 XCP_MAX_CTO/DTO。
+     * 超限请求会让响应装不下并撕裂串口流（表现为大块 SHORT_UPLOAD 失败）。 */
+    if (m->max_cto > XCP_MAX_CTO) m->max_cto = XCP_MAX_CTO;
+    if (m->max_dto > XCP_MAX_DTO) m->max_dto = XCP_MAX_DTO;
     m->connected = 1;
     return 0;
 }
@@ -66,6 +70,7 @@ int xcp_master_upload(XcpMaster* m, uint32_t addr, void* dst, int n)
         uint8_t rsp[XCP_MAX_CTO];
         int rc;
         if (chunk > m->max_cto - 1) chunk = m->max_cto - 1;
+        if (chunk > m->max_dto - 1) chunk = m->max_dto - 1;
         cmd[0] = XCP_CMD_SHORT_UPLOAD;
         cmd[1] = (uint8_t)chunk;
         cmd[2] = 0;
@@ -90,7 +95,11 @@ int xcp_master_download(XcpMaster* m, uint32_t addr, const void* src, int n)
     while (off < n) {
         int piece = n - off;
         int rc;
+        /* 每段单独 SET_MTA + DOWNLOAD，长度不超过单帧 CTO 容量。
+         * 不用 DOWNLOAD_NEXT 块模式：部分精简从机（MCU 示例）只实现 DOWNLOAD。 */
+        if (piece > m->max_cto - 2) piece = m->max_cto - 2;
         if (piece > 255) piece = 255;
+        if (piece <= 0) return -1;
         rc = download_piece(m, addr + (uint32_t)off, in + off, piece);
         if (rc != 0) return rc;
         off += piece;

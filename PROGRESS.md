@@ -4,6 +4,15 @@
 
 ## 检查点
 
+- **checkpoint-75（2026-10-21）**：AI 界面同步 + XCP 标定页直连 ELF/out/MAP + CANape A2L（1.28.0）。
+  - **AI→UI 同步**：新增 `WM_OS_UI_SYNC` / `WM_OS_WATCH_SYNC` / `WM_OS_ELF_OPEN` / `WM_OS_XCP_SHOW`；`connect`/`disconnect`、`drivers.select`、`acq.start/stop`、`recording.*`、`flash.*`、`vars.watch`、`xcp.connect/disconnect`、`elf.load/reload` 均同步工具栏、状态栏、XCP 页与变量树勾选。ELF 加载统一编组到主线程，避免跨线程重建树/窗口。
+  - **XCP 标定页**：菜单「采集 → XCP 标定 / 调试...」。可直接「加载 ELF/out...」（DWARF 类型）或「加载 MAP...」（GNU ld / Keil armlink / IAR，支持 `0x2000'0248` 千分位）；符号列表带来源标记；`XCP读` 同时显示 HEX 与十进制/浮点值；`写值` 按类型 DOWNLOAD（位域自动 RMW），`写 HEX` 写原始字节。工具栏 XCP 控件移到调试栏避免裁切。
+  - **`xcpsym` 注册表**：ELF 叶 + MAP 符号统一查询/编码/格式化；同名优先 ELF。AI 新增 `xcp.symbols` / `xcp.load_map` / `xcp.clear_map` / `xcp.read_sym` / `xcp.write_sym` / `xcp.window`。
+  - **A2L**：菜单两项「含标定量」/「全部测量量」；正确 ASAM 类型、`ECU_ADDRESS`、`RECORD_LAYOUT`、枚举 `COMPU_VTAB`、位域 `BIT_MASK`、一维数组 `MATRIX_DIM`、小端 `BYTE_ORDER MSB_LAST`；AI `a2l.export` 支持 `calibration` 参数。
+  - **XCP 主机修复**：`MAX_CTO/MAX_DTO` 夹到本机 64 字节缓冲，大块 SHORT_UPLOAD（256B）不再撕裂串口流；DOWNLOAD 按单帧容量分片（兼容只实现 DOWNLOAD 的 MCU 从机）；串口超长帧读取丢弃以保持帧边界。
+  - **aiapi 修复**：JSON-RPC error.message 转义，错误响应不再产生非法 JSON。
+  - **测试基建**：无 J-Link 时 `run_jlink_smoke.ps1` 20s 超时跳过（并置 `no_jlink.flag` 跳过 bug9），ST-Link-only 机器可完成全量构建；`net_drive.ps1` / `network_ws_loopback` 自动选择空闲端口（10000 常被百度网盘 YunDetectService 占用）；`ui_net_ui_drive.ps1` 按 1.27+ 三通道并行改版（网络独立「网络连接」按钮 + 网络菜单下达/停止，不再切换探针下拉），并递归查找 dockbar 内控件。
+  - **测试**：`mapfile_smoke`（GNU/Keil/真实 G431 map，含 `xcp_cal_mem 0x20000248/256B`）、`a2l_smoke`、`xcp_smoke` 全 PASS；ST-Link + NUCLEO-G431RB 实测 `scripts/test_ai_full.py` **50 passed / 0 failed**；XCP over USART2(COM5,115200) 实测 256B SHORT_UPLOAD、DOWNLOAD 写回 "XCP1↔XCP2"；XCP 页 UI 自动化（选中符号 → 读 → 写值 → 恢复）全 PASS。
 - **checkpoint-74（2026-10-19）**：三通道并行 + XCP 串口/传输抽象（1.27.0）。探针下拉仅 J-Link/ST-Link；网络用独立「网络连接」；XCP 用独立扫描/连接（`OS_CAP_XCP`）。XCP 传输 `serial`/`can`/`tcp`（`XcpTransport`+`XcpIo`）；主机日志；MCU 示例 `module/xcp/mcu/`。AI：`xcp.scan/connect/disconnect/status`。
 - **checkpoint-73（2026-10-19）**：断点闭环（1.26.4）。Halt→PC 源码跟线高亮；`src.follow_pc` + `cpu.state.source_*`；`bp.set/clear`/`bpwin` 同步红点；`os_srcmap_resolve` 接入打开路径；ST-Link StepOut 不再误删用户 FPB；源码 UI 经 `WM_OS_SRC_UI` 主线程调度（修栈溢出）。`test_ai_full.py`：**44 passed**（含 run-to-bp 命中 + follow_pc）。
 - **checkpoint-72（2026-10-19）**：源码/行断点 AI API 全量自动化（1.26.3）。新增 `bp.set_line`/`bp.clear_line`、`src.status`/`src.roots`/`src.files`/`src.open`/`src.line_to_addr`/`src.addr_to_line`；修复 `elf.load`/`recording.stop` 路径 JSON 转义。脚本 `scripts/test_ai_full.py` / `test_source_bp.py`：ST-Link+G431 实测 **42 passed**（含行映射 `main.c:100→0x0800114E`、行断点设清、采集/录制/step）。
