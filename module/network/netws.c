@@ -400,3 +400,110 @@ int os_ws_recv_capped(OS_WSConn* c, uint8_t* buf, int cap, int* opcode, uint32_t
     if (opcode) *opcode = op;
     return (int)l;
 }
+
+
+/* ================= remote.dll（ORP）专用增量接口 ================= */
+
+static int ws_server_handshake_proto(SOCKET s, const char* proto)
+{
+    char req[4096]; int n = 0, found = 0; char key[128], acc[64], resp[640], prot[256], extra[160];
+    while (n < (int)sizeof(req) - 1) {
+        int r = recv(s, req + n, 1, 0);
+        if (r <= 0) return -1;
+        n += r; req[n] = 0;
+        if (n >= 4 && strstr(req, "\r\n\r\n")) { found = 1; break; }
+    }
+    if (!found) return -1;
+    if (http_header(req, "Sec-WebSocket-Key", key, sizeof(key)) != 0) return -1;
+    if (os_ws_accept_key(key, acc, sizeof(acc)) < 0) return -1;
+    extra[0] = 0;
+    if (proto && proto[0] && http_header(req, "Sec-WebSocket-Protocol", prot, sizeof(prot)) == 0) {
+        /* 逗号分隔列表中精确匹配 */
+        char* t = prot;
+        while (t && *t) {
+            char* e = strchr(t, ',');
+            char* a; char* b;
+            if (e) *e = 0;
+            a = t; while (*a == ' ' || *a == '\t') a++;
+            b = a + strlen(a); while (b > a && (b[-1] == ' ' || b[-1] == '\t' || b[-1] == '\r' || b[-1] == '\n')) *--b = 0;
+            if (strcmp(a, proto) == 0) { _snprintf(extra, sizeof(extra), "Sec-WebSocket-Protocol: %s\r\n", proto); break; }
+            t = e ? e + 1 : NULL;
+        }
+    }
+    _snprintf(resp, sizeof(resp),
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n%s\r\n", acc, extra);
+    return send_all(s, (const uint8_t*)resp, (int)strlen(resp));
+}
+
+OS_WSConn* os_ws_server_upgrade_proto(int sock, int timeout_ms, const char* proto)
+{
+    SOCKET c = (SOCKET)sock;
+    DWORD to = (DWORD)(timeout_ms > 0 ? timeout_ms : 0), zero = 0, sndto = 5000;
+    OS_WSConn* w;
+    if (c == INVALID_SOCKET) return NULL;
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof(to));
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&to, sizeof(to));
+    if (ws_server_handshake_proto(c, proto) != 0) { closesocket(c); return NULL; }
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
+    /* 发送保留 5s 超时：慢客户端不会无限阻塞推流线程 */
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&sndto, sizeof(sndto));
+    w = (OS_WSConn*)calloc(1, sizeof(OS_WSConn));
+    if (!w) { closesocket(c); return NULL; }
+    w->s = c; w->is_client = 0;
+    InitializeCriticalSection(&w->send_cs);
+    return w;
+}
+
+int os_ws_recv_capped_head(OS_WSConn* c, uint8_t* buf, int cap, int* opcode, uint32_t drain_max, int* head_len)
+{
+    uint8_t hdr[10]; uint64_t l; int op, mask, i; uint8_t mkey[4] = {0,0,0,0};
+    if (head_len) *head_len = 0;
+    if (recv_all(c->s, hdr, 2) != 0) return 0;
+    op = hdr[0] & 0x0F;
+    mask = (hdr[1] & 0x80) ? 1 : 0;
+    l = hdr[1] & 0x7F;
+    if (l == 126) { if (recv_all(c->s, hdr + 2, 2) != 0) return -1; l = ((uint64_t)hdr[2]<<8)|hdr[3]; }
+    else if (l == 127) { if (recv_all(c->s, hdr + 2, 8) != 0) return -1; l = 0; for (i=0;i<8;i++) l=(l<<8)|hdr[2+i]; }
+    if (mask) { if (recv_all(c->s, mkey, 4) != 0) return -1; }
+    if (l > (uint64_t)cap) {
+        uint64_t left; uint8_t scratch[8192];
+        if (l > (uint64_t)drain_max) return -1;
+        if (recv_all(c->s, buf, cap) != 0) return -1;
+        if (mask) for (i = 0; i < cap; i++) buf[i] ^= mkey[i & 3];
+        if (head_len) *head_len = cap;
+        left = l - (uint64_t)cap;
+        while (left > 0) {
+            int chunk = left > sizeof(scratch) ? (int)sizeof(scratch) : (int)left;
+            if (recv_all(c->s, scratch, chunk) != 0) return -1;
+            left -= (uint64_t)chunk;
+        }
+        if (opcode) *opcode = op;
+        return OS_WS_TOO_BIG;
+    }
+    if (l && recv_all(c->s, buf, (int)l) != 0) return -1;
+    if (mask) for (i = 0; i < (int)l; i++) buf[i] ^= mkey[i & 3];
+    if (op == OS_WS_OP_PING) {
+        static const uint8_t pkey[4] = {0x12,0x34,0x56,0x78};
+        uint8_t f[160]; int h = os_ws_frame_encode(f, sizeof(f), 1, OS_WS_OP_PONG, buf, (uint32_t)(l > 125 ? 125 : l), c->is_client, pkey);
+        if (h > 0) { EnterCriticalSection(&c->send_cs); send_all(c->s, f, h); LeaveCriticalSection(&c->send_cs); }
+        return os_ws_recv_capped_head(c, buf, cap, opcode, drain_max, head_len);
+    }
+    if (op == OS_WS_OP_CLOSE) return 0;
+    if (opcode) *opcode = op;
+    return (int)l;
+}
+
+int os_ws_send_close(OS_WSConn* c, int code, const char* reason)
+{
+    static const uint8_t mk[4] = {0x21,0x43,0x65,0x87};
+    uint8_t pl[125], f[160]; int n = 0, h, rc;
+    if (!c) return -1;
+    pl[n++] = (uint8_t)((code >> 8) & 0xFF); pl[n++] = (uint8_t)(code & 0xFF);
+    if (reason) { int L = (int)strlen(reason); if (L > 120) L = 120; memcpy(pl + n, reason, (size_t)L); n += L; }
+    h = os_ws_frame_encode(f, sizeof(f), 1, OS_WS_OP_CLOSE, pl, (uint32_t)n, c->is_client, mk);
+    if (h <= 0) return -1;
+    EnterCriticalSection(&c->send_cs);
+    rc = send_all(c->s, f, h);
+    LeaveCriticalSection(&c->send_cs);
+    return rc;
+}

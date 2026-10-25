@@ -546,6 +546,31 @@ static int method_elf_load(const char* params, char* out, int cap)
     return OS_ERR_OK;
 }
 
+/* 叶变量类型名（vars.list / remote ORP 使用）：float/double/intN_t/uintN_t/bool/enum/ptr/char/other，位域加 ":bf" */
+static void leaf_type_name(const OS_Leaf* L, char* out, int cap)
+{
+    switch (L->kind) {
+    case OS_TYPE_INT: case OS_TYPE_UINT:
+        _snprintf(out, cap, "%sint%d_t%s", L->is_signed ? "" : "u", (int)(L->size ? L->size : 4) * 8, L->is_bitfield ? ":bf" : "");
+        break;
+    case OS_TYPE_FLOAT: _snprintf(out, cap, "%s", L->size == 8 ? "double" : "float"); break;
+    case OS_TYPE_BOOL:  _snprintf(out, cap, "bool"); break;
+    case OS_TYPE_ENUM:  _snprintf(out, cap, "enum"); break;
+    case OS_TYPE_PTR:   _snprintf(out, cap, "ptr"); break;
+    case OS_TYPE_STRING: _snprintf(out, cap, "char"); break;
+    default: _snprintf(out, cap, "other"); break;
+    }
+}
+
+static int leaf_writable(const OS_Leaf* L)
+{
+    if (L->size == 0 || L->size > 8) return 0;
+    switch (L->kind) {
+    case OS_TYPE_INT: case OS_TYPE_UINT: case OS_TYPE_FLOAT: case OS_TYPE_BOOL: case OS_TYPE_ENUM: case OS_TYPE_PTR: return 1;
+    default: return 0;
+    }
+}
+
 static int method_vars_list(const char* params, char* out, int cap)
 {
     char needle[128] = "";
@@ -559,17 +584,18 @@ static int method_vars_list(const char* params, char* out, int cap)
     if (limit > 500) limit = 500;
     if (offset < 0) offset = 0;
     n += _snprintf(out + n, cap - n, "{\"ok\":true,\"total\":%d,\"vars\":[", g_app.leaf_count);
-    for (i = 0; i < g_app.leaf_count && emitted < limit && n < cap - 220; i++) {
-        char nm[280];
+    for (i = 0; i < g_app.leaf_count && emitted < limit && n < cap - 280; i++) {
+        char nm[280], tn[32];
         if (needle[0] && !strstr(g_app.leaves[i].name, needle)) continue;
         if (skipped < offset) { skipped++; continue; }
         json_escape(g_app.leaves[i].name, nm, sizeof(nm));
+        leaf_type_name(&g_app.leaves[i], tn, sizeof(tn));
         n += _snprintf(out + n, cap - n,
-            "%s{\"id\":%d,\"name\":\"%s\",\"addr\":\"0x%llX\",\"size\":%u,\"watched\":%d}",
+            "%s{\"id\":%d,\"name\":\"%s\",\"addr\":\"0x%llX\",\"size\":%u,\"watched\":%d,\"type\":\"%s\",\"writable\":%d}",
             emitted ? "," : "", i, nm,
             (unsigned long long)g_app.leaves[i].address,
             (unsigned)g_app.leaves[i].size,
-            g_app.leaves[i].watched ? 1 : 0);
+            g_app.leaves[i].watched ? 1 : 0, tn, leaf_writable(&g_app.leaves[i]));
         emitted++;
     }
     if (n < cap - 2) { out[n++] = ']'; out[n++] = '}'; out[n] = 0; }

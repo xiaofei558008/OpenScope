@@ -1,6 +1,6 @@
 # OpenScope 远程调试（网络外发）现状与方案设计
 
-> 版本 v0.4（2026-10-25，按小微评审修订，见第 7 节修订记录），作者：程序员小程。本阶段仅调研 + 方案，未改代码。
+> 版本 v0.5（2026-10-25，M1 remote.dll 落地后补充，见第 7 节修订记录），作者：程序员小程。M0（mock + 一致性测试）与 M1（remote.dll）已实现。
 > 讨论对象：Tom、小微（微信小程序）、网页端负责人（待定）。
 
 ## 1. 现状
@@ -160,7 +160,7 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 - `session.hello {token, client, accept_kinds, orp:1, resume_session_id?, last_seq?}` → `{session_id, device, role, accept_kinds(交集), resumed, caps, control, streams?}`（`control` 结构见下）；`caps` 含 `max_frame / max_request / modes / max_rate_hz / max_vars(仅 mp)`。恢复失败返回 `-32006`；会话断开后保留 120 s，恢复时角色、控制权、订阅全部还原，并重发 `stream.meta`。
 - **心跳**：客户端每 10 s 发 `ping`（任何请求都算活动；`caps.heartbeat_s` 固定为 10）；服务端 30 s 无消息即断开连接（close 4000），会话按上条保留。
 - **请求上限**：单条文本请求 ≤ 256 KB−1，超过回 `-32600 "request too large"`（能解析出 `id` 时回显），连接保留。连接数上限 8，超出回 `-32001` 后关闭；连接关闭时服务端立即释放名额（会话本身按保留期保留，不占连接名额）。
-- **WebSocket close code**：`4000` = 服务端心跳超时断开；`4001` = SDK 本地判定心跳超时（客户端主动关闭）；`4002` = SDK 打开超时（握手未在限定时间完成）。`4001/4002` 仅由 SDK 使用，服务端不得发送。其余用标准码（1000/1001/1006/1009）。
+- **WebSocket close code**：`4000` = 服务端心跳超时断开；`4001` = SDK 本地判定心跳超时（客户端主动关闭）；`4002` = SDK 打开超时（握手未在限定时间完成）。`4001/4002` 仅由 SDK 使用，服务端不得发送。其余用标准码（1000/1001/1006/1009；连接数超限时先回 -32001 错误再以 `1013` 关闭）。
 - **vars.list（字段冻结）**：`vars.list {needle?:string(子串、不区分大小写), offset?:int≥0 =0, limit?:int≥0 =200}` → `{total:int(过滤后总数), vars:[{id:int, name:string, addr:"0x…", size:int, type:string, writable:0|1}]}`。字段只增不改。
 - **stream.meta 先于数据帧**：服务端保证某 `stream_id` 的 `stream.meta` 文本帧一定先于该流的任何二进制帧到达（订阅时先发 meta 再挂接推流；会话恢复时先在新连接上补发全部 meta 再恢复推流）。客户端收到未知 `stream_id` 的帧可直接丢弃。
 - **二进制帧布局**：16 B 头之后紧跟 `n u16`，再接 n 条记录：kind=1 为 `var_id u16 | dt u32 | value(f32|f64)`；kind=2 为 `var_id u16 | dt u32 | min | max | last`。`t0` 为 Unix 微秒；`seq` 按会话单调递增（跨流共用）。kind=3（压缩）M0/M1 均不实现，`accept_kinds` 交集中会被剔除。
@@ -170,6 +170,22 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 - **vars.write** 必须 operator + 控制权：`vars.write {id|name, value, req_id?}` → `{id:int, value:number, req_id:string|null, duplicate:bool}`。`value` 为实际写入值（remote.dll 为按变量类型截断/转换后的值）；同一会话内相同 `req_id` 的重复请求不再写目标，原样返回首次结果但 `duplicate:true`；未带 `req_id` 时 `req_id:null, duplicate:false`。
 - **control 结构**（`session.hello`、`status`、`control.acquire`、`control.release` 共用）：`{held_by_me:bool, holder:{session_id:string, client:"web"|"mp"|"os"}|null, since:int|null}`，`since` 为当前持有者获得控制权的 Unix 微秒；无人持有时 `holder/since` 为 null。`-32004` 错误的 `error.data.holder` 也用同一 `{session_id, client}` 结构。`control.release` 额外带 `released:true`。持有者断线后控制权随会话保留，但超过 **15 s** 未恢复即自动释放（防止小程序切后台长期占用）。
 - **auth.elevate**：仅可申请 `operator`；remote.dll 在接探针一端**弹窗确认**（超时/拒绝回 `-32003`）；另有仅供测试的自动确认开关（配置项，默认关闭）。mock 自动批准。申请 `admin` 远程端一律拒绝：`-32003`，`error.data.os_err=-6`。
+
+### 3.10 M1：remote.dll 实现与启用（v0.5）
+
+- 位置：`module/remote/remote.c`（编译为 `dll/remote.dll`，随 OpenScope 自动加载）；复用 aiapi 的 WebSocket 服务端（`module/network/netws.c`，新增 `os_ws_server_upgrade_proto` / `os_ws_recv_capped_head` / `os_ws_send_close`，只增不改），所有设备访问走主程序 `ai_call`（vars.list/mem.read/vars.write/vars.watch/acq.start），不改核心与旧 network.dll。
+- 默认监听 `ws://127.0.0.1:18766`，子协议 `orp.v1`；启动日志打印配对码与二维码内容 `orp://pair?d=<device_id>&c=<code>&r=<ws_url>`。
+- 配置（命令行优先，也可用同名环境变量）：
+  - `--remote-port=N` / `OPENSCOPE_REMOTE_PORT`
+  - `--remote-host=0.0.0.0` / `OPENSCOPE_REMOTE_HOST`（仅 127.0.0.1 或 0.0.0.0；0.0.0.0 时强制配对，二维码使用局域网 IP）
+  - `--remote-off` / `OPENSCOPE_REMOTE_DISABLE=1`
+  - `--remote-auto-elevate` / `OPENSCOPE_REMOTE_AUTO_ELEVATE=1`：**仅测试**，auth.elevate 不弹窗自动批准；只在 127.0.0.1 监听时生效，0.0.0.0 下忽略并告警
+  - `OPENSCOPE_REMOTE_PAIR_CODE=123456`：**仅测试**，固定配对码（可重复配对）
+- 权限提升：探针端弹出置顶确认框（30 s 无操作视为拒绝，默认按钮“否”）；拒绝返回 -32003，data `{"os_err":-6}`。
+- `vars.read` 结果新增 `source`：`"mem"`（直接读目标内存，默认）或 `"acq"`（读失败时回退到采集最近样本）。
+- vars.list 的 `type` 来自主程序 vars.list 新增字段（`float/double/intN_t/uintN_t/bool/enum/ptr/char/other`，位域加 `:bf`），`writable` 为可按标量写入（≤8 字节的数值/枚举/指针）。
+- 推流：后台线程按 1 ms 轮询订阅变量最新采样（最多同时跟踪 16 个变量，每变量 65536 点环形缓冲），history.fetch 只覆盖曾被订阅过的变量。
+- 一致性测试（真机）：`python tools/orp_mock/orp_conformance.py --code 123456 --write-var g_mta --write-value 4660 --stream-vars "asin_data[3],acos_data[2]"`（`--write-value` 为 v0.5 新增参数，整型变量需给整数）。
 
 ## 4. 分阶段计划与分工
 
@@ -214,3 +230,4 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 | v0.2 | 2026-10-25 | 程序员小程 | 按小微评审修订：二进制帧小端序、t0 拆 hi/lo uint32、帧内 uint32 µs 偏移、value_type 在 stream.meta 声明、单帧 64KB；小程序订阅 rate_hz≤20/≤4 曲线/minmax；session.hello 增加 accept_kinds；history.fetch 支持 minmax；二维码 orp://pair 格式；可选微信登录（code2session 在 Relay）；错误码表；小程序默认 viewer + auth.elevate；control.acquire/release；orp-client 纯 JS(ES5) + 传输层抽象 |
 | v0.3 | 2026-10-25 | 程序员小程 | M0 落地：新增 3.9（pair.claim 方法名、握手前方法白名单、子协议 orp.v1、帧记录布局与 n u16、t0 为 Unix µs、seq 会话级递增、history 帧 stream_id=0、请求上限 256KB、心跳 30s/会话保留 120s、control 冲突 data.holder、kind=3 暂不实现） |
 | v0.4 | 2026-10-25 | 程序员小程 | 按小微/小序反馈：定义 vars.write 返回 `{id,value,req_id,duplicate}`；明确 stream.subscribe 返回 vars 为数字 id、名称/类型在 stream.meta；心跳统一 10 s（3.3 同步，caps.heartbeat_s）；定义 control 结构 `{held_by_me,holder_client,since}`；控制权持有者断线 15 s 自动释放；control 结构改为 `{held_by_me, holder:{session_id,client}|null, since}`（取代 holder_client）；history.fetch 支持名称并在 result 声明 value_type/变量元信息；保证 stream.meta 先于数据帧；冻结 vars.list 字段与分页参数；请求过大回显 id；定义 close code 4000/4001/4002；删除 json_stream/stream.data；admin 提升远程一律拒绝（os_err -6）；elevate 改为探针端弹窗确认 + 测试用自动确认开关 |
+| v0.5 | 2026-10-25 | 程序员小程 | M1 remote.dll 落地：新增 3.10（启用方式/配置/测试开关）；vars.read 结果增加 `source`（mem/acq）；连接数超限明确以 1013 关闭；vars.list `type` 取值表与 `writable` 判定；一致性测试新增 `--write-value`，流/历史用例改用 `--stream-vars` 指定的变量（真机） |

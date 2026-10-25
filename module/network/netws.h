@@ -39,5 +39,12 @@ int        os_ws_recv(OS_WSConn* c, uint8_t* buf, int cap, int* opcode);
 int        os_ws_accept_socket(int lsock);
 OS_WSConn* os_ws_server_upgrade(int sock, int timeout_ms);
 int        os_ws_recv_capped(OS_WSConn* c, uint8_t* buf, int cap, int* opcode, uint32_t drain_max);
+/* ---- remote.dll（ORP）专用增量接口 ---- */
+/* 同 os_ws_server_upgrade；若客户端 Sec-WebSocket-Protocol 含 proto 则在 101 响应中回显（浏览器要求） */
+OS_WSConn* os_ws_server_upgrade_proto(int sock, int timeout_ms, const char* proto);
+/* 同 os_ws_recv_capped；超大帧时把前 cap 字节（已去掩码）留在 buf 并写 *head_len，便于回显请求 id */
+int        os_ws_recv_capped_head(OS_WSConn* c, uint8_t* buf, int cap, int* opcode, uint32_t drain_max, int* head_len);
+/* 发送 Close 帧（code + reason），不关闭 socket */
+int        os_ws_send_close(OS_WSConn* c, int code, const char* reason);
 
 #endif

@@ -104,6 +104,7 @@ def main():
     ap.add_argument("--code", required=True)
     ap.add_argument("--sim", action="store_true")
     ap.add_argument("--write-var", default="g_cfg.gain")
+    ap.add_argument("--write-value", type=float, default=1.5, help="写入测试值（整型变量请给整数，如 4660）")
     ap.add_argument("--stream-vars", default="", help="逗号分隔变量名，默认取 vars.list 前 2 个")
     A = ap.parse_args()
     st = {}
@@ -199,18 +200,23 @@ def main():
         c = st["c"]
         o = c.ok("vars.read", {"name": A.write_var})
         if o.get("has_sample"): st["orig"] = o["value"]
-        r = c.ok("vars.write", {"name": A.write_var, "value": 1.5, "req_id": "w-1"})
-        assert r["duplicate"] is False and r["req_id"] == "w-1" and isinstance(r["id"], int) and abs(r["value"] - 1.5) < 1e-6, r
-        r2 = c.ok("vars.write", {"name": A.write_var, "value": 1.5, "req_id": "w-1"})
+        wv = A.write_value
+        r = c.ok("vars.write", {"name": A.write_var, "value": wv, "req_id": "w-1"})
+        assert r["duplicate"] is False and r["req_id"] == "w-1" and isinstance(r["id"], int) and abs(r["value"] - wv) < 1e-6, r
+        r2 = c.ok("vars.write", {"name": A.write_var, "value": wv, "req_id": "w-1"})
         assert r2.get("duplicate") is True and r2.get("req_id") == "w-1" and r2["id"] == r["id"]
         time.sleep(0.3)
         rd = c.ok("vars.read", {"name": A.write_var})
-        assert rd["has_sample"] == 1 and abs(rd["value"] - 1.5) < 1e-3, rd
+        assert rd["has_sample"] == 1 and abs(rd["value"] - wv) < 1e-3, rd
         c.ok("vars.write", {"name": A.write_var, "value": st.get("orig", 1.0), "req_id": "w-2"})
+
+    def SN(n):
+        """流测试变量名：--stream-vars 优先（真机用），否则取 vars.list 前 n 个"""
+        return (A.stream_vars.split(",") if A.stream_vars else [v["name"] for v in st["vars"]])[:n]
 
     def sub_check(mode, rate, kind, vt="f32", secs=1.2):
         c = st["c"]
-        names = A.stream_vars.split(",") if A.stream_vars else [v["name"] for v in st["vars"][:2]]
+        names = SN(2)
         c.notes.clear()
         r = c.ok("stream.subscribe", {"vars": names, "mode": mode, "rate_hz": rate, "value_type": vt})
         r["_t_sub"] = time.time()
@@ -231,7 +237,7 @@ def main():
     @case("meta_before_frames")
     def _():
         c = st["c"]; seen_meta = set(); order_ok = True
-        names = [v["name"] for v in st["vars"][:2]]
+        names = SN(2)
         rid = next(_ids)
         c.ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": "stream.subscribe", "params": {"vars": names, "mode": "latest", "rate_hz": 50}}))
         sid = None; end = time.time() + 1.5
@@ -275,7 +281,7 @@ def main():
     def _():
         t = pair("mp"); c = Cli(A.url)
         h = hello(c, t, client="mp", accept=(1, 2, 3))
-        names = [v["name"] for v in st["vars"][:6]]
+        names = SN(6) if not A.stream_vars else (SN(6) + [v["name"] for v in st["vars"]])[:6]
         r = c.ok("stream.subscribe", {"vars": names, "rate_hz": 100})
         assert r["rate_hz"] <= 20 and len(r["vars"]) <= 4 and r["mode"] == "minmax", r
         frames = c.collect(1.0)
@@ -286,12 +292,13 @@ def main():
 
     @case("history_fetch")
     def _():
-        c = st["c"]; vid = st["vars"][0]["id"]
+        c = st["c"]; hn = SN(1)[0]
+        vid = next(v["id"] for v in c.ok("vars.list", {"needle": hn, "limit": 50})["vars"] if v["name"] == hn)
         c.bins.clear()
-        r = c.ok("history.fetch", {"vars": [st["vars"][0]["name"]], "mode": "minmax", "max_points": 100,
+        r = c.ok("history.fetch", {"vars": [hn], "mode": "minmax", "max_points": 100,
                                    "t0": int((time.time() - 2) * 1e6), "t1": int(time.time() * 1e6)})
         assert r["frames"] >= 1 and 0 < r["records"] <= 120, r
-        assert r["value_type"] == "f32" and r["vars"][0]["var_id"] == vid and r["vars"][0]["name"] == st["vars"][0]["name"], r
+        assert r["value_type"] == "f32" and r["vars"][0]["var_id"] == vid and r["vars"][0]["name"] == hn, r
         pre = list(c.bins)
         fr = [parse(f) for f in pre + c.collect(0.3)]
         assert any(f["sid"] == 0 and f["kind"] == 2 for f in fr)
@@ -299,7 +306,7 @@ def main():
     @case("disconnect_resume")
     def _():
         c = st["c"]
-        r = c.ok("stream.subscribe", {"vars": [st["vars"][0]["name"]], "mode": "latest", "rate_hz": 10})
+        r = c.ok("stream.subscribe", {"vars": SN(1), "mode": "latest", "rate_hz": 10})
         c.ws.sock.shutdown(socket.SHUT_RDWR); c.close()
         time.sleep(1.0)
         c = Cli(A.url)

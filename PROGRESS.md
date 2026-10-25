@@ -444,3 +444,9 @@
 - [x] test_ai_full：采集断言 total_samples>0 且增长；vars.read 停核后与 mem.read 比对真实值。
 - [x] 清理：删除 build_tests.bat 中 `->` 被 cmd 当重定向误生成的乱码文件；测试 .obj 经 `CL=/Fo` 统一输出到 tests\bin\obj（已在 .gitignore）。
 - 暂停：远程网络调试功能（network.dll）按用户要求暂不继续开发，后续单独开发。
+
+## 2026-10-25 M1：remote.dll（ORP v1 服务端，规范 v0.5）
+- 新增 module/remote（dll/remote.dll）：复用 aiapi/netws，设备访问全走 ai_call；默认 127.0.0.1:18766，`--remote-host=0.0.0.0` 时强制配对；auth.elevate 探针端弹窗确认（30 s 默认拒绝），`--remote-auto-elevate` 仅测试且仅 127.0.0.1 生效；admin 远程一律拒绝。
+- netws 只增不改：os_ws_server_upgrade_proto / os_ws_recv_capped_head / os_ws_send_close；ai_bridge vars.list 增加 type / writable 字段。
+- 真机（ST-Link + G431RB）一致性测试 5 次连续 20/20；10 min 推流 + 300 次反复连接 0 失败，句柄稳定（~281→293，不随连接次数增长）。
+- 规范 v0.5：vars.read 增加 source；超限 1013 关闭；一致性测试增加 --write-value。

@@ -466,7 +466,7 @@ class Server:
     async def handler(self, ws):
         if self.n_clients >= MAX_CLIENTS:
             await self.send_json(ws, {"jsonrpc": "2.0", "id": None, "error": {"code": E_TOO_MANY, "message": f"too many clients (max {MAX_CLIENTS})"}})
-            await ws.close(); return
+            await ws.close(code=1013, reason="too many clients"); return
         self.n_clients += 1
         ctx = {"ws": ws, "sess": None}
         try:
