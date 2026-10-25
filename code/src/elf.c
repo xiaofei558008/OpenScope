@@ -167,13 +167,6 @@ static int64_t rd_sleb(const uint8_t* p, const uint8_t* end, const uint8_t** out
     return (int64_t)r;
 }
 
-static const char* rd_cstr(const uint8_t* p, const uint8_t* end)
-{
-    const uint8_t* q = p;
-    while (q < end && *q) ++q;
-    return (const char*)p;
-}
-
 /* ------------------------------------------------------------------ */
 /* ELF header/section parsing                                          */
 /* ------------------------------------------------------------------ */
@@ -1058,11 +1051,6 @@ static int die_add_attr(DW_Die* d, uint64_t name, uint8_t kind, uint64_t v, cons
     return 0;
 }
 
-static DW_Die* unit_die(DW_Unit* u, int idx)
-{
-    return &u->dies[idx];
-}
-
 static DW_Die* die_glob_find(OS_ElfFile* f, uint64_t off, DW_Unit** out_u, int* out_idx)
 {
     int lo = 0, hi = f->die_glob_count - 1;
@@ -1709,7 +1697,7 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
                         int cidx = die_idx + 1 + j;
                         DW_Die* c = cidx < u->ndies ? &u->dies[cidx] : NULL;
                         uint64_t mtype = 0, moff = 0;
-                        int have_mtype = 0, have_moff = 0, is_art = 0;
+                        int have_mtype = 0, is_art = 0;
                         uint64_t bsz = 0, boff = 0;
                         int have_bsz = 0, have_boff = 0;
                         const char* mname = NULL;
@@ -1730,10 +1718,8 @@ static OS_Type* build_type(DW_Unit* u, int die_idx, int depth)
                                         const uint8_t* q = NULL;
                                         moff = rd_uleb(a->p + 1, a->p + a->v, &q);
                                     }
-                                    have_moff = 1;
                                 } else {
                                     moff = const_u64(a);
-                                    have_moff = 1;
                                 }
                             }
                             else if (a->name == DW_AT_artificial) is_art = const_u64(a) ? 1 : 0;

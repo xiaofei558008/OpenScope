@@ -316,7 +316,7 @@ class Server:
             lt = self.sim.latest.get(v["id"])
             if not lt:
                 return {"id": v["id"], "name": v["name"], "has_sample": 0}
-            return {"id": v["id"], "name": v["name"], "has_sample": 1, "value": lt[1], "ts_us": lt[0]}
+            return {"id": v["id"], "name": v["name"], "has_sample": 1, "value": lt[1], "ts_us": lt[0], "source": "mem"}
         if method == "vars.write":
             self.need_role(sess, "operator")
             self.need_control(sess)

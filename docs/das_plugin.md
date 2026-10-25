@@ -25,8 +25,8 @@
 | SCAN | qry_servers(running) → items[i]: serial=服务器名, name="DAS <srv>: <acc_hw>"；无则 NO_DEVICE |
 | CONNECT | in=OS_ConnectCfg：serial=服务器名（空→UDAS），device 含 `coreN`/`cpuN`/`tcN`/纯数字 选核（默认 0）；总是 Attach（不复位不停核） |
 | DISCONNECT / IS_CONNECTED | 关闭 core+server / out int |
-| READ_MEM | OS_MemReq；返回读到字节数。拆成 ≤1024B 事务、每 txlist ≤64 个；≥0xF0000000（SFR）用 access_width=4，非对齐时扩为 4 字节对齐窗口再截取；失败节流 1s 自动重连一次 |
-| WRITE_MEM | 拒绝与 0x80000000–0x8FFFFFFF、0xA0000000–0xAFFFFFFF 相交的区间（PFLASH/DFLASH/**UCB**）→ INVALID_ARG；SFR 写须 4 字节对齐 |
+| READ_MEM | OS_MemReq；返回读到字节数；addr+size>2^32 → INVALID_ARG；连接后掉线/失败按 1s 节流自动重连（显式 DISCONNECT 后不重连）。拆成 ≤1024B 事务、每 txlist ≤64 个；≥0xF0000000（SFR）用 access_width=4，非对齐时扩为 4 字节对齐窗口再截取；失败节流 1s 自动重连一次 |
+| WRITE_MEM | 同 READ 的越界检查与节流重连；拒绝与 0x80000000–0x8FFFFFFF、0xA0000000–0xAFFFFFFF 相交的区间（PFLASH/DFLASH/**UCB**）→ INVALID_ARG；SFR 写须 4 字节对齐 |
 | HALT / GO | mcd_stop / mcd_run |
 | RESET / RESET_RUN | mcd_rst(复位类 0 优先, halt=1/0)；RESET_RUN 后若未运行再 mcd_run |
 | GET_CPU_STATE | qry_state → RUNNING/STOP/—；停核时读 CSFR PC（0xF881FE08 + core*0x20000） |
@@ -39,7 +39,8 @@
 - `das_range_is_protected(addr,size)`：边界 0x7FFFFFFC+4、0x8FFFFFFF、0x90000000、0x9FFFFFFF、0xA0000000、0xAF400000(UCB)、0xAFFFFFFF、0xB0000000；size=0 视为 1 字节。
 - `das_addr_is_sfr(addr)`：≥0xF0000000。
 - `das_split_chunks(addr,size,max_bytes,out_addr,out_len,max_chunks)`：整除/余数/size=0/超 max_chunks 返回 -1/max_bytes=0 返回 -1。
-- `das_align4(addr,size,&a,&s)`：非对齐首尾扩展。
+- `das_align4(addr,size,&a,&s)`：非对齐首尾扩展；64 位运算，s 为 uint64_t（可 >0xFFFFFFFF）。
+- `das_range_fits32(addr,size)`：addr+size ≤ 2^32；READ/WRITE_MEM 越界返回 INVALID_ARG，split_chunks 回绕返回 -1。
 - `das_state_text(state,&halted)`：1→RUNNING/0，2,3→STOP/1，其它→"—"/-1。
 - `das_parse_core_index(device)`："core1"/"CPU2"/"tc0"/"1"→N；"Cortex-M4"/"TC37x"/NULL/""→0；N≥8→0。
 

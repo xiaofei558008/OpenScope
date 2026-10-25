@@ -22,6 +22,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
+#if !defined(_WIN32) && !defined(_vsnprintf)
+#define _vsnprintf vsnprintf /* 非 Windows 测试桩 */
+#endif
 #include "module_api.h"
 #include "mcdload.h"
 #include "das_util.h"
@@ -40,6 +44,7 @@ typedef struct DasCtx {
     mcd_core_st* core;
     int core_index;
     int connected;
+    int want_connected;   /* 用户已连接且未主动断开：访问失败/掉线后按节流自动重连（B4/B5） */
     OS_DriverInfo info;
     char server_name[64];
     char acc_hw[256];
@@ -52,6 +57,17 @@ typedef struct DasCtx {
 static DasCtx g_ctx;
 static const OS_Framework* g_fw;
 
+/* MSVC _snprintf 截断时不写 NUL：统一用 das_fmt（cap-1 + 手动终止）（B7） */
+static void das_fmt(char* dst, size_t cap, const char* fmt, ...)
+{
+    va_list ap;
+    if (!dst || !cap) return;
+    va_start(ap, fmt);
+    _vsnprintf(dst, cap - 1, fmt, ap);
+    va_end(ap);
+    dst[cap - 1] = 0;
+}
+
 #define LOG(lv, ...) do { if (g_fw && g_fw->log) g_fw->log((lv), __VA_ARGS__); } while (0)
 
 static void das_record_err(const char* what)
@@ -59,8 +75,7 @@ static void das_record_err(const char* what)
     mcd_error_info_st e;
     memset(&e, 0, sizeof(e));
     if (g_ctx.bound) g_ctx.api.qry_error_info(g_ctx.core, &e);
-    _snprintf(g_ctx.last_err, sizeof(g_ctx.last_err), "%s: 0x%x %s", what, e.error_code, e.error_str);
-    g_ctx.last_err[sizeof(g_ctx.last_err) - 1] = 0;
+    das_fmt(g_ctx.last_err, sizeof(g_ctx.last_err), "%s: 0x%x %s", what, e.error_code, e.error_str);
 }
 
 static int das_ensure_init(void)
@@ -80,7 +95,7 @@ static int das_ensure_init(void)
         v.v_api_major = MCD_API_VER_MAJOR; v.v_api_minor = MCD_API_VER_MINOR;
         strcpy(v.author, MCD_API_VER_AUTHOR);
         if (g_ctx.api.initialize(&v, &ii) != MCD_RET_ACT_NONE) return OS_ERR_FAIL;
-        _snprintf(g_ctx.info.dll_version, sizeof(g_ctx.info.dll_version), "%u.%u.%u",
+        das_fmt(g_ctx.info.dll_version, sizeof(g_ctx.info.dll_version), "%u.%u.%u",
                   ii.v_imp_major, ii.v_imp_minor, ii.v_imp_build);
         g_ctx.mcd_inited = 1;
     }
@@ -103,8 +118,8 @@ static int mod_scan(OS_ScanReq* req)
         OS_DeviceInfo* d = &req->items[req->count];
         memset(d, 0, sizeof(*d));
         d->index = (int)i;
-        _snprintf(d->serial, sizeof(d->serial) - 1, "%s", si[i].server);
-        _snprintf(d->name, sizeof(d->name) - 1, "DAS %s: %s", si[i].server,
+        das_fmt(d->serial, sizeof(d->serial), "%s", si[i].server);
+        das_fmt(d->name, sizeof(d->name), "DAS %s: %s", si[i].server,
                   si[i].acc_hw[0] ? si[i].acc_hw : "(no access HW)");
         req->count++;
     }
@@ -123,6 +138,7 @@ static int mod_disconnect_locked(void)
 
 static int mod_disconnect(void)
 {
+    g_ctx.want_connected = 0;
     if (!g_ctx.bound) return OS_ERR_OK;
     EnterCriticalSection(&g_ctx.cs);
     mod_disconnect_locked();
@@ -138,13 +154,13 @@ static int mod_connect_locked(void)
     const char* srv = g_ctx.cfg.serial[0] ? g_ctx.cfg.serial : DAS_SERVER_DEFAULT;
     mod_disconnect_locked();
     g_ctx.server = NULL;
-    _snprintf(cfg, sizeof(cfg), "McdHostName=\"localhost\"\nMcdServerName=\"%s\"\n", srv);
+    das_fmt(cfg, sizeof(cfg), "McdHostName=\"localhost\"\nMcdServerName=\"%s\"\n", srv);
     /* system_key 必须是 ""：传 NULL 时 mcdxdas.dll 访问冲突 */
     if ((g_ctx.api.open_server("", cfg, &g_ctx.server) != MCD_RET_ACT_NONE || !g_ctx.server) &&
         strcmp(srv, DAS_SERVER_DEFAULT) != 0) {
         /* serial 不是有效 DAS 服务器名（如残留的其它探针序列号）：回退默认 UDAS */
         srv = DAS_SERVER_DEFAULT;
-        _snprintf(cfg, sizeof(cfg), "McdHostName=\"localhost\"\nMcdServerName=\"%s\"\n", srv);
+        das_fmt(cfg, sizeof(cfg), "McdHostName=\"localhost\"\nMcdServerName=\"%s\"\n", srv);
         g_ctx.server = NULL;
         g_ctx.api.open_server("", cfg, &g_ctx.server);
     }
@@ -160,11 +176,11 @@ static int mod_connect_locked(void)
     if (g_ctx.api.open_core(&cores[g_ctx.core_index], &g_ctx.core) != MCD_RET_ACT_NONE || !g_ctx.core) {
         g_ctx.core = NULL; das_record_err("open_core"); goto fail;
     }
-    _snprintf(g_ctx.server_name, sizeof(g_ctx.server_name), "%s", srv);
-    _snprintf(g_ctx.acc_hw, sizeof(g_ctx.acc_hw), "%s", dev[0].acc_hw);
-    _snprintf(g_ctx.device_name, sizeof(g_ctx.device_name), "%s", dev[0].device);
-    _snprintf(g_ctx.core_name, sizeof(g_ctx.core_name), "%s", cores[g_ctx.core_index].core);
-    _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator), "%s / %s / %s", dev[0].acc_hw, dev[0].device, cores[g_ctx.core_index].core);
+    das_fmt(g_ctx.server_name, sizeof(g_ctx.server_name), "%s", srv);
+    das_fmt(g_ctx.acc_hw, sizeof(g_ctx.acc_hw), "%s", dev[0].acc_hw);
+    das_fmt(g_ctx.device_name, sizeof(g_ctx.device_name), "%s", dev[0].device);
+    das_fmt(g_ctx.core_name, sizeof(g_ctx.core_name), "%s", cores[g_ctx.core_index].core);
+    das_fmt(g_ctx.info.emulator, sizeof(g_ctx.info.emulator), "%s / %s / %s", dev[0].acc_hw, dev[0].device, cores[g_ctx.core_index].core);
     g_ctx.connected = 1;
     g_ctx.info.connected = 1;
     return OS_ERR_OK;
@@ -179,6 +195,7 @@ static int mod_connect(void)
     if (das_ensure_init() != OS_ERR_OK) return OS_ERR_FAIL;
     EnterCriticalSection(&g_ctx.cs);
     rc = mod_connect_locked();
+    g_ctx.want_connected = (rc == OS_ERR_OK);
     LeaveCriticalSection(&g_ctx.cs);
     if (rc == OS_ERR_OK)
         LOG(OS_LOG_INFO, "das 模块: 已连接 %s（%s，Attach 不停核）", g_ctx.info.emulator, g_ctx.server_name);
@@ -204,8 +221,9 @@ static int das_xfer_locked(uint64_t addr, uint8_t* buf, uint32_t size, int write
 {
     uint64_t ca[DAS_TXLIST_MAX]; uint32_t cl[DAS_TXLIST_MAX];
     mcd_tx_st tx[DAS_TXLIST_MAX];
-    int n, i, sfr = das_addr_is_sfr(addr);
+    int n, i;
     uint32_t done = 0;
+    if (!das_range_fits32(addr, size)) return -1;
     while (done < size) {
         uint32_t remain = size - done;
         uint32_t span = remain > DAS_TX_MAX_BYTES * DAS_TXLIST_MAX ? DAS_TX_MAX_BYTES * DAS_TXLIST_MAX : remain;
@@ -215,6 +233,8 @@ static int das_xfer_locked(uint64_t addr, uint8_t* buf, uint32_t size, int write
         for (i = 0; i < n; i++) {
             tx[i].addr.address = ca[i];
             tx[i].access_type = write ? MCD_TX_AT_W : MCD_TX_AT_R;
+            /* SFR 判定按块（B8）：块可能从 RAM 跨入 0xF0000000 以上 */
+            int sfr = das_addr_is_sfr(ca[i]) || das_addr_is_sfr(ca[i] + cl[i] - 1);
             tx[i].access_width = (uint8_t)((sfr && !(ca[i] & 3) && !(cl[i] & 3)) ? 4 : 0);
             tx[i].data = buf + done + (ca[i] - (addr + done));
             tx[i].num_bytes = cl[i];
@@ -228,9 +248,12 @@ static int das_xfer_locked(uint64_t addr, uint8_t* buf, uint32_t size, int write
 /* SFR 非对齐读：扩成 4 字节对齐窗口再截取 */
 static int das_read_locked(uint64_t addr, uint8_t* buf, uint32_t size)
 {
-    if (das_addr_is_sfr(addr) && ((addr & 3) || (size & 3))) {
-        uint64_t a; uint32_t s; uint8_t* tmp; int r;
-        das_align4(addr, size, &a, &s);
+    if (!das_range_fits32(addr, size)) return -1;
+    if (das_addr_is_sfr(addr + size - 1) && ((addr & 3) || (size & 3))) {
+        uint64_t a, s64; uint32_t s; uint8_t* tmp; int r;
+        das_align4(addr, size, &a, &s64);
+        if (s64 > 0xFFFFFFFFull || s64 < size || !das_range_fits32(a, (uint32_t)s64)) return -1;
+        s = (uint32_t)s64;
         tmp = (uint8_t*)malloc(s);
         if (!tmp) return -1;
         r = das_xfer_locked(a, tmp, s, 0);
@@ -241,22 +264,34 @@ static int das_read_locked(uint64_t addr, uint8_t* buf, uint32_t size)
     return das_xfer_locked(addr, buf, size, 0);
 }
 
+/* 节流重连（调用方持锁）：仅在 want_connected 时尝试，最短间隔 DAS_RECONNECT_MIN_MS */
 static int das_try_reconnect(void)
 {
-    ULONGLONG now = GetTickCount64();
-    if (now - g_ctx.last_reconnect_ms < DAS_RECONNECT_MIN_MS) return -1;
+    ULONGLONG now;
+    if (!g_ctx.want_connected) return -1;
+    now = GetTickCount64();
+    if (g_ctx.last_reconnect_ms && now - g_ctx.last_reconnect_ms < DAS_RECONNECT_MIN_MS) return -1;
     g_ctx.last_reconnect_ms = now;
     LOG(OS_LOG_WARN, "das 模块: 访问失败（%s），尝试重连", g_ctx.last_err);
     return mod_connect_locked() == OS_ERR_OK ? 0 : -1;
+}
+
+/* 持锁后检查连接（B9）；未连接但 want_connected 时节流重连（B4） */
+static int das_ensure_connected_locked(void)
+{
+    if (g_ctx.connected) return OS_ERR_OK;
+    if (das_try_reconnect() == 0) return OS_ERR_OK;
+    return OS_ERR_NOT_CONNECTED;
 }
 
 static int mod_read(OS_MemReq* req)
 {
     int r;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
-    if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
     if (!req->size) return 0;
+    if (!das_range_fits32(req->address, req->size)) return OS_ERR_INVALID_ARG; /* B1 */
     EnterCriticalSection(&g_ctx.cs);
+    if (das_ensure_connected_locked() != OS_ERR_OK) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     r = das_read_locked(req->address, (uint8_t*)req->data, req->size);
     if (r != 0 && das_try_reconnect() == 0)
         r = das_read_locked(req->address, (uint8_t*)req->data, req->size);
@@ -268,17 +303,22 @@ static int mod_write(OS_MemReq* req)
 {
     int r;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
-    if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-    if (das_range_is_protected(req->address, req->size)) {
+    if (!das_range_fits32(req->address, req->size)) return OS_ERR_INVALID_ARG; /* B1 */
+    if (das_range_is_protected(req->address, req->size)) {  /* size=0 也按 1 字节判保护 */
         LOG(OS_LOG_ERROR, "das 模块: 拒绝写 Flash/UCB 区 0x%08llX（%u 字节）", (unsigned long long)req->address, req->size);
         return OS_ERR_INVALID_ARG;
     }
-    if (das_addr_is_sfr(req->address) && ((req->address & 3) || (req->size & 3))) {
+    if (!req->size) return OS_ERR_OK;
+    if ((das_addr_is_sfr(req->address) || das_addr_is_sfr(req->address + req->size - 1)) &&
+        ((req->address & 3) || (req->size & 3))) {
         LOG(OS_LOG_ERROR, "das 模块: SFR 写需 4 字节对齐 0x%08llX", (unsigned long long)req->address);
         return OS_ERR_INVALID_ARG;
     }
     EnterCriticalSection(&g_ctx.cs);
+    if (das_ensure_connected_locked() != OS_ERR_OK) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     r = das_xfer_locked(req->address, (uint8_t*)req->data, req->size, 1);
+    if (r != 0 && das_try_reconnect() == 0)   /* B5 */
+        r = das_xfer_locked(req->address, (uint8_t*)req->data, req->size, 1);
     LeaveCriticalSection(&g_ctx.cs);
     return r == 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
@@ -288,8 +328,8 @@ static int das_run_ctl(int cmd)
 {
     mcd_return_et r = MCD_RET_ACT_HANDLE_ERROR;
     uint32_t classes = 0, vec;
-    if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
     EnterCriticalSection(&g_ctx.cs);
+    if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     switch (cmd) {
     case OS_CMD_HALT: r = g_ctx.api.stop(g_ctx.core, FALSE); break;
     case OS_CMD_GO:   r = g_ctx.api.run(g_ctx.core, FALSE); break;
@@ -322,15 +362,19 @@ static int mod_cpu_state(OS_CpuState* out)
     if (!out) return OS_ERR_INVALID_ARG;
     memset(out, 0, sizeof(*out));
     out->halted = -1; out->powered = -1; out->under_reset = -1; out->voltage_mv = -1;
-    if (!g_ctx.connected) { strcpy(out->state, "\xE2\x80\x94"); return OS_ERR_NOT_CONNECTED; }
     memset(&st, 0, sizeof(st));
     EnterCriticalSection(&g_ctx.cs);
+    if (!g_ctx.connected) {
+        LeaveCriticalSection(&g_ctx.cs);
+        strcpy(out->state, "\xE2\x80\x94");
+        return OS_ERR_NOT_CONNECTED;
+    }
     if (g_ctx.api.qry_state(g_ctx.core, &st) != MCD_RET_ACT_NONE) {
         LeaveCriticalSection(&g_ctx.cs);
         strcpy(out->state, "\xE2\x80\x94");
         return OS_ERR_FAIL;
     }
-    _snprintf(out->state, sizeof(out->state) - 1, "%s", das_state_text(st.state, &out->halted));
+    das_fmt(out->state, sizeof(out->state), "%s", das_state_text(st.state, &out->halted));
     if (out->halted == 1) {
         uint32_t pc = 0;
         if (das_xfer_locked(DAS_CSFR_PC(g_ctx.core_index), (uint8_t*)&pc, 4, 0) == 0) { out->pc = pc; out->pc_valid = 1; }
@@ -341,17 +385,40 @@ static int mod_cpu_state(OS_CpuState* out)
     return OS_ERR_OK;
 }
 
+/* JSON 字符串转义（B6） */
+static void das_json_esc(const char* in, char* out, size_t cap)
+{
+    size_t o = 0;
+    if (!cap) return;
+    for (; in && *in && o + 7 < cap; in++) {
+        unsigned char ch = (unsigned char)*in;
+        if (ch == '"' || ch == '\\') { out[o++] = '\\'; out[o++] = (char)ch; }
+        else if (ch < 0x20) { o += (size_t)sprintf(out + o, "\\u%04x", ch); }
+        else out[o++] = (char)ch;
+    }
+    out[o] = 0;
+}
+
+/* AI_DESCRIBE：调用方缓冲约定 ≥4KB（module_api.h）；按 4096 截断 */
+#define DAS_DESCRIBE_CAP 4096
 static int mod_describe(char* buf)
 {
+    char srv[160], dev[160], core[160], err[600];
     if (!buf) return OS_ERR_INVALID_ARG;
-    sprintf(buf,
+    EnterCriticalSection(&g_ctx.cs);
+    das_json_esc(g_ctx.server_name, srv, sizeof(srv));
+    das_json_esc(g_ctx.device_name, dev, sizeof(dev));
+    das_json_esc(g_ctx.core_name, core, sizeof(core));
+    das_json_esc(g_ctx.last_err, err, sizeof(err));
+    das_fmt(buf, DAS_DESCRIBE_CAP,
         "{\"driver\":\"das\",\"backend\":\"Infineon DAS MCD API (mcdxdas.dll)\","
         "\"targets\":\"AURIX TC2xx/TC3xx via miniWiggler / onboard DAP\","
         "\"connected\":%d,\"server\":\"%s\",\"device\":\"%s\",\"core\":\"%s\","
         "\"attach_running\":true,\"flash\":false,"
         "\"write_protect\":\"0x80000000-0x8FFFFFFF,0xA0000000-0xAFFFFFFF (PFLASH/DFLASH/UCB)\","
         "\"connect_device_field\":\"coreN selects core (default core0)\",\"last_error\":\"%s\"}",
-        g_ctx.connected, g_ctx.server_name, g_ctx.device_name, g_ctx.core_name, g_ctx.last_err);
+        g_ctx.connected, srv, dev, core, err);
+    LeaveCriticalSection(&g_ctx.cs);
     return OS_ERR_OK;
 }
 

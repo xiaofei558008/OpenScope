@@ -19,6 +19,7 @@ int das_split_chunks(uint64_t addr, uint32_t size, uint32_t max_bytes,
 {
     int n = 0;
     if (!max_bytes) return -1;
+    if (!das_range_fits32(addr, size)) return -1;  /* 32 位地址空间回绕 */
     while (size) {
         uint32_t l = size < max_bytes ? size : max_bytes;
         if (n >= max_chunks) return -1;
@@ -29,11 +30,17 @@ int das_split_chunks(uint64_t addr, uint32_t size, uint32_t max_bytes,
     return n;
 }
 
-void das_align4(uint64_t addr, uint32_t size, uint64_t* a_addr, uint32_t* a_size)
+int das_range_fits32(uint64_t addr, uint32_t size)
 {
-    uint64_t s = addr & ~3ull, e = (addr + size + 3) & ~3ull;
+    return addr <= 0x100000000ull && (uint64_t)size <= 0x100000000ull - addr;
+}
+
+void das_align4(uint64_t addr, uint32_t size, uint64_t* a_addr, uint64_t* a_size)
+{
+    /* 全 64 位：窗口长度可达 0x100000004，不截断（B1） */
+    uint64_t s = addr & ~3ull, e = (addr + (uint64_t)size + 3ull) & ~3ull;
     if (a_addr) *a_addr = s;
-    if (a_size) *a_size = (uint32_t)(e - s);
+    if (a_size) *a_size = e - s;
 }
 
 const char* das_state_text(uint32_t st, int* halted)

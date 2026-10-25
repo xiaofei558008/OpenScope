@@ -33,19 +33,26 @@ typedef struct McdApi {
 /* dir 为空则依次尝试 OPENSCOPE_DAS_DIR、C:\Program Files\DAS64\clients */
 static int mcd_bind(McdApi* a, char* err, int errcap)
 {
-    static const char* dirs[] = { NULL, "C:\\Program Files\\DAS64\\clients", "C:\\Program Files (x86)\\DAS64\\clients", NULL };
+    /* 非 static：每次调用重建，避免保存指向本栈帧 envdir 的悬空指针（deinit 后再绑定） */
+    const char* dirs[4];
     char envdir[MAX_PATH], path[MAX_PATH + 32];
+    DWORD el;
     int i;
     memset(a, 0, sizeof(*a));
-    if (GetEnvironmentVariableA("OPENSCOPE_DAS_DIR", envdir, sizeof(envdir)) > 0) dirs[0] = envdir;
+    path[0] = 0;
+    el = GetEnvironmentVariableA("OPENSCOPE_DAS_DIR", envdir, sizeof(envdir));
+    dirs[0] = (el > 0 && el < sizeof(envdir)) ? envdir : NULL;
+    dirs[1] = "C:\\Program Files\\DAS64\\clients";
+    dirs[2] = "C:\\Program Files (x86)\\DAS64\\clients";
+    dirs[3] = NULL;
     for (i = 0; i < 3 && !a->h; i++) {
         if (!dirs[i]) continue;
-        _snprintf(path, sizeof(path), "%s\\mcdxdas.dll", dirs[i]);
+        _snprintf(path, sizeof(path) - 1, "%s\\mcdxdas.dll", dirs[i]); path[sizeof(path) - 1] = 0;
         /* 依赖 DLL（das_api.dll 等）在同目录 */
         a->h = LoadLibraryExA(path, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
     }
-    if (!a->h) { _snprintf(err, errcap, "未找到 mcdxdas.dll（请安装 DAS64，或设 OPENSCOPE_DAS_DIR）"); return -1; }
-#define B(f, n) if (!(*(FARPROC*)&a->f = GetProcAddress(a->h, n))) { _snprintf(err, errcap, "mcdxdas.dll 缺少导出 %s", n); FreeLibrary(a->h); a->h = NULL; return -1; }
+    if (!a->h) { { _snprintf(err, errcap - 1, "未找到 mcdxdas.dll（请安装 DAS64，或设 OPENSCOPE_DAS_DIR）"); err[errcap - 1] = 0; } return -1; }
+#define B(f, n) if (!(*(FARPROC*)&a->f = GetProcAddress(a->h, n))) { { _snprintf(err, errcap - 1, "mcdxdas.dll 缺少导出 %s", n); err[errcap - 1] = 0; } FreeLibrary(a->h); a->h = NULL; return -1; }
     B(initialize, "mcd_initialize_f") B(exit_, "mcd_exit_f") B(qry_servers, "mcd_qry_servers_f")
     B(open_server, "mcd_open_server_f") B(close_server, "mcd_close_server_f") B(qry_systems, "mcd_qry_systems_f")
     B(qry_devices, "mcd_qry_devices_f") B(qry_cores, "mcd_qry_cores_f") B(open_core, "mcd_open_core_f")
@@ -54,7 +61,7 @@ static int mcd_bind(McdApi* a, char* err, int errcap)
     B(qry_rst_classes, "mcd_qry_rst_classes_f") B(rst, "mcd_rst_f") B(qry_reg_groups, "mcd_qry_reg_groups_f")
     B(qry_reg_map, "mcd_qry_reg_map_f") B(qry_mem_spaces, "mcd_qry_mem_spaces_f") B(qry_server_config, "mcd_qry_server_config_f")
 #undef B
-    _snprintf(err, errcap, "%s", path);
+    { _snprintf(err, errcap - 1, "%s", path); err[errcap - 1] = 0; }
     return 0;
 }
 #endif

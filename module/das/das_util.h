@@ -19,12 +19,16 @@ int das_range_is_protected(uint64_t addr, uint32_t size);
 int das_addr_is_sfr(uint64_t addr);
 
 /* 将 [addr, addr+size) 拆成不超过 max_bytes 的块；返回块数（最多 max_chunks），
- * 超出 max_chunks 返回 -1。out_addr/out_len 可为 NULL（只计数）。 */
+ * 超出 max_chunks、max_bytes=0 或区间越过 2^32（回绕）返回 -1。out_addr/out_len 可为 NULL（只计数）。 */
 int das_split_chunks(uint64_t addr, uint32_t size, uint32_t max_bytes,
                      uint64_t* out_addr, uint32_t* out_len, int max_chunks);
 
-/* 4 字节对齐窗口：把任意 [addr,size) 扩展为覆盖它的 4 字节对齐区间 */
-void das_align4(uint64_t addr, uint32_t size, uint64_t* a_addr, uint32_t* a_size);
+/* [addr, addr+size) 是否完全落在 32 位地址空间内（addr+size ≤ 2^32） */
+int das_range_fits32(uint64_t addr, uint32_t size);
+
+/* 4 字节对齐窗口：把任意 [addr,size) 扩展为覆盖它的 4 字节对齐区间。
+ * 全 64 位运算，*a_size 为 64 位（可 > 0xFFFFFFFF，调用方须自行检查）。 */
+void das_align4(uint64_t addr, uint32_t size, uint64_t* a_addr, uint64_t* a_size);
 
 /* MCD core state → OpenScope 状态文案（RUNNING / STOP / RESET / —），halted 输出 1/0/-1 */
 const char* das_state_text(uint32_t mcd_state, int* halted);
