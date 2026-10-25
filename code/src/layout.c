@@ -11,10 +11,13 @@
 #include "vartree.h"
 #include "mainwin.h"
 #include "dock.h"
+#include "srcwin.h"
+#include "locals.h"
 #include "theme.h"
 
 #include <io.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define LAYOUT_VERSION 1
@@ -41,6 +44,8 @@ static int win_type_of(HWND hwnd, char* type, int cap, OS_Module** mod, void** c
     *ctx = NULL;
     if (os_chart_is(hwnd)) { _snprintf(type, cap, "%s", "chart"); return 1; }
     if (os_num_is(hwnd)) { _snprintf(type, cap, "%s", "num"); return 1; }
+    if (os_src_is(hwnd)) { _snprintf(type, cap, "%s", "source"); return 1; }
+    if (os_locals_is(hwnd)) { _snprintf(type, cap, "%s", "locals"); return 1; }
     for (i = 0; i < g_app.win_count; i++) {
         OS_WinItem* wi = &g_app.wins[i];
         if (wi->hwnd == hwnd && wi->is_module && wi->mod) {
@@ -113,7 +118,7 @@ static int dock_index_of(HWND h, void* u)
     DockSaveCtx* c = (DockSaveCtx*)u;
     int i;
     for (i = 0; i < c->nw; i++) if (c->written[i] == h) return i;
-    return -1;
+    return os_mainwin_dock_sys_index(h);   /* 变量树/源码文件/消息：固定编号 */
 }
 
 int os_layout_save_to(const wchar_t* path)
@@ -163,6 +168,16 @@ int os_layout_save_to(const wchar_t* path)
         write_utf8_line(f, "[win]");
         write_utf8_line(f, "type=%s", type);
         write_utf8_line(f, "title=%s", title8);
+        if (os_src_is(wi->hwnd)) {
+            wchar_t sp[MAX_PATH];
+            int top1 = 0;
+            if (os_src_get_state(wi->hwnd, sp, MAX_PATH, &top1) == 0 && sp[0]) {
+                char sp8[MAX_PATH * 3];
+                os_wide_to_utf8_buf(sp, sp8, sizeof(sp8));
+                write_utf8_line(f, "src=%s", sp8);
+                write_utf8_line(f, "src_top=%d", top1);
+            }
+        }
         nv = win_var_count(wi->hwnd, wi->is_module, mod, ctx);
         if (nv > MAX_WIN_VARS) nv = MAX_WIN_VARS;
         {
@@ -235,6 +250,8 @@ typedef struct LayoutWin {
     char title[512];
     char vars[MAX_WIN_VARS][300];
     int  nvars;
+    char src[MAX_PATH * 3];   /* 源码窗口：文件路径 */
+    int  src_top;             /* 源码窗口：首可见行（1-based） */
 } LayoutWin;
 
 typedef struct LayoutData {
@@ -318,6 +335,8 @@ int os_layout_load_from(const wchar_t* path)
             } else {
                 if (!strcmp(key, "type")) _snprintf(cur->type, sizeof(cur->type), "%s", val);
                 else if (!strcmp(key, "title")) _snprintf(cur->title, sizeof(cur->title), "%s", val);
+                else if (!strcmp(key, "src")) _snprintf(cur->src, sizeof(cur->src), "%s", val);
+                else if (!strcmp(key, "src_top")) cur->src_top = atoi(val);
                 else if (!strcmp(key, "vars") && val[0]) {
                     if (cur->nvars < MAX_WIN_VARS)
                         _snprintf(cur->vars[cur->nvars++], sizeof(cur->vars[0]), "%s", val);
@@ -383,13 +402,21 @@ int os_layout_load_from(const wchar_t* path)
         h = os_win_create_by_type(w->type, wtitle);
         if (!h) continue;
         by_index[i] = h;
+        if (w->src[0]) {
+            wchar_t wsrc[MAX_PATH];
+            os_utf8_to_wide_buf(w->src, wsrc, MAX_PATH);
+            if (os_src_restore(h, wsrc, w->src_top) != 0)
+                os_log(OS_LOG_WARN, "源码文件不存在，源码窗口保留为空: %ls", wsrc);
+        }
         for (k = 0; k < w->nvars; k++) {
             if (w->vars[k][0]) os_layout_apply_var(h, w->vars[k]);
         }
     }
     /* 停靠布局：有 [dock] 节则按树恢复；旧文件（只有 [win]）保持自动平铺放置 */
-    if (dock_host() && dock_load_apply(by_index, ld->nwins) == 0)
-        os_log(OS_LOG_INFO, "停靠布局已恢复");
+    if (dock_host()) {
+        if (dock_load_apply(by_index, ld->nwins) == 0) os_log(OS_LOG_INFO, "停靠布局已恢复");
+        else os_mainwin_dock_default();   /* 旧格式（无 [dock]）→ 默认停靠布局 */
+    }
     }
     if (ld->active >= 0 && ld->active < g_app.win_count)
         os_mainwin_select_tab(ld->active);
@@ -417,6 +444,7 @@ void os_layout_restore_auto(void)
     wchar_t path[MAX_PATH];
     default_path(path, MAX_PATH, 0);
     if (_waccess(path, 0) == 0) os_layout_load_from(path);
+    else if (dock_host()) os_mainwin_dock_default();   /* 首次启动：默认停靠布局 */
 }
 
 /* ---------------- 变量挂接与延迟解析 ---------------- */

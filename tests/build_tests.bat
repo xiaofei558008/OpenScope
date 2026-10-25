@@ -1,5 +1,8 @@
 @echo off
 setlocal
+rem UI 回归测试实例使用独立布局文件，避免覆盖用户 %LOCALAPPDATA%\OpenScope\layout.ini
+if not exist "%~dp0bin" mkdir "%~dp0bin"
+set "OPENSCOPE_LAYOUT=%~dp0bin\test_layout.ini"
 rem 测试程序的 .obj 统一输出到 tests\bin\obj（原先散落在仓库根目录）
 if not exist tests\bin\obj mkdir tests\bin\obj
 set "CL=/Fotests\bin\obj\\"

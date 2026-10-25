@@ -177,7 +177,14 @@ static void cleanup_floats(void)
     int i;
     for (i = 1; i < DK_MAX_HOSTS; i++) {
         if (g_h[i].used && dt_empty(&g_h[i].tree)) {
-            HWND f = g_h[i].frame;
+            HWND f = g_h[i].frame, hh = g_h[i].host;
+            int k;
+            /* 先把仍挂在该浮动宿主下的面板救回主宿主（否则 DestroyWindow 连带销毁面板） */
+            for (k = 0; k < DK_MAX_PANELS; k++)
+                if (g_p[k].used && g_p[k].hwnd && IsWindow(g_p[k].hwnd) && hh && GetParent(g_p[k].hwnd) == hh) {
+                    ShowWindow(g_p[k].hwnd, SW_HIDE);
+                    SetParent(g_p[k].hwnd, g_h[0].host);
+                }
             g_h[i].used = 0;
             g_h[i].frame = g_h[i].host = NULL;
             if (f && IsWindow(f)) DestroyWindow(f);
@@ -882,10 +889,23 @@ void dock_load_line(const char* key, const char* val)
     }
 }
 
+static HWND g_fixed[16];
+static int  g_nfixed;
+void dock_set_fixed(const HWND* fixed, int n)
+{
+    int i;
+    g_nfixed = n > 16 ? 16 : n;
+    for (i = 0; i < g_nfixed; i++) g_fixed[i] = fixed[i];
+}
+
 typedef struct { const HWND* by; int n; } MapIn;
 static int map_in_cb(int num, void* u)
 {
     MapIn* m = (MapIn*)u;
+    if (num >= DOCK_FIXED_BASE) {
+        num -= DOCK_FIXED_BASE;
+        return (num < g_nfixed && g_fixed[num]) ? panel_of_hwnd(g_fixed[num]) : -1;
+    }
     if (num < 0 || num >= m->n || !m->by[num]) return -1;
     return panel_of_hwnd(m->by[num]);
 }
@@ -1008,4 +1028,15 @@ int dock_describe_json(char* out, int cap)
     }
     o += _snprintf(out + o, cap - o, "]}");
     return o;
+}
+
+int dock_apply_tree(const char* main_tree, const HWND* by_index, int n)
+{
+    int rc;
+    dock_load_begin();
+    dock_load_line("main", main_tree);
+    rc = dock_load_apply(by_index, n);
+    dock_load_begin();
+    notify_changed();
+    return rc;
 }

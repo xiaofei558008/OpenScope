@@ -49,6 +49,11 @@ void dock_load_begin(void);
 void dock_load_line(const char* key, const char* val);
 /* 窗口已按序号创建后调用：by_index[i] = 第 i 个保存窗口的 HWND（可为 NULL） */
 int  dock_load_apply(const HWND* by_index, int n);
+/* 固定面板（变量树/源码文件/消息等系统面板）：持久化编号 1000+k */
+#define DOCK_FIXED_BASE 1000
+void dock_set_fixed(const HWND* fixed, int n);
+/* 直接应用一棵树串（编号 = by_index 下标 / 1000+k 固定面板）；未引用面板自动放置 */
+int  dock_apply_tree(const char* main_tree, const HWND* by_index, int n);
 
 /* 测试/自动化：JSON 描述（树串、面板、各 tab/分隔条的屏幕坐标） */
 int  dock_describe_json(char* out, int cap);

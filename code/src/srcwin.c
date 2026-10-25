@@ -45,6 +45,7 @@ typedef struct OS_SrcWin {
     int bp_count;
     HFONT font;
     int line_h;
+    int want_top1;     /* 布局恢复的首行（1-based，0=无）：停靠到最终尺寸前不被临时尺寸截断 */
 } OS_SrcWin;
 
 static const wchar_t* g_src_class = L"OSSrcWin";
@@ -463,6 +464,9 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_SIZE:
+        if (s && s->want_top1 > 0) {
+            s->top = s->want_top1 - 1;   /* 保持到用户滚动/跳转为止：停靠过程中的临时尺寸不截断恢复的首行 */
+        }
         if (s) src_update_scroll(s);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
@@ -483,6 +487,7 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case SB_THUMBTRACK: pos = si.nTrackPos; break;
         }
         s->top = pos;
+        s->want_top1 = 0;
         src_update_scroll(s);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
@@ -491,6 +496,7 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         if (s) {
             int d = GET_WHEEL_DELTA_WPARAM(wp);
             s->top -= (d > 0) ? 3 : -3;
+            s->want_top1 = 0;
             src_update_scroll(s);
             InvalidateRect(hwnd, NULL, FALSE);
         }
@@ -587,6 +593,7 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             if (li != s->sel_b) {
                 s->sel_b = li;
                 s->caret_line = li;
+                s->want_top1 = 0;
                 /* 拖出可视区时滚动 */
                 if (y < 0) { s->top--; src_update_scroll(s); }
                 else {
@@ -628,6 +635,7 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             wp == VK_HOME || wp == VK_END) {
             int li = s->caret_line < 0 ? s->top : s->caret_line;
             RECT rc; int page;
+            s->want_top1 = 0;
             GetClientRect(hwnd, &rc);
             page = (rc.bottom - rc.top) / s->line_h;
             if (page < 1) page = 1;
@@ -709,7 +717,7 @@ HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line)
                 os_mainwin_select_tab(i);
                 if (goto_line > 0) {
                     s->caret_line = goto_line - 1;
-                    s->top = goto_line - 5;
+                    s->top = goto_line - 5; s->want_top1 = 0;
                     if (s->top < 0) s->top = 0;
                     src_update_scroll(s);
                 }
@@ -722,7 +730,14 @@ HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line)
     }
     base = wcsrchr(path, L'\\');
     base = base ? base + 1 : path;
-    h = os_win_create_by_type("source", base);
+    /* 停靠默认布局里预留的空源码窗口：直接复用（保持其停靠位置） */
+    h = NULL;
+    for (i = 0; i < g_app.win_count && !h; i++)
+        for (j = 0; j < g_app.wins[i].group_count; j++) {
+            OS_SrcWin* e = src_from(g_app.wins[i].group[j]);
+            if (e && !e->path[0]) { h = e->hwnd; os_mainwin_set_win_title(h, base); os_mainwin_select_tab(i); break; }
+        }
+    if (!h) h = os_win_create_by_type("source", base);
     s = src_from(h);
     if (!s) return h;
     if (src_load_file(s, path) != 0) {
@@ -732,7 +747,7 @@ HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line)
     src_sync_bps_from_driver(s);
     if (goto_line > 0) {
         s->caret_line = goto_line - 1;
-        s->top = goto_line - 5;
+        s->top = goto_line - 5; s->want_top1 = 0;
         if (s->top < 0) s->top = 0;
     }
     src_update_scroll(s);
@@ -768,7 +783,7 @@ void os_src_set_pc_line(const wchar_t* path, int line1)
                 if (s->pc_line >= s->line_count && s->line_count > 0)
                     s->pc_line = s->line_count - 1;
                 s->caret_line = s->pc_line;
-                s->top = s->pc_line - 5;
+                s->top = s->pc_line - 5; s->want_top1 = 0;
                 if (s->top < 0) s->top = 0;
                 src_update_scroll(s);
             } else {
@@ -777,4 +792,57 @@ void os_src_set_pc_line(const wchar_t* path, int line1)
             InvalidateRect(s->hwnd, NULL, FALSE);
         }
     }
+}
+
+int os_src_get_state(HWND hwnd, wchar_t* path, int cap, int* top1)
+{
+    OS_SrcWin* s = src_from(hwnd);
+    if (!s) return -1;
+    if (path && cap > 0) _snwprintf(path, cap - 1, L"%s", s->path), path[cap - 1] = 0;
+    if (top1) *top1 = s->want_top1 > 0 ? s->want_top1 : s->top + 1;
+    return 0;
+}
+
+int os_src_restore(HWND hwnd, const wchar_t* path, int top1)
+{
+    OS_SrcWin* s = src_from(hwnd);
+    if (!s || !path || !path[0]) return -1;
+    if (src_load_file(s, path) != 0) return -1;
+    src_sync_bps_from_driver(s);
+    s->top = top1 > 0 ? top1 - 1 : 0;
+    s->want_top1 = top1 > 0 ? top1 : 0;
+    src_update_scroll(s);
+    InvalidateRect(hwnd, NULL, FALSE);
+    return 0;
+}
+
+/* 测试/自动化：各源码窗口状态（路径、首行、PC 行、断点数、是否可见/父窗口类别） */
+int os_src_describe_json(char* out, int cap)
+{
+    int i, j, len = 0, first = 1;
+    len += _snprintf(out + len, cap - len, "{\"ok\":true,\"src\":[");
+    for (i = 0; i < g_app.win_count; i++)
+        for (j = 0; j < g_app.wins[i].group_count; j++) {
+            OS_SrcWin* s = src_from(g_app.wins[i].group[j]);
+            char p8[MAX_PATH * 3], esc[MAX_PATH * 6];
+            int k, e = 0;
+            HWND top;
+            if (!s || len >= cap - 600) continue;
+            WideCharToMultiByte(CP_UTF8, 0, s->path, -1, p8, sizeof(p8), NULL, NULL);
+            for (k = 0; p8[k] && e < (int)sizeof(esc) - 2; k++) {
+                if (p8[k] == '\\' || p8[k] == '"') esc[e++] = '\\';
+                esc[e++] = p8[k];
+            }
+            esc[e] = 0;
+            top = GetAncestor(s->hwnd, GA_ROOT);
+            len += _snprintf(out + len, cap - len,
+                "%s{\"hwnd\":%lld,\"path\":\"%s\",\"top\":%d,\"lines\":%d,\"pc_line\":%d,\"bps\":%d,"
+                "\"visible\":%d,\"floating\":%d}",
+                first ? "" : ",", (long long)(INT_PTR)s->hwnd, esc, s->top + 1, s->line_count,
+                s->pc_line >= 0 ? s->pc_line + 1 : 0, s->bp_count,
+                IsWindowVisible(s->hwnd) ? 1 : 0, top != g_app.hMain ? 1 : 0);
+            first = 0;
+        }
+    len += _snprintf(out + len, cap - len, "]}");
+    return len;
 }

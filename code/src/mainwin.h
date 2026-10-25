@@ -39,7 +39,10 @@ typedef struct OS_DockReq {
     int   result;
 } OS_DockReq;
 LRESULT os_mainwin_dock_cmd(OS_DockReq* r);
-int  os_mainwin_dock_safe(OS_DockReq* r);   /* 任意线程 */ /* 任意线程：打开/聚焦局部变量窗口 */
+int  os_mainwin_dock_safe(OS_DockReq* r);
+void os_mainwin_dock_default(void);                    /* 停靠默认布局（变量|源码/波形|数值/局部变量，底部消息） */
+int  os_mainwin_dock_sys_index(HWND h);                /* 系统面板持久化编号（DOCK_FIXED_BASE+k），否则 -1 */
+void os_mainwin_set_win_title(HWND h, const wchar_t* title);   /* 任意线程 */ /* 任意线程：打开/聚焦局部变量窗口 */
 /* N11: 在 tab 内新建 type 窗口（tab<0=新建 tab，tab 有效=附加到该 tab 组） */
 HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title);
 /* N11/Bug3: 子窗口获得焦点时登记为“当前窗口” */

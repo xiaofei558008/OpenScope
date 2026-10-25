@@ -795,6 +795,10 @@ void os_win_mark_active(HWND w)
 static void layout(void);
 static void dock_sync_wins(void);
 static int  g_dock_on = 0;   /* Terminator 式停靠管理器已接管窗口区 */
+/* 系统面板（一等停靠面板）：0=变量树 1=源码文件树 2=消息 */
+#define DOCK_NSYS 3
+static HWND g_dock_sys[DOCK_NSYS];
+static const wchar_t* g_dock_sys_title[DOCK_NSYS] = { L"变量", L"源码文件", L"消息" };
 static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, const wchar_t* title);
 static void tab_set_title(int idx, const wchar_t* name);
 
@@ -983,8 +987,8 @@ static void rebuild_tabs(void)
 /* 停靠：把窗口注册表（g_app.wins，含组内窗口）同步给停靠管理器 */
 static void dock_sync_wins(void)
 {
-    HWND hs[OS_MAX_WINS * OS_MAX_GROUP];
-    const wchar_t* ts[OS_MAX_WINS * OS_MAX_GROUP];
+    HWND hs[OS_MAX_WINS * OS_MAX_GROUP + DOCK_NSYS];
+    const wchar_t* ts[OS_MAX_WINS * OS_MAX_GROUP + DOCK_NSYS];
     int i, k, n = 0;
     if (!g_dock_on) return;
     for (i = 0; i < g_app.win_count; i++) {
@@ -996,11 +1000,17 @@ static void dock_sync_wins(void)
             n++;
         }
     }
+    for (k = 0; k < DOCK_NSYS; k++)
+        if (g_dock_sys[k]) { hs[n] = g_dock_sys[k]; ts[n] = g_dock_sys_title[k]; n++; }
     dock_sync(hs, ts, n);
 }
 
 static void dock_cb_close(HWND w)
 {
+    if (os_mainwin_dock_sys_index(w) >= 0) {   /* 系统面板不销毁：提示可拖动/重置 */
+        os_log(OS_LOG_INFO, "系统面板不可关闭（可拖动合并为标签，或“窗口→重置窗口布局”）");
+        return;
+    }
     PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)w, 0);
 }
 
@@ -1011,13 +1021,128 @@ static void dock_cb_activated(HWND w)
     for (i = 0; i < g_app.win_count; i++) if (g_app.wins[i].hwnd == w) { g_cur_tab = i; break; }
 }
 
+int os_mainwin_dock_sys_index(HWND h)
+{
+    int k;
+    if (!h) return -1;
+    for (k = 0; k < DOCK_NSYS; k++) if (g_dock_sys[k] == h) return DOCK_FIXED_BASE + k;
+    return -1;
+}
+
+void os_mainwin_set_win_title(HWND h, const wchar_t* title)
+{
+    int i;
+    for (i = 0; i < g_app.win_count; i++)
+        if (g_app.wins[i].hwnd == h) {
+            _snwprintf(g_app.wins[i].title, 128, L"%s", title);
+            if (g_dock_on) dock_set_title(h, g_app.wins[i].title);
+            return;
+        }
+}
+
+/* 系统面板外壳：子控件铺满；通知/命令/右键/着色转发主窗口（原有处理逻辑不变） */
+static LRESULT CALLBACK dock_sys_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    switch (msg) {
+    case WM_SIZE: {
+        HWND c = GetWindow(hwnd, GW_CHILD);
+        if (c) MoveWindow(c, 0, 0, LOWORD(lp), HIWORD(lp), TRUE);
+        return 0;
+    }
+    case WM_ERASEBKGND: return 1;
+    case WM_SETFOCUS: { HWND c = GetWindow(hwnd, GW_CHILD); if (c) SetFocus(c); return 0; }
+    case WM_NOTIFY: case WM_COMMAND: case WM_CONTEXTMENU:
+    case WM_CTLCOLORBTN: case WM_CTLCOLORSTATIC: case WM_CTLCOLOREDIT: case WM_CTLCOLORLISTBOX:
+    case WM_DRAWITEM: case WM_MEASUREITEM:
+        if (g_app.hMain) return SendMessageW(g_app.hMain, msg, wp, lp);
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static void dock_sys_init(void)
+{
+    static int reg = 0;
+    HWND kids[DOCK_NSYS];
+    int k;
+    if (!g_dock_on) return;
+    if (!reg) {
+        WNDCLASSW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.lpfnWndProc = dock_sys_proc;
+        wc.hInstance = g_app.hInst;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.lpszClassName = L"OSDockSysPanel";
+        RegisterClassW(&wc);
+        reg = 1;
+    }
+    kids[0] = g_app.hTree; kids[1] = g_app.hSrcTree; kids[2] = g_app.hLog;
+    for (k = 0; k < DOCK_NSYS; k++) {
+        if (!kids[k]) continue;
+        g_dock_sys[k] = CreateWindowExW(0, L"OSDockSysPanel", g_dock_sys_title[k],
+                                        WS_CHILD | WS_CLIPCHILDREN, 0, 0, 200, 150,
+                                        g_app.hTab, NULL, g_app.hInst, NULL);
+        if (!g_dock_sys[k]) continue;
+        SetParent(kids[k], g_dock_sys[k]);
+        MoveWindow(kids[k], 0, 0, 200, 150, FALSE);
+        ShowWindow(kids[k], SW_SHOW);
+    }
+    dock_set_fixed(g_dock_sys, DOCK_NSYS);
+    dock_sync_wins();
+}
+
+/* 默认布局：左=变量(+源码文件 tab)；中上=源码；中下=波形；右=数值/局部变量；底=消息。
+ * 缺少的源码/波形/数值/局部变量窗口会自动新建（Tom：要同时看到四者）。 */
+void os_mainwin_dock_default(void)
+{
+    HWND by[OS_MAX_WINS * OS_MAX_GROUP + 1];
+    int cat[OS_MAX_WINS * OS_MAX_GROUP + 1];
+    int n = 0, i, k, c;
+    int have[4] = { 0, 0, 0, 0 };          /* 0=源码 1=波形 2=数值 3=局部变量 */
+    static const char* types[4] = { "source", "chart", "num", "locals" };
+    static const wchar_t* titles[4] = { L"源码", L"波形", L"数值", L"局部变量" };
+    char tree[2048], grp[4][512];
+    if (!g_dock_on) return;
+    for (i = 0; i < g_app.win_count; i++)
+        for (k = 0; k < g_app.wins[i].group_count; k++) {
+            HWND w = g_app.wins[i].group[k];
+            if (!w || !IsWindow(w)) continue;
+            if (os_src_is(w)) have[0] = 1;
+            else if (os_chart_is(w)) have[1] = 1;
+            else if (os_num_is(w)) have[2] = 1;
+            else if (os_locals_is(w)) have[3] = 1;
+        }
+    for (c = 0; c < 4; c++) if (!have[c]) os_win_create_by_type(types[c], titles[c]);
+    dock_sync_wins();
+    for (i = 0; i < g_app.win_count; i++)
+        for (k = 0; k < g_app.wins[i].group_count; k++) {
+            HWND w = g_app.wins[i].group[k];
+            if (!w || !IsWindow(w) || n >= (int)(sizeof(by) / sizeof(by[0]))) continue;
+            by[n] = w;
+            cat[n] = os_src_is(w) ? 0 : os_chart_is(w) ? 1 : os_num_is(w) ? 2 : os_locals_is(w) ? 3 : 1;
+            n++;
+        }
+    for (c = 0; c < 4; c++) {
+        int len = 0;
+        grp[c][0] = 0;
+        for (i = 0; i < n; i++)
+            if (cat[i] == c && len < (int)sizeof(grp[c]) - 12)
+                len += _snprintf(grp[c] + len, sizeof(grp[c]) - len, "%s%d", len ? "," : "", i);
+    }
+    _snprintf(tree, sizeof(tree) - 1,
+              "Sv0.7800(Sh0.1800(L%d,%d@0)(Sh0.7200(Sv0.5500(L%s@0)(L%s@0))(Sv0.4500(L%s@0)(L%s@0))))(L%d@0)",
+              DOCK_FIXED_BASE + 0, DOCK_FIXED_BASE + 1, grp[0], grp[1], grp[2], grp[3], DOCK_FIXED_BASE + 2);
+    tree[sizeof(tree) - 1] = 0;
+    dock_apply_tree(tree, by, n);
+}
+
 /* 停靠管理命令（aiapi 测试/自动化用，主线程执行） */
 LRESULT os_mainwin_dock_cmd(OS_DockReq* r)
 {
     if (!r) return -1;
     switch (r->op) {
     case 0: r->result = dock_describe_json(r->out, r->cap) > 0 ? 0 : -1; break;
-    case 1: dock_reset(); r->result = 0; break;
+    case 1: os_mainwin_dock_default(); r->result = 0; break;
     case 2: r->result = dock_move_panel(r->panel, r->target, r->zone); break;
     case 3: r->result = dock_split_active(r->zone); break;
     case 4: dock_activate(r->panel); r->result = 0; break;
@@ -1031,6 +1156,7 @@ LRESULT os_mainwin_dock_cmd(OS_DockReq* r)
         break;
     }
     case 6: os_layout_save_auto(); r->result = 0; break;
+    case 7: r->result = os_src_describe_json(r->out, r->cap) > 0 ? 0 : -1; break;
     default: r->result = -1; break;
     }
     return r->result;
@@ -1080,6 +1206,11 @@ static void refresh_src_tree(void)
 
 static void left_tab_show(int which)
 {
+    if (g_dock_on) {   /* 停靠模式：两棵树各是独立面板，切到对应面板 */
+        g_app.left_tab = which ? 1 : 0;
+        if (g_dock_sys[g_app.left_tab]) dock_activate(g_dock_sys[g_app.left_tab]);
+        return;
+    }
     g_app.left_tab = which ? 1 : 0;
     if (g_app.hLeftTab)
         SendMessageW(g_app.hLeftTab, TCM_SETCURSEL, (WPARAM)g_app.left_tab, 0);
@@ -1261,6 +1392,21 @@ static void layout(void)
         if (hDbgBar) layout_bar_controls(hDbgBar, g_app.hMain, dbg_items,
             (int)(sizeof(dbg_items)/sizeof(dbg_items[0])));
     }
+    if (g_dock_on) {
+        /* 停靠模式：整个内容区交给停靠宿主；变量树/源码文件/消息都是停靠面板 */
+        HWND hide[6];
+        RECT cr;
+        int k;
+        hide[0] = g_app.hLeftTab; hide[1] = g_app.hSplitV; hide[2] = g_app.hSplitH;
+        hide[3] = g_app.hTreeStrip; hide[4] = g_app.hTreePin; hide[5] = g_app.hLogStrip;
+        for (k = 0; k < 6; k++) if (hide[k] && IsWindow(hide[k]) && IsWindowVisible(hide[k])) ShowWindow(hide[k], SW_HIDE);
+        MoveWindow(g_app.hRight, content.left, bh, content.right - content.left,
+                   content.bottom - content.top, TRUE);
+        GetClientRect(g_app.hRight, &cr);
+        if (g_app.hTab && IsWindow(g_app.hTab)) MoveWindow(g_app.hTab, 0, 0, cr.right, cr.bottom, FALSE);
+        dock_move_host(0, 0, cr.right, cr.bottom);
+        goto layout_status;
+    }
     /* N9(d): 变量栏自动隐藏后，只留左侧细条；右侧窗口区从细条右侧开始 */
     if (g_app.tree_hidden) {
         if (g_app.hTreeStrip && IsWindow(g_app.hTreeStrip)) {
@@ -1337,6 +1483,7 @@ static void layout(void)
             ShowWindow(g_app.hLog, SW_SHOW);
         }
     }
+layout_status:
     MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
     {
         int cpu_w = 200;
@@ -4638,6 +4785,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             col.pszText = L"消息";
             ListView_InsertColumn(g_app.hLog, 2, &col);
         }
+        dock_sys_init();   /* 停靠模式：变量树/源码文件/消息成为一等停靠面板 */
         g_app.hStatus = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE,
                                       0, 0, 0, 0, hwnd, NULL, g_app.hInst, NULL);
         /* F20: 子类化状态栏，整体用主题色自绘（标准 SB_SET*COLOR 消息无效） */
@@ -5335,7 +5483,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_WIN_NUM: cmd_add_window(0); break;
         case IDM_WIN_LOCALS: os_locals_open(); break;
         case IDM_DOCK_RESET:
-            if (g_dock_on) { dock_reset(); os_log(OS_LOG_INFO, "窗口布局已重置"); }
+            if (g_dock_on) { os_mainwin_dock_default(); os_log(OS_LOG_INFO, "窗口布局已重置为默认"); }
             break;
         case IDM_DOCK_SPLIT_H:
         case IDM_DOCK_SPLIT_V:

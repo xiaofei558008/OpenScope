@@ -262,6 +262,7 @@ static const AI_Tool g_tools[] = {
     {"ui.dock.split", "拆分当前窗格的当前 tab（vertical=1 上下）", "{\"vertical\":0}"},
     {"ui.win.create", "新建窗口（type=chart/num/locals/source）", "{\"type\":\"chart\"}"},
     {"ui.layout.save", "立即保存布局到 layout.ini", "{}"},
+    {"ui.src.state", "源码窗口状态（路径/首行/PC 行/断点数/是否浮动）", "{}"},
     {"ui.silent", "查询/设置 AI 静默（不弹窗，确认框自动应答）", "{\"on\":1,\"yesno_default\":1}"},
     {"module.command", "透传 OS_CMD_* 到指定模块（高级）", "{\"module\":\"jlink\",\"cmd\":3}"},
 };
@@ -1420,7 +1421,7 @@ int os_ai_call(const char* method, const char* params_json,
         os_src_refresh_bps();
         return ai_ok(result_json, result_cap, NULL);
     }
-    if (strncmp(method, "ui.dock.", 8) == 0 || strcmp(method, "ui.win.create") == 0 || strcmp(method, "ui.layout.save") == 0) {
+    if (strncmp(method, "ui.dock.", 8) == 0 || strcmp(method, "ui.win.create") == 0 || strcmp(method, "ui.layout.save") == 0 || strcmp(method, "ui.src.state") == 0) {
         OS_DockReq r;
         uint64_t v = 0;
         int z = 0;
@@ -1436,9 +1437,10 @@ int os_ai_call(const char* method, const char* params_json,
         } else if (!strcmp(method, "ui.dock.split")) { r.op = 3; json_get_int(params, "vertical", &z); r.zone = z; }
         else if (!strcmp(method, "ui.win.create")) { r.op = 5; json_get_str(params, "type", r.type, sizeof(r.type)); }
         else if (!strcmp(method, "ui.layout.save")) r.op = 6;
+        else if (!strcmp(method, "ui.src.state")) { r.op = 7; r.out = buf; r.cap = sizeof(buf); }
         else return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "unknown dock method");
         if (os_mainwin_dock_safe(&r) != 0) return ai_fail(result_json, result_cap, OS_ERR_FAIL, "dock command failed");
-        if (r.op == 0) _snprintf(result_json, result_cap, "%s", buf);
+        if (r.op == 0 || r.op == 7) _snprintf(result_json, result_cap, "%s", buf);
         else if (r.op == 5) _snprintf(result_json, result_cap, "{\"ok\":true,\"hwnd\":%llu}", (unsigned long long)(UINT_PTR)r.panel);
         else return ai_ok(result_json, result_cap, NULL);
         return OS_ERR_OK;
