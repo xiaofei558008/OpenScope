@@ -452,7 +452,7 @@ static int jlink_bp_set(const OS_BpReq* req)
         if (!g_bp[i].addr) { slot = i; break; }
     if (slot < 0) {
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 断点: 表已满（最多 %d）", JLINK_BP_MAX);
-        return OS_ERR_FAIL;
+        return OS_ERR_BUSY;
     }
     EnterCriticalSection(&g_ctx.cs);
     handle = g_ctx.api.set_bp_ex(addr, 0xFFFFFFFFu);

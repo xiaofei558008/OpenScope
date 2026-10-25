@@ -249,12 +249,39 @@ static void src_toggle_bp(OS_SrcWin* s, int line1)
                path8, line1, os_elf_line_count(g_app.elf), os_elf_line_file_count(g_app.elf));
         return;
     }
+    {
+        /* 行表无该行（注释/空行/声明/被优化）时 addr_of_line 会就近取上一可执行行：明确告知，不静默挪位 */
+        char f8[MAX_PATH];
+        int got = 0;
+        if (os_elf_line_of_addr(g_app.elf, addr, f8, sizeof(f8), &got) && got > 0 && got != line1) {
+            wchar_t msg[384];
+            _snwprintf(msg, 384,
+                       L"第 %d 行没有生成代码（注释/空行/声明，或被编译器优化合并）。\n"
+                       L"最近的可执行行是第 %d 行（0x%08X），请在有代码的行设置断点。",
+                       line1, got, addr & ~1u);
+            os_msgbox(s->hwnd, msg, L"源码断点", MB_OK | MB_ICONINFORMATION);
+            os_log(OS_LOG_WARN, "源码断点: %s:%d 无代码（最近可执行行 %d @ 0x%08X）", path8, line1, got, addr & ~1u);
+            return;
+        }
+    }
     memset(&req, 0, sizeof(req));
     req.address = addr;
     _snprintf(req.note, sizeof(req.note), "%s:%d", path8, line1);
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
     if (rc != OS_ERR_OK) {
-        os_msgbox(s->hwnd, L"设置硬件断点失败（槽满或不支持）", L"源码断点", MB_OK | MB_ICONWARNING);
+        const wchar_t* why;
+        wchar_t msg[384];
+        switch (rc) {
+        case OS_ERR_BUSY:          why = L"硬件断点槽已满：请先清除不用的断点（各驱动上限：ST-Link 6、J-Link 视内核、DAS/TC3xx 8）。"; break;
+        case OS_ERR_UNSUPPORTED:   why = L"当前驱动不支持硬件断点。"; break;
+        case OS_ERR_NOT_CONNECTED: why = L"仿真器未连接。"; break;
+        case OS_ERR_INVALID_ARG:   why = L"断点地址无效。"; break;
+        default:                   why = L"驱动返回错误（详见下方日志）。"; break;
+        }
+        _snwprintf(msg, 384, L"设置硬件断点失败：%s\n\n%s:%d @ 0x%08X（驱动 %S，rc=%d）",
+                   why, s->title, line1, addr & ~1u, g_app.driver->name, rc);
+        os_msgbox(s->hwnd, msg, L"源码断点", MB_OK | MB_ICONWARNING);
+        os_log(OS_LOG_WARN, "源码断点设置失败: %s:%d @ 0x%08X rc=%d", path8, line1, addr & ~1u, rc);
         return;
     }
     if (s->bp_count < OS_BP_MAX) {

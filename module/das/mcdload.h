@@ -28,6 +28,11 @@ typedef struct McdApi {
     mcd_return_et (*qry_reg_map)(const mcd_core_st*, uint32_t, uint32_t, uint32_t*, mcd_register_info_st*);
     mcd_return_et (*qry_mem_spaces)(const mcd_core_st*, uint32_t, uint32_t*, mcd_memspace_st*);
     mcd_return_et (*qry_server_config)(const mcd_server_st*, uint32_t*, mcd_char_t*);
+    /* 触发器（硬件断点）：可选导出，缺失时断点功能报“不支持”，不影响其他功能 */
+    mcd_return_et (*qry_trig_info)(const mcd_core_st*, mcd_trig_info_st*);
+    mcd_return_et (*create_trig)(const mcd_core_st*, void*, uint32_t*);
+    mcd_return_et (*remove_trig)(const mcd_core_st*, uint32_t);
+    mcd_return_et (*activate_trig_set)(const mcd_core_st*);
 } McdApi;
 
 /* dir 为空则依次尝试 OPENSCOPE_DAS_DIR、C:\Program Files\DAS64\clients */
@@ -62,6 +67,10 @@ static int mcd_bind(McdApi* a, char* err, int errcap)
     B(qry_rst_classes, "mcd_qry_rst_classes_f") B(rst, "mcd_rst_f") B(qry_reg_groups, "mcd_qry_reg_groups_f")
     B(qry_reg_map, "mcd_qry_reg_map_f") B(qry_mem_spaces, "mcd_qry_mem_spaces_f") B(qry_server_config, "mcd_qry_server_config_f")
 #undef B
+    *(FARPROC*)&a->qry_trig_info = GetProcAddress(a->h, "mcd_qry_trig_info_f");
+    *(FARPROC*)&a->create_trig = GetProcAddress(a->h, "mcd_create_trig_f");
+    *(FARPROC*)&a->remove_trig = GetProcAddress(a->h, "mcd_remove_trig_f");
+    *(FARPROC*)&a->activate_trig_set = GetProcAddress(a->h, "mcd_activate_trig_set_f");
     { _snprintf(err, errcap - 1, "%s", path); err[errcap - 1] = 0; }
     return 0;
 }

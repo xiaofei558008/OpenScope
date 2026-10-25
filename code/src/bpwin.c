@@ -154,7 +154,10 @@ static void bp_do_set(HWND hwnd)
     _snprintf(req.note, sizeof(req.note), "%s", note);
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
     if (rc != OS_ERR_OK) {
-        bp_set_status(hwnd, L"设置失败（槽满或不支持）");
+        bp_set_status(hwnd, rc == OS_ERR_BUSY ? L"设置失败：硬件断点槽已满" :
+                            rc == OS_ERR_UNSUPPORTED ? L"设置失败：当前驱动不支持硬件断点" :
+                            rc == OS_ERR_NOT_CONNECTED ? L"设置失败：仿真器未连接" :
+                            L"设置失败：驱动返回错误（见日志）");
         os_log(OS_LOG_ERROR, "断点设置失败: 0x%08X rc=%d", addr, rc);
         return;
     }

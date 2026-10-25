@@ -520,7 +520,7 @@ static int stlink_bp_set(const OS_BpReq* req)
     slot = stlink_fpb_alloc(addr, 0);
     if (slot < 0) {
         if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 断点：FPB 槽已满（最多 %d）", STLINK_FPB_MAX);
-        return OS_ERR_FAIL;
+        return OS_ERR_BUSY;
     }
     if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 断点: 设置 0x%08X slot=%d", addr, slot);
     return OS_ERR_OK;

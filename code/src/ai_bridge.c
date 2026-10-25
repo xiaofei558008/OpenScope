@@ -1380,7 +1380,10 @@ int os_ai_call(const char* method, const char* params_json,
             _snprintf(req.note, sizeof(req.note), "%s", note);
         rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
         if (rc != OS_ERR_OK)
-            return ai_fail(result_json, result_cap, rc, "bp.set failed");
+            return ai_fail(result_json, result_cap, rc,
+                           rc == OS_ERR_BUSY ? "bp.set failed: hw breakpoint slots full" :
+                           rc == OS_ERR_UNSUPPORTED ? "bp.set failed: driver does not support breakpoints" :
+                           "bp.set failed");
         os_src_refresh_bps();
         _snprintf(result_json, result_cap,
             "{\"ok\":true,\"address\":%u,\"address_hex\":\"0x%08X\"}",
@@ -1461,7 +1464,10 @@ int os_ai_call(const char* method, const char* params_json,
                 _snprintf(req.note, sizeof(req.note), "%s:%d", path, line);
             rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
             if (rc != OS_ERR_OK)
-                return ai_fail(result_json, result_cap, rc, "bp.set_line failed");
+                return ai_fail(result_json, result_cap, rc,
+                               rc == OS_ERR_BUSY ? "bp.set_line failed: hw breakpoint slots full" :
+                               rc == OS_ERR_UNSUPPORTED ? "bp.set_line failed: driver does not support breakpoints" :
+                               "bp.set_line failed");
             os_src_refresh_bps();
             {
                 char esc[MAX_PATH * 2];

@@ -34,7 +34,8 @@
 #define OS_ERR_NOT_CONNECTED -4
 #define OS_ERR_TIMEOUT       -5
 #define OS_ERR_CANCELED      -6
-#define OS_ERR_BUSY          -7
+#define OS_ERR_BUSY          -7  /* 资源占用（如断点槽满） */
+#define OS_ERR_UNSUPPORTED   -8  /* 驱动/目标不支持该命令 */
 
 /* OS_Module::command 命令号
  * 注：Bug14 已删除 OS_CMD_CONFIGURE（弹芯片配置对话框），连接配置一律由主界面

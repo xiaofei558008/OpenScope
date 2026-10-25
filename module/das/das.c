@@ -14,6 +14,8 @@
  *  - OS_CMD_READ_MEM    内存读：大块拆分为 ≤1KB 事务，一次 txlist 批量执行；SFR 区以 4 字节对齐访问
  *  - OS_CMD_WRITE_MEM   内存写：拒绝 PFLASH/DFLASH/UCB 区（0x8xxxxxxx / 0xAxxxxxxx），永不写 UCB
  *  - HALT / GO / RESET / RESET_RUN / GET_CPU_STATE / GET_INFO / IS_CONNECTED / AI_DESCRIBE
+ *  - BP_SET / BP_CLEAR / BP_LIST：MCD 触发器硬件断点（最多 8，按 qry_trig_info 收紧）；
+ *    STEP/STEP_IN/STEP_OVER：指令单步；STEP_OUT：临时断点于 A11 返回地址
  *  - FLASH_DOWNLOAD / FLASH_ERASE：不支持（返回 OS_ERR_FAIL 并提示用 MemTool / TASKING dbgtc），
  *    以杜绝误写 UCB/保护配置的风险。
  */
@@ -57,6 +59,14 @@ typedef struct DasCtx {
 
 static DasCtx g_ctx;
 static const OS_Framework* g_fw;
+
+#define DAS_BP_HW_MAX 8
+typedef struct { uint32_t addr; uint32_t trig_id; int armed; int temp; } DasBp;
+static DasBp g_bp[DAS_BP_HW_MAX];
+static int   g_bp_limit = DAS_BP_HW_MAX;
+static void das_bp_rearm_locked(void);
+static void das_bp_del_locked(int i);
+static int  das_bp_supported(void);
 
 /* MSVC _snprintf 截断时不写 NUL：统一用 das_fmt（cap-1 + 手动终止）（B7） */
 static void das_fmt(char* dst, size_t cap, const char* fmt, ...)
@@ -142,6 +152,7 @@ static int mod_disconnect(void)
     EnterCriticalSection(&g_ctx.cs);
     g_ctx.want_connected = 0;
     if (!g_ctx.bound) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_OK; }
+    if (g_ctx.connected && das_bp_supported()) { int k; for (k = 0; k < DAS_BP_HW_MAX; k++) if (g_bp[k].addr) das_bp_del_locked(k); }
     mod_disconnect_locked();
     LeaveCriticalSection(&g_ctx.cs);
     return OS_ERR_OK;
@@ -184,6 +195,7 @@ static int mod_connect_locked(void)
     das_fmt(g_ctx.info.emulator, sizeof(g_ctx.info.emulator), "%s / %s / %s", dev[0].acc_hw, dev[0].device, cores[g_ctx.core_index].core);
     g_ctx.connected = 1;
     g_ctx.info.connected = 1;
+    das_bp_rearm_locked();
     return OS_ERR_OK;
 fail:
     mod_disconnect_locked();
@@ -325,6 +337,198 @@ static int mod_write(OS_MemReq* req)
     return r == 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
 }
 
+
+/* ---------- 硬件断点（MCD 触发器，TriCore OCDS TR0..TR7 指令地址比较）---------- */
+
+static int das_bp_supported(void)
+{
+    return g_ctx.api.create_trig && g_ctx.api.remove_trig && g_ctx.api.activate_trig_set;
+}
+
+/* TriCore 指令按半字对齐；PFLASH 0x8xxxxxxx(cached)/0xAxxxxxxx(non-cached) 是同一物理地址，
+ * 取指走 ELF 链接地址（通常 0x8xxxxxxx），断点按宿主给的地址原样比较，只清 bit0。 */
+static int das_bp_arm_locked(DasBp* b)
+{
+    mcd_trig_simple_core_st t;
+    uint32_t id = 0;
+    memset(&t, 0, sizeof(t));
+    t.struct_size = sizeof(t);
+    t.type = MCD_TRIG_TYPE_IP;
+    t.option = MCD_TRIG_OPT_IMPL_HARDWARE;
+    t.action = MCD_TRIG_ACTION_DBG_DEBUG;
+    t.addr_start.address = b->addr;
+    t.addr_range = 0;
+    if (g_ctx.api.create_trig(g_ctx.core, &t, &id) != MCD_RET_ACT_NONE) { das_record_err("create_trig"); return -1; }
+    b->trig_id = id;
+    if (g_ctx.api.activate_trig_set(g_ctx.core) != MCD_RET_ACT_NONE) {
+        das_record_err("activate_trig_set");
+        g_ctx.api.remove_trig(g_ctx.core, id);
+        return -1;
+    }
+    b->armed = 1;
+    return 0;
+}
+
+static void das_bp_disarm_locked(DasBp* b)
+{
+    if (b->armed && g_ctx.core) {
+        g_ctx.api.remove_trig(g_ctx.core, b->trig_id);
+        g_ctx.api.activate_trig_set(g_ctx.core);
+    }
+    b->armed = 0;
+}
+
+/* 连接/重连后重新布置（重新 open_core 后旧 trig_id 失效） */
+static void das_bp_rearm_locked(void)
+{
+    int i;
+    mcd_trig_info_st ti;
+    g_bp_limit = DAS_BP_HW_MAX;
+    if (!das_bp_supported()) return;
+    memset(&ti, 0, sizeof(ti));
+    if (g_ctx.api.qry_trig_info && g_ctx.api.qry_trig_info(g_ctx.core, &ti) == MCD_RET_ACT_NONE &&
+        ti.trig_number > 0 && ti.trig_number < DAS_BP_HW_MAX)
+        g_bp_limit = (int)ti.trig_number;
+    for (i = 0; i < DAS_BP_HW_MAX; i++) {
+        g_bp[i].armed = 0;
+        if (g_bp[i].addr && das_bp_arm_locked(&g_bp[i]) != 0)
+            LOG(OS_LOG_WARN, "das 断点: 重连后恢复 0x%08X 失败（%s）", g_bp[i].addr, g_ctx.last_err);
+    }
+}
+
+static int das_bp_find(uint32_t addr)
+{
+    int i;
+    for (i = 0; i < DAS_BP_HW_MAX; i++) if (g_bp[i].addr && g_bp[i].addr == addr) return i;
+    return -1;
+}
+
+static int das_bp_count(void)
+{
+    int i, n = 0;
+    for (i = 0; i < DAS_BP_HW_MAX; i++) if (g_bp[i].addr) n++;
+    return n;
+}
+
+/* 返回槽号；-1 失败（last_err），-2 槽满 */
+static int das_bp_add_locked(uint32_t addr, int temp)
+{
+    int i = das_bp_find(addr), slot = -1;
+    if (i >= 0) { if (!temp) g_bp[i].temp = 0; return i; }
+    if (das_bp_count() >= g_bp_limit) return -2;
+    for (i = 0; i < DAS_BP_HW_MAX; i++) if (!g_bp[i].addr) { slot = i; break; }
+    if (slot < 0) return -2;
+    g_bp[slot].addr = addr; g_bp[slot].temp = temp;
+    if (das_bp_arm_locked(&g_bp[slot]) != 0) { memset(&g_bp[slot], 0, sizeof(g_bp[slot])); return -1; }
+    return slot;
+}
+
+static void das_bp_del_locked(int i)
+{
+    das_bp_disarm_locked(&g_bp[i]);
+    memset(&g_bp[i], 0, sizeof(g_bp[i]));
+}
+
+static int das_bp_cmd(int cmd, void* in, void* out)
+{
+    int rc = OS_ERR_OK, i;
+    const OS_BpReq* req = (const OS_BpReq*)in;
+    EnterCriticalSection(&g_ctx.cs);
+    if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
+    if (!das_bp_supported()) {
+        LeaveCriticalSection(&g_ctx.cs);
+        LOG(OS_LOG_ERROR, "das 断点: mcdxdas.dll 未导出触发器 API，不支持硬件断点");
+        return OS_ERR_UNSUPPORTED;
+    }
+    if (cmd == OS_CMD_BP_SET) {
+        uint32_t addr;
+        if (!req || !(addr = req->address & ~1u)) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_INVALID_ARG; }
+        i = das_bp_add_locked(addr, 0);
+        if (i == -2) {
+            rc = OS_ERR_BUSY;
+            LOG(OS_LOG_ERROR, "das 断点: 硬件断点槽已满（最多 %d）", g_bp_limit);
+        } else if (i < 0) {
+            rc = OS_ERR_FAIL;
+            LOG(OS_LOG_ERROR, "das 断点: 设置 0x%08X 失败：%s", addr, g_ctx.last_err);
+        } else {
+            LOG(OS_LOG_INFO, "das 断点: 设置 0x%08X slot=%d trig=%u（%d/%d）", addr, i, g_bp[i].trig_id, das_bp_count(), g_bp_limit);
+        }
+    } else if (cmd == OS_CMD_BP_CLEAR) {
+        if (!req) rc = OS_ERR_INVALID_ARG;
+        else if (req->clear_all) {
+            for (i = 0; i < DAS_BP_HW_MAX; i++) if (g_bp[i].addr) das_bp_del_locked(i);
+            LOG(OS_LOG_INFO, "das 断点: 已全部清除");
+        } else {
+            i = das_bp_find(req->address & ~1u);
+            if (i < 0) rc = OS_ERR_FAIL;
+            else { das_bp_del_locked(i); LOG(OS_LOG_INFO, "das 断点: 清除 0x%08X", req->address & ~1u); }
+        }
+    } else { /* LIST */
+        OS_BpList* list = (OS_BpList*)out;
+        if (!list || !list->items || list->capacity <= 0) rc = OS_ERR_INVALID_ARG;
+        else {
+            list->count = 0;
+            for (i = 0; i < DAS_BP_HW_MAX && list->count < list->capacity; i++) {
+                if (!g_bp[i].addr || g_bp[i].temp) continue;
+                list->items[list->count].address = g_bp[i].addr;
+                list->items[list->count].id = i;
+                list->items[list->count].enabled = g_bp[i].armed;
+                list->count++;
+            }
+        }
+    }
+    LeaveCriticalSection(&g_ctx.cs);
+    return rc;
+}
+
+/* 单步：MCD 指令单步（需已停核）。STEP_OVER 迭代1 等同单步（与 stlink 一致）。 */
+static int das_step(void)
+{
+    mcd_return_et r;
+    mcd_core_state_st st;
+    EnterCriticalSection(&g_ctx.cs);
+    if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
+    memset(&st, 0, sizeof(st));
+    if (g_ctx.api.qry_state(g_ctx.core, &st) == MCD_RET_ACT_NONE && st.state == MCD_CORE_STATE_RUNNING) {
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_BUSY;
+    }
+    r = g_ctx.api.step(g_ctx.core, FALSE, MCD_CORE_STEP_TYPE_INSTR, 1);
+    if (r != MCD_RET_ACT_NONE) das_record_err("step");
+    LeaveCriticalSection(&g_ctx.cs);
+    if (r != MCD_RET_ACT_NONE) { LOG(OS_LOG_ERROR, "das 单步失败: %s", g_ctx.last_err); return OS_ERR_FAIL; }
+    return OS_ERR_OK;
+}
+
+/* 步出：TriCore 返回地址在 A11（CSFR 0xFFAC）。设临时断点于 A11 并运行；命中后宿主轮询到停核，
+ * 下一次 GO/BP 操作前在 cpu_state 里清临时断点。 */
+#define DAS_CSFR_A11(core) (0xF8810000ull + (uint64_t)(core) * 0x20000ull + 0xFFACull)
+static int das_step_out(void)
+{
+    uint32_t ra = 0;
+    int i;
+    EnterCriticalSection(&g_ctx.cs);
+    if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
+    if (!das_bp_supported()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_UNSUPPORTED; }
+    if (das_xfer_locked(DAS_CSFR_A11(g_ctx.core_index), (uint8_t*)&ra, 4, 0) != 0 || !ra) {
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_FAIL;
+    }
+    i = das_bp_add_locked(ra & ~1u, 1);
+    if (i < 0) { LeaveCriticalSection(&g_ctx.cs); return i == -2 ? OS_ERR_BUSY : OS_ERR_FAIL; }
+    g_ctx.api.run(g_ctx.core, FALSE);
+    LeaveCriticalSection(&g_ctx.cs);
+    LOG(OS_LOG_INFO, "das 步出: 运行到返回地址 0x%08X", ra & ~1u);
+    return OS_ERR_OK;
+}
+
+/* 停核后清掉临时（步出）断点 */
+static void das_bp_drop_temp_locked(void)
+{
+    int i;
+    for (i = 0; i < DAS_BP_HW_MAX; i++) if (g_bp[i].addr && g_bp[i].temp) das_bp_del_locked(i);
+}
+
 /* ---------- 运行控制 ---------- */
 static int das_run_ctl(int cmd)
 {
@@ -379,6 +583,7 @@ static int mod_cpu_state(OS_CpuState* out)
     das_fmt(out->state, sizeof(out->state), "%s", das_state_text(st.state, &out->halted));
     if (out->halted == 1) {
         uint32_t pc = 0;
+        das_bp_drop_temp_locked();
         if (das_xfer_locked(DAS_CSFR_PC(g_ctx.core_index), (uint8_t*)&pc, 4, 0) == 0) { out->pc = pc; out->pc_valid = 1; }
     }
     out->powered = 1;
@@ -475,6 +680,11 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_HALT: case OS_CMD_GO: case OS_CMD_RESET: case OS_CMD_RESET_RUN:
         return das_run_ctl(cmd);
     case OS_CMD_GET_CPU_STATE: return mod_cpu_state((OS_CpuState*)out);
+    case OS_CMD_STEP: case OS_CMD_STEP_IN: case OS_CMD_STEP_OVER:
+        return das_step();
+    case OS_CMD_STEP_OUT:      return das_step_out();
+    case OS_CMD_BP_SET: case OS_CMD_BP_CLEAR: case OS_CMD_BP_LIST:
+        return das_bp_cmd(cmd, in, out);
     case OS_CMD_AI_DESCRIBE:   return mod_describe((char*)out);
     case OS_CMD_ELF_RELOADED:  return OS_ERR_OK;
     case OS_CMD_FLASH_DOWNLOAD:
