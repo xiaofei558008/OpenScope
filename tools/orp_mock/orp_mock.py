@@ -16,6 +16,7 @@ import json
 import math
 import os
 import random
+import re
 import secrets
 import socket
 import struct
@@ -28,8 +29,10 @@ ORP_VER = 1
 MAX_CLIENTS = 8
 MAX_REQ = 256 * 1024 - 1
 MAX_FRAME = 64 * 1024
-HB_TIMEOUT = 30.0
+HB_INTERVAL = 10.0  # 客户端心跳间隔
+HB_TIMEOUT = 3 * HB_INTERVAL
 SESSION_KEEP = 120.0
+CONTROL_GRACE = 15.0  # 控制权持有者断线超过该时间自动释放
 SIM_HZ = 1000
 HIST_SEC = 60
 PAIR_TTL = 300
@@ -182,6 +185,7 @@ class Server:
         self.tokens = {}  # token -> {role, client, name}
         self.sessions = {}
         self.control = None  # sid
+        self.control_since = None
         self.n_clients = 0
         self.next_stream = 1
         self.pair_code = None
@@ -228,7 +232,7 @@ class Server:
         if self.control != sess.sid:
             holder = self.sessions.get(self.control)
             raise RpcError(E_LOCKED, "control locked" if holder else "control not acquired",
-                           {"holder": holder.client + ":" + holder.sid[:6] if holder else None})
+                           {"holder": {"session_id": holder.sid, "client": holder.client} if holder else None})
 
     def var_of(self, p):
         if not isinstance(p, dict):
@@ -264,13 +268,13 @@ class Server:
             await self.drop_session(sess); return {}
         if method == "status":
             return {"device_id": self.device_id, "connected": int(self.sim.connected), "role": sess.role,
-                    "control": self.control == sess.sid, "sessions": len(self.sessions), "orp": ORP_VER}
+                    "control": self.control_info(sess), "sessions": len(self.sessions), "orp": ORP_VER}
         if method == "auth.elevate":
             role = p.get("role")
             if role not in ROLE_RANK:
                 raise RpcError(E_PARAMS, "role must be viewer|operator|admin")
             if role == "admin" or (sess.client == "mp" and ROLE_RANK[role] > 1):
-                raise RpcError(E_FORBIDDEN, "admin not grantable remotely")
+                raise RpcError(E_FORBIDDEN, "admin not grantable remotely", {"os_err": -6})
             print(f"[auth] {sess.client}:{sess.sid[:6]} 申请 {role} → 自动批准（mock）", flush=True)
             sess.role = role
             self.tokens[sess.token]["role"] = role
@@ -279,12 +283,14 @@ class Server:
             self.need_role(sess, "operator")
             if self.control and self.control != sess.sid and self.control in self.sessions:
                 self.need_control(sess)
+            if self.control != sess.sid:
+                self.control_since = now_us()
             self.control = sess.sid
-            return {"holder": sess.sid}
+            return self.control_info(sess)
         if method == "control.release":
             if self.control == sess.sid:
                 self.control = None
-            return {"released": True}
+            return dict(self.control_info(sess), released=True)
         if method == "vars.list":
             needle = str(p.get("needle", "") or "")
             off, lim = int(p.get("offset", 0) or 0), int(p.get("limit", 200) or 200)
@@ -314,7 +320,7 @@ class Server:
             except (TypeError, ValueError):
                 raise RpcError(E_PARAMS, "value must be number", {"os_err": OS_ERR_INVALID_ARG})
             self.sim.write(v["id"], val)
-            res = {"id": v["id"], "value": val}
+            res = {"id": v["id"], "value": val, "req_id": rid, "duplicate": False}
             if rid is not None:
                 sess.req_cache[rid] = res
             print(f"[write] {v['name']} = {val} by {sess.client}:{sess.sid[:6]}", flush=True)
@@ -348,20 +354,27 @@ class Server:
             if old.ws and old.ws is not ctx["ws"]:
                 try: await old.ws.close()
                 except Exception: pass
-            old.ws, old.detached_at, old.last_rx, old.accept = ctx["ws"], None, time.time(), acc
+            old.accept = acc
+            for st in list(old.subs.values()):  # 先在新连接上补发 meta，再挂接（推流只看 old.ws）
+                await self.send_json(ctx["ws"], {"jsonrpc": "2.0", "method": "stream.meta", "params": self.meta(st)})
+            old.ws, old.detached_at, old.last_rx = ctx["ws"], None, time.time()
             ctx["sess"] = old
-            for st in old.subs.values():
-                await self.notify(old, "stream.meta", self.meta(st))
             return {"session_id": old.sid, "device": self.device_info(), "role": old.role,
                     "accept_kinds": acc, "resumed": True, "caps": self.caps(old),
-                    "control": self.control == old.sid, "streams": list(old.subs)}
+                    "control": self.control_info(old), "streams": list(old.subs)}
         sid = secrets.token_hex(8)
         s = Session(sid, tok, self.tokens[tok]["role"], client, acc)
         s.ws = ctx["ws"]
         self.sessions[sid] = s
         ctx["sess"] = s
         return {"session_id": sid, "device": self.device_info(), "role": s.role, "accept_kinds": acc,
-                "resumed": False, "caps": self.caps(s), "control": False}
+                "resumed": False, "caps": self.caps(s), "control": self.control_info(s)}
+
+    def control_info(self, s):
+        h = self.sessions.get(self.control) if self.control else None
+        return {"held_by_me": bool(h and h.sid == s.sid),
+                "holder": {"session_id": h.sid, "client": h.client} if h else None,
+                "since": self.control_since if h else None}
 
     def device_info(self):
         return {"device_id": self.device_id, "name": "OpenScope ORP mock", "probe": "SIM", "target": "SIM-Cortex-M4",
@@ -369,7 +382,7 @@ class Server:
 
     def caps(self, s):
         c = {"max_frame": MAX_FRAME, "max_request": MAX_REQ, "modes": ["latest", "minmax", "raw"],
-             "sim_hz": SIM_HZ, "flash": False}
+             "sim_hz": SIM_HZ, "flash": False, "heartbeat_s": HB_INTERVAL}
         if s.client == "mp":
             c.update({"max_rate_hz": 20, "max_vars": 4})
         return c
@@ -405,8 +418,8 @@ class Server:
         st = {"id": self.next_stream, "vars": vids, "mode": mode, "rate_hz": rate, "vt": vt, "kind": kind,
               "last_ts": now_us(), "next_t": time.time()}
         self.next_stream = (self.next_stream % 65535) + 1
+        await self.notify(sess, "stream.meta", self.meta(st))  # 先 meta，再挂到推流表
         sess.subs[st["id"]] = st
-        await self.notify(sess, "stream.meta", self.meta(st))
         return {"stream_id": st["id"], "mode": mode, "rate_hz": rate, "vars": vids, "value_type": vt, "kind": kind}
 
     async def history(self, sess, p):
@@ -419,11 +432,16 @@ class Server:
         kind = 2 if mode == "minmax" else 1
         if kind not in sess.accept:
             raise RpcError(E_PARAMS, f"kind {kind} not accepted")
-        sel = {}
-        for vid in ids:
-            if not self.sim.find(id_=vid):
-                raise RpcError(E_PARAMS, f"unknown var {vid}")
-            sel[vid] = [x for x in self.sim.hist[vid] if t0 <= x[0] <= t1]
+        vt = p.get("value_type") or "f32"
+        if vt not in ("f32", "f64"):
+            raise RpcError(E_PARAMS, "value_type must be f32|f64")
+        sel, metas = {}, []
+        for x in ids:
+            v = self.sim.find(id_=x if isinstance(x, int) else None, name=x if isinstance(x, str) else None)
+            if not v:
+                raise RpcError(E_PARAMS, f"unknown var {x}", {"os_err": OS_ERR_INVALID_ARG})
+            sel[v["id"]] = [y for y in self.sim.hist[v["id"]] if t0 <= y[0] <= t1]
+            metas.append({"var_id": v["id"], "name": v["name"], "type": v["type"], "value_type": vt})
         sid = 0  # history 帧 stream_id=0
         if kind == 2:
             span = max(1, t1 - t0)
@@ -433,10 +451,11 @@ class Server:
             for vid, ss in sel.items():
                 step = max(1, len(ss) // max(1, mp))
                 recs += [(vid, ts, v) for ts, v in ss[::step]]
-        frames, sess.seq = build_frames(kind, sid, sess.seq, recs, p.get("value_type") or "f32")
+        frames, sess.seq = build_frames(kind, sid, sess.seq, recs, vt)
         for f in frames:
             await sess.ws.send(f)
-        return {"frames": len(frames), "records": len(recs), "kind": kind, "stream_id": 0, "t0": t0, "t1": t1}
+        return {"frames": len(frames), "records": len(recs), "kind": kind, "stream_id": 0, "t0": t0, "t1": t1,
+                "value_type": vt, "vars": metas}
 
     async def drop_session(self, sess):
         if self.control == sess.sid:
@@ -458,7 +477,9 @@ class Server:
                     await self.send_json(ws, {"jsonrpc": "2.0", "id": None, "error": {"code": E_INVALID_REQ, "message": "binary requests not supported"}})
                     continue
                 if len(raw.encode("utf-8")) > MAX_REQ:
-                    await self.send_json(ws, {"jsonrpc": "2.0", "id": None, "error": {"code": E_INVALID_REQ, "message": f"request too large (max {MAX_REQ} bytes)"}})
+                    m = re.search(r'"id"\s*:\s*(-?\d+|"(?:[^"\\]|\\.){0,128}")', raw[:4096])
+                    big_id = json.loads(m.group(1)) if m else None
+                    await self.send_json(ws, {"jsonrpc": "2.0", "id": big_id, "error": {"code": E_INVALID_REQ, "message": f"request too large (max {MAX_REQ} bytes)"}})
                     continue
                 try:
                     req = json.loads(raw)
@@ -512,6 +533,9 @@ class Server:
                     try: await s.ws.close(code=4000, reason="heartbeat timeout")
                     except Exception: pass
                 if not s.ws:
+                    if s.detached_at and self.control == s.sid and t - s.detached_at > CONTROL_GRACE:
+                        print(f"[ctl] {s.client}:{s.sid[:6]} 断线超过 {CONTROL_GRACE:.0f}s，自动释放控制权", flush=True)
+                        self.control = None
                     if s.detached_at and t - s.detached_at > SESSION_KEEP:
                         await self.drop_session(s)
                     continue

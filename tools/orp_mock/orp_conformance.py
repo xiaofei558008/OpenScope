@@ -135,6 +135,8 @@ def main():
         st["tok"] = pair()
         c = Cli(A.url); r = hello(c, st["tok"])
         assert r["session_id"] and r["role"] == "viewer" and r["resumed"] is False
+        assert set(r["control"]) >= {"held_by_me", "holder", "since"} and r["control"]["held_by_me"] is False
+        assert r["caps"].get("heartbeat_s") == 10
         assert set(r["accept_kinds"]) <= {1, 2}
         st["c"] = c; st["sid"] = r["session_id"]
 
@@ -155,13 +157,14 @@ def main():
         c.ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": "ping", "params": {"pad": "x" * 300000}}))
         m = c.raw()
         while m is None or "method" in m: m = c.raw()
-        assert m["error"]["code"] == -32600 and "too large" in m["error"]["message"]
+        assert m["error"]["code"] == -32600 and "too large" in m["error"]["message"] and m.get("id") == rid, m
         assert c.ok("ping")["pong"]
 
     @case("vars_list")
     def _():
         r = st["c"].ok("vars.list", {"limit": 50})
-        assert r["total"] >= 1 and r["vars"] and {"id", "name", "type"} <= set(r["vars"][0])
+        assert r["total"] >= 1 and r["vars"] and {"id", "name", "addr", "size", "type", "writable"} <= set(r["vars"][0])
+        p2 = st["c"].ok("vars.list", {"offset": 1, "limit": 1}); assert len(p2["vars"]) == 1 and p2["vars"][0]["id"] == r["vars"][1]["id"] and p2["total"] == r["total"]
         st["vars"] = r["vars"]
         r2 = st["c"].ok("vars.list", {"needle": A.write_var, "limit": 5})
         assert any(v["name"] == A.write_var for v in r2["vars"]), "write var not found"
@@ -176,30 +179,42 @@ def main():
         c = st["c"]
         assert c.ok("auth.elevate", {"role": "operator"})["role"] == "operator"
         c.err("vars.write", {"name": A.write_var, "value": 1.0}, -32004)
-        c.ok("control.acquire")
+        ci = c.ok("control.acquire"); assert ci["held_by_me"] is True and ci["holder"]["client"] == "web" and ci["holder"]["session_id"] == st["sid"] and ci["since"] > 0, ci
         t2 = pair(); c2 = Cli(A.url); hello(c2, t2)
         c2.ok("auth.elevate", {"role": "operator"})
-        e = c2.err("control.acquire", {}, -32004); assert (e.get("data") or {}).get("holder")
+        e = c2.err("control.acquire", {}, -32004); assert (e.get("data") or {}).get("holder", {}).get("session_id") == st["sid"], e
+        c2.err("auth.elevate", {"role": "admin"}, -32003)
         c2.err("vars.write", {"name": A.write_var, "value": 2.0}, -32004)
         c2.close()
 
     @case("write_and_readback_idempotent")
     def _():
+        try:
+            _write_case()
+        finally:
+            try: st["c"].ok("vars.write", {"name": A.write_var, "value": st.get("orig", 1.0)})  # 复位
+            except Exception: pass
+
+    def _write_case():
         c = st["c"]
-        c.ok("vars.write", {"name": A.write_var, "value": 1.5, "req_id": "w-1"})
+        o = c.ok("vars.read", {"name": A.write_var})
+        if o.get("has_sample"): st["orig"] = o["value"]
+        r = c.ok("vars.write", {"name": A.write_var, "value": 1.5, "req_id": "w-1"})
+        assert r["duplicate"] is False and r["req_id"] == "w-1" and isinstance(r["id"], int) and abs(r["value"] - 1.5) < 1e-6, r
         r2 = c.ok("vars.write", {"name": A.write_var, "value": 1.5, "req_id": "w-1"})
-        assert r2.get("duplicate") is True
+        assert r2.get("duplicate") is True and r2.get("req_id") == "w-1" and r2["id"] == r["id"]
         time.sleep(0.3)
         rd = c.ok("vars.read", {"name": A.write_var})
         assert rd["has_sample"] == 1 and abs(rd["value"] - 1.5) < 1e-3, rd
-        c.ok("vars.write", {"name": A.write_var, "value": 1.0, "req_id": "w-2"})
+        c.ok("vars.write", {"name": A.write_var, "value": st.get("orig", 1.0), "req_id": "w-2"})
 
     def sub_check(mode, rate, kind, vt="f32", secs=1.2):
         c = st["c"]
         names = A.stream_vars.split(",") if A.stream_vars else [v["name"] for v in st["vars"][:2]]
         c.notes.clear()
         r = c.ok("stream.subscribe", {"vars": names, "mode": mode, "rate_hz": rate, "value_type": vt})
-        assert r["kind"] == kind
+        r["_t_sub"] = time.time()
+        assert r["kind"] == kind and all(isinstance(v, int) for v in r["vars"]), r
         frames = [parse(f, vt) for f in c.collect(secs)]
         c.ok("stream.unsubscribe", {"stream_id": r["stream_id"]})
         meta = [n for n in c.notes if n["method"] == "stream.meta" and n["params"]["stream_id"] == r["stream_id"]]
@@ -213,13 +228,34 @@ def main():
         assert all(b > a for a, b in zip(seqs, seqs[1:])), "seq not increasing"
         return r, fr
 
+    @case("meta_before_frames")
+    def _():
+        c = st["c"]; seen_meta = set(); order_ok = True
+        names = [v["name"] for v in st["vars"][:2]]
+        rid = next(_ids)
+        c.ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": "stream.subscribe", "params": {"vars": names, "mode": "latest", "rate_hz": 50}}))
+        sid = None; end = time.time() + 1.5
+        while time.time() < end:
+            op, data = c.ws.recv_data()
+            if op == websocket.ABNF.OPCODE_BINARY:
+                fsid = HDR.unpack_from(data, 0)[2]
+                if fsid != 0 and fsid not in seen_meta: order_ok = False
+            else:
+                m = json.loads(data)
+                if m.get("method") == "stream.meta": seen_meta.add(m["params"]["stream_id"])
+                if m.get("id") == rid: sid = m["result"]["stream_id"]
+        c.ok("stream.unsubscribe", {})
+        assert sid in seen_meta and order_ok
+
     @case("stream_latest_f32")
     def _():
         r, fr = sub_check("latest", 20, 1)
         assert 10 <= len(fr) <= 40, f"latest@20Hz frames={len(fr)}"
         if A.sim:
-            vid = r["vars"][0]; vals = [x[2] for f in fr for x in f["recs"] if x[0] == vid]
-            assert max(vals) - min(vals) > 0.5 and all(abs(v) <= 1.01 for v in vals), "sine range"
+            # 跳过订阅前 100ms 内（上一用例改 gain 之前）的样本
+            tmin = r["_t_sub"] + 0.1
+            vid = r["vars"][0]; vals = [x[2] for f in fr for x in f["recs"] if x[0] == vid and (f["t0"] + x[1]) / 1e6 > tmin]
+            assert max(vals) - min(vals) > 0.5 and all(abs(v) <= 1.01 for v in vals), ("sine range", min(vals), max(vals))
 
     @case("stream_raw_f64")
     def _():
@@ -252,9 +288,10 @@ def main():
     def _():
         c = st["c"]; vid = st["vars"][0]["id"]
         c.bins.clear()
-        r = c.ok("history.fetch", {"vars": [vid], "mode": "minmax", "max_points": 100,
+        r = c.ok("history.fetch", {"vars": [st["vars"][0]["name"]], "mode": "minmax", "max_points": 100,
                                    "t0": int((time.time() - 2) * 1e6), "t1": int(time.time() * 1e6)})
         assert r["frames"] >= 1 and 0 < r["records"] <= 120, r
+        assert r["value_type"] == "f32" and r["vars"][0]["var_id"] == vid and r["vars"][0]["name"] == st["vars"][0]["name"], r
         pre = list(c.bins)
         fr = [parse(f) for f in pre + c.collect(0.3)]
         assert any(f["sid"] == 0 and f["kind"] == 2 for f in fr)
@@ -267,7 +304,7 @@ def main():
         time.sleep(1.0)
         c = Cli(A.url)
         h = hello(c, st["tok"], resume_session_id=st["sid"], last_seq=0)
-        assert h["resumed"] is True and h["session_id"] == st["sid"] and h["control"] is True and h["role"] == "operator", h
+        assert h["resumed"] is True and h["session_id"] == st["sid"] and h["control"]["held_by_me"] is True and h["role"] == "operator", h
         fr = [parse(f) for f in c.collect(1.0)]
         assert any(f["sid"] == r["stream_id"] for f in fr), "stream not restored"
         assert any(n["method"] == "stream.meta" for n in c.notes)
@@ -285,6 +322,7 @@ def main():
 
     @case("too_many_clients")
     def _():
+        time.sleep(1.0)  # 等前面用例关闭的连接在服务端释放名额
         cs, got = [], False
         for i in range(12):
             try:
@@ -303,7 +341,7 @@ def main():
 
     for run in CASES:
         run()
-    try: st["c"].close()
+    try: st["c"].call("session.bye", {}, timeout=2); st["c"].close()
     except Exception: pass
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n== ORP conformance: {len(RESULTS)-len(bad)}/{len(RESULTS)} passed ==")

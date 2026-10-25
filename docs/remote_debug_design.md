@@ -1,6 +1,6 @@
 # OpenScope 远程调试（网络外发）现状与方案设计
 
-> 版本 v0.3（2026-10-25，按小微评审修订，见第 7 节修订记录），作者：程序员小程。本阶段仅调研 + 方案，未改代码。
+> 版本 v0.4（2026-10-25，按小微评审修订，见第 7 节修订记录），作者：程序员小程。本阶段仅调研 + 方案，未改代码。
 > 讨论对象：Tom、小微（微信小程序）、网页端负责人（待定）。
 
 ## 1. 现状
@@ -82,10 +82,10 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 - 传输：WebSocket；子协议 `orp.v1`。
 - **文本帧 = JSON-RPC 2.0**，方法名与 aiapi 一致（`connect`、`vars.list`、`vars.write`、`acq.start`…），新增：
   - `session.hello {client:"web|mp|openscope", ver, token, accept_kinds:[1,2,3], resume_session_id?, last_seq?}` → `{session_id, device, caps, role, accept_kinds, resumed}`：`accept_kinds` 为客户端能解析的二进制帧 kind，服务端取交集，**绝不向未声明 3 的客户端发送 kind=3**（小程序默认 `[1,2]`）。
-  - `control.acquire {}` → `{ok, holder}` / `control.release {}`：申请/释放控制权（写值、暂停等需持有）；小程序在 `onHide` 时主动 `control.release`。
+  - `control.acquire {}` / `control.release {}` → 均返回 control 结构（见 3.9）：申请/释放控制权（写值、暂停等需持有）；小程序在 `onHide` 时主动 `control.release`。
   - `auth.elevate {role:"operator"}`：已配对客户端申请提升权限（Agent 端确认后生效）。
   - `stream.subscribe {vars:[id...], rate_hz, mode:"latest|minmax|raw", window_ms}` / `stream.unsubscribe`
-  - `history.fetch {vars, t0, t1, max_points, mode:"raw|minmax"}`：支持 minmax 降采样返回（同 kind=2 帧）。
+  - `history.fetch {vars:[id|name], t0, t1, max_points, mode:"raw|minmax", value_type?}`：支持 minmax 降采样返回（同 kind=2 帧），结果格式见 3.9。
   - 通知（无 id）：`stream.meta {stream_id, vars:[{var_id,name,value_type:"f32|f64"}], mode, rate_hz}`（**value 类型在此声明**）、`log.event`、`device.state`、`alert`
 - **二进制帧 = 波形数据**（**全部字段小端序**，单帧上限 **64KB**，超出拆多帧）：
   - 帧头 16 字节：`ver u8 | kind u8 | stream_id u16 | seq u32 | t0_hi u32 | t0_lo u32`
@@ -95,9 +95,9 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
   - kind=1 flat：`n u16`，随后 n 个 `{var_id u16, dt u32, value f32|f64}`。
   - kind=2 minmax：`n u16`，随后 n 个桶 `{var_id u16, dt u32(桶起点), min, max, last}`（同 value_type）。
   - kind=3 Gorilla 压缩块（复用 netcodec，仅远端 OpenScope 等声明支持的客户端）。
-  - 网页/小程序用 DataView（little-endian=true）解析；或握手时声明 `json_stream:true` 退化为 JSON（低速、调试用）。
+  - 网页/小程序用 DataView（little-endian=true）解析；数据只走二进制帧。
 - 降采样：Agent 按客户端 `rate_hz` 和屏幕宽度做 min/max 桶（保证尖峰不丢）；远端 OpenScope 可选 raw。
-- 心跳：客户端每 15s `ping` 方法或 WS ping；30s 无响应断开；客户端指数退避重连并恢复订阅。
+- 心跳：客户端每 **10 s** 发 `ping`（任何请求都算活动；`caps.heartbeat_s=10`）；服务端 30 s（3 个周期）无消息断开；客户端指数退避重连并恢复订阅。
 - 背压：每会话发送队列上限，超限丢弃旧波形帧（保留控制消息）。
 
 ### 3.4 鉴权与配对
@@ -122,7 +122,7 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 | error.code | os_err | 名称 | 含义 / 客户端处理 |
 |---|---|---|---|
 | -32700 | — | PARSE_ERROR | JSON 无法解析 |
-| -32600 | — | INVALID_REQUEST | 缺 method 等；**请求过大**也用此码（message `request too large (max N bytes)`，aiapi 已实现，连接保持） |
+| -32600 | — | INVALID_REQUEST | 缺 method 等；**请求过大**也用此码（message `request too large (max N bytes)`，连接保持；若能从请求前 4 KB 解析出 `id` 则回显该 id，否则 `id:null`） |
 | -32601 | — | METHOD_NOT_FOUND | 未知方法（aiapi 现为 -32000/os_err -2 "unknown method"，ORP 统一改为 -32601） |
 | -32602 | -2 | INVALID_PARAMS | 参数缺失/越界（OS_ERR_INVALID_ARG） |
 | -32000 | -1 | FAIL | 通用失败（OS_ERR_FAIL） |
@@ -157,15 +157,19 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 - **WebSocket 子协议**：客户端可带 `Sec-WebSocket-Protocol: orp.v1`，服务端回同名；不带也可连。
 - **配对方法名**：`pair.claim {code, client:"web|mp|os", name}` → `{token, role:"viewer", device_id}`。配对码 6 位、5 分钟有效、成功一次即轮换（mock 的 `--fixed-code` 例外，仅测试用）。
 - **握手前允许的方法**：仅 `ping`、`pair.claim`、`session.hello`；其余返回 `-32002`。
-- `session.hello {token, client, accept_kinds, orp:1, resume_session_id?, last_seq?}` → `{session_id, device, role, accept_kinds(交集), resumed, caps, control, streams?}`；`caps` 含 `max_frame / max_request / modes / max_rate_hz / max_vars(仅 mp)`。恢复失败返回 `-32006`；会话断开后保留 120 s，恢复时角色、控制权、订阅全部还原，并重发 `stream.meta`。
-- **心跳**：客户端每 10 s 发 `ping`（任何请求都算活动）；服务端 30 s 无消息即断开连接（close 4000），会话按上条保留。
-- **请求上限**：单条文本请求 ≤ 256 KB−1，超过回 `-32600 "request too large"`，连接保留。连接数上限 8，超出回 `-32001` 后关闭。
+- `session.hello {token, client, accept_kinds, orp:1, resume_session_id?, last_seq?}` → `{session_id, device, role, accept_kinds(交集), resumed, caps, control, streams?}`（`control` 结构见下）；`caps` 含 `max_frame / max_request / modes / max_rate_hz / max_vars(仅 mp)`。恢复失败返回 `-32006`；会话断开后保留 120 s，恢复时角色、控制权、订阅全部还原，并重发 `stream.meta`。
+- **心跳**：客户端每 10 s 发 `ping`（任何请求都算活动；`caps.heartbeat_s` 固定为 10）；服务端 30 s 无消息即断开连接（close 4000），会话按上条保留。
+- **请求上限**：单条文本请求 ≤ 256 KB−1，超过回 `-32600 "request too large"`（能解析出 `id` 时回显），连接保留。连接数上限 8，超出回 `-32001` 后关闭；连接关闭时服务端立即释放名额（会话本身按保留期保留，不占连接名额）。
+- **WebSocket close code**：`4000` = 服务端心跳超时断开；`4001` = SDK 本地判定心跳超时（客户端主动关闭）；`4002` = SDK 打开超时（握手未在限定时间完成）。`4001/4002` 仅由 SDK 使用，服务端不得发送。其余用标准码（1000/1001/1006/1009）。
+- **vars.list（字段冻结）**：`vars.list {needle?:string(子串、不区分大小写), offset?:int≥0 =0, limit?:int≥0 =200}` → `{total:int(过滤后总数), vars:[{id:int, name:string, addr:"0x…", size:int, type:string, writable:0|1}]}`。字段只增不改。
+- **stream.meta 先于数据帧**：服务端保证某 `stream_id` 的 `stream.meta` 文本帧一定先于该流的任何二进制帧到达（订阅时先发 meta 再挂接推流；会话恢复时先在新连接上补发全部 meta 再恢复推流）。客户端收到未知 `stream_id` 的帧可直接丢弃。
 - **二进制帧布局**：16 B 头之后紧跟 `n u16`，再接 n 条记录：kind=1 为 `var_id u16 | dt u32 | value(f32|f64)`；kind=2 为 `var_id u16 | dt u32 | min | max | last`。`t0` 为 Unix 微秒；`seq` 按会话单调递增（跨流共用）。kind=3（压缩）M0/M1 均不实现，`accept_kinds` 交集中会被剔除。
-- **订阅**：`stream.subscribe {vars:[id|name], mode, rate_hz(0,200], value_type:"f32|f64"}` → `{stream_id, mode, rate_hz, vars, value_type, kind}`，随后先推 `stream.meta` 通知再推帧；mp 客户端自动钳制 `rate_hz≤20`、最多 4 变量、默认 `minmax`。所需 kind 不在 accept_kinds 内回 `-32602`。`stream.unsubscribe {stream_id?}`（省略则全部退订）。
-- **history.fetch** 的帧使用 `stream_id=0`，在 result 之前发出；result 为 `{frames, records, kind, stream_id:0, t0, t1}`。
+- **订阅**：`stream.subscribe {vars:[id|name], mode, rate_hz(0,200], value_type:"f32|f64"}` → `{stream_id, mode, rate_hz, vars:[数字 var_id], value_type, kind}`；请求里可用名字，**返回的 `vars` 一律是数字 id（即帧记录里的 var_id）**，变量名与类型只在随后的 `stream.meta {stream_id, mode, rate_hz, kind, vars:[{var_id, name, value_type}]}` 里给出，随后先推 `stream.meta` 通知再推帧；mp 客户端自动钳制 `rate_hz≤20`、最多 4 变量、默认 `minmax`。所需 kind 不在 accept_kinds 内回 `-32602`。`stream.unsubscribe {stream_id?}`（省略则全部退订）。
+- **history.fetch**：`vars` 可传 id 或名称（同 subscribe）。帧使用 `stream_id=0`，在 result 之前发出；result 为 `{frames, records, kind, stream_id:0, t0, t1, value_type:"f32|f64", vars:[{var_id, name, type, value_type}]}`，history 不发 `stream.meta`，以 result 中的 `vars/value_type` 解析。
 - **控制权冲突**：`-32004`，`error.data.holder` 给出当前持有者；远程烧录/写内存方法统一回 `-32003`。
-- **vars.write** 必须 operator + 控制权；可带 `req_id` 幂等，重复请求返回首次结果并带 `duplicate:true`。
-- **auth.elevate**：mock 自动批准；remote.dll 在本机弹窗/日志确认（M1 默认对 127.0.0.1 自动批准 operator，0.0.0.0 下需本地确认）。admin 不可远程授予。
+- **vars.write** 必须 operator + 控制权：`vars.write {id|name, value, req_id?}` → `{id:int, value:number, req_id:string|null, duplicate:bool}`。`value` 为实际写入值（remote.dll 为按变量类型截断/转换后的值）；同一会话内相同 `req_id` 的重复请求不再写目标，原样返回首次结果但 `duplicate:true`；未带 `req_id` 时 `req_id:null, duplicate:false`。
+- **control 结构**（`session.hello`、`status`、`control.acquire`、`control.release` 共用）：`{held_by_me:bool, holder:{session_id:string, client:"web"|"mp"|"os"}|null, since:int|null}`，`since` 为当前持有者获得控制权的 Unix 微秒；无人持有时 `holder/since` 为 null。`-32004` 错误的 `error.data.holder` 也用同一 `{session_id, client}` 结构。`control.release` 额外带 `released:true`。持有者断线后控制权随会话保留，但超过 **15 s** 未恢复即自动释放（防止小程序切后台长期占用）。
+- **auth.elevate**：仅可申请 `operator`；remote.dll 在接探针一端**弹窗确认**（超时/拒绝回 `-32003`）；另有仅供测试的自动确认开关（配置项，默认关闭）。mock 自动批准。申请 `admin` 远程端一律拒绝：`-32003`，`error.data.os_err=-6`。
 
 ## 4. 分阶段计划与分工
 
@@ -196,7 +200,7 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 2. **消息格式**：控制消息 JSON（JSON-RPC 2.0）；波形/采样等高频数据走二进制帧（ArrayBuffer，见 3.3），支持批量（一帧多变量多样本）与降采样（latest/minmax，按 `rate_hz`）。**网页端与小程序共用同一套 ORP v1 协议**，共用一份 JS/TS SDK（`orp-client`：连接、配对、心跳、重连、二进制解析），小程序与网页仅 UI 不同。
 3. **小程序 v1 功能范围**：连接与配对（配对码或扫码二维码）、从 ELF 取变量列表（搜索+收藏）、实时变量数值与波形、变量写值（二次确认）、连接状态与错误提示。**不做**烧录、擦除、任意内存读写、断点等重型/高危操作（服务端按 `client:"mp"` 只授予 viewer/operator 能力）。
 4. **后台断开与会话恢复**：小程序切后台 socket 会被关闭。协议要求：
-   - 心跳：客户端每 10~15s `ping`（或 WS ping），服务端 30s 无心跳回收会话资源但**保留会话状态 2~5 分钟**（订阅列表、控制权、写值序号）。
+   - 心跳：客户端每 10 s `ping`，服务端 30 s 无心跳回收会话资源但**保留会话状态 2~5 分钟**（订阅列表、控制权、写值序号）。
    - `session.hello {token, resume_session_id, last_seq}`：重连后恢复订阅；服务端返回 `resumed:true`，必要时补发最后一段降采样数据（或客户端用 `history.fetch` 补齐断档）。
    - 客户端指数退避重连（1s→2s→4s… 上限 30s），`onShow` 立即重连，`onHide` 主动 `stream.unsubscribe` 节省流量。
    - 写值等控制请求带 `req_id` 幂等，重连后重发不会重复执行。
@@ -209,3 +213,4 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 | v0.1 | 2026-10-25 | 程序员小程 | 初稿：现状调研、功能清单、方案、分阶段计划；纳入小微第一轮要求（第 6 节） |
 | v0.2 | 2026-10-25 | 程序员小程 | 按小微评审修订：二进制帧小端序、t0 拆 hi/lo uint32、帧内 uint32 µs 偏移、value_type 在 stream.meta 声明、单帧 64KB；小程序订阅 rate_hz≤20/≤4 曲线/minmax；session.hello 增加 accept_kinds；history.fetch 支持 minmax；二维码 orp://pair 格式；可选微信登录（code2session 在 Relay）；错误码表；小程序默认 viewer + auth.elevate；control.acquire/release；orp-client 纯 JS(ES5) + 传输层抽象 |
 | v0.3 | 2026-10-25 | 程序员小程 | M0 落地：新增 3.9（pair.claim 方法名、握手前方法白名单、子协议 orp.v1、帧记录布局与 n u16、t0 为 Unix µs、seq 会话级递增、history 帧 stream_id=0、请求上限 256KB、心跳 30s/会话保留 120s、control 冲突 data.holder、kind=3 暂不实现） |
+| v0.4 | 2026-10-25 | 程序员小程 | 按小微/小序反馈：定义 vars.write 返回 `{id,value,req_id,duplicate}`；明确 stream.subscribe 返回 vars 为数字 id、名称/类型在 stream.meta；心跳统一 10 s（3.3 同步，caps.heartbeat_s）；定义 control 结构 `{held_by_me,holder_client,since}`；控制权持有者断线 15 s 自动释放；control 结构改为 `{held_by_me, holder:{session_id,client}|null, since}`（取代 holder_client）；history.fetch 支持名称并在 result 声明 value_type/变量元信息；保证 stream.meta 先于数据帧；冻结 vars.list 字段与分页参数；请求过大回显 id；定义 close code 4000/4001/4002；删除 json_stream/stream.data；admin 提升远程一律拒绝（os_err -6）；elevate 改为探针端弹窗确认 + 测试用自动确认开关 |
