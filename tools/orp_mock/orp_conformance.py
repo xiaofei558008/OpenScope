@@ -63,6 +63,16 @@ class Cli:
         self.ws.settimeout(5)
         return list(self.bins)
 
+    def wait_note(self, method, pred=lambda p: True, timeout=3.0):
+        """等待（含已缓存的）指定通知；命中后从 notes 中移除并返回 params"""
+        end = time.time() + timeout
+        while True:
+            for i, n in enumerate(self.notes):
+                if n.get("method") == method and pred(n.get("params") or {}):
+                    return self.notes.pop(i)["params"]
+            if time.time() >= end: raise AssertionError(f"no {method} within {timeout}s")
+            self.collect(min(0.3, max(0.05, end - time.time())))
+
     def close(self):
         try: self.ws.close()
         except Exception: pass
@@ -326,6 +336,44 @@ def main():
         c.err("vars.write", {"name": A.write_var, "value": 1.0}, -32004)
         t2 = pair(); c2 = Cli(A.url); hello(c2, t2); c2.ok("auth.elevate", {"role": "operator"})
         c2.ok("control.acquire"); c2.ok("control.release"); c2.close()
+
+    @case("control_changed_broadcast")
+    def _():
+        c = st["c"]; c.notes.clear()
+        t2 = pair(); c2 = Cli(A.url); h2 = hello(c2, t2); c2.ok("auth.elevate", {"role": "operator"})
+        sid2 = h2["session_id"]
+        c2.ok("control.acquire")
+        for cli, mine in ((c, False), (c2, True)):
+            p = cli.wait_note("control.changed", lambda p: p.get("reason") == "acquire" and (p.get("holder") or {}).get("session_id") == sid2)
+            assert p["held_by_me"] is mine and p["holder"] == {"session_id": sid2, "client": "web"} and p["since"], p
+        c.collect(0.3); c.notes.clear(); c2.notes.clear()
+        r = c2.ok("control.release"); assert r["released"] is True and r["held_by_me"] is False, r
+        for cli in (c, c2):
+            p = cli.wait_note("control.changed", lambda p: p.get("reason") == "release")
+            assert p["held_by_me"] is False and p["holder"] is None, p
+        c2.close()
+
+    @case("control_auto_release_after_disconnect")
+    def _():
+        c = st["c"]; c.notes.clear()
+        t3 = pair(); c3 = Cli(A.url); h3 = hello(c3, t3); c3.ok("auth.elevate", {"role": "operator"})
+        c3.ok("control.acquire")
+        c.wait_note("control.changed", lambda p: p.get("reason") == "acquire" and (p.get("holder") or {}).get("session_id") == h3["session_id"])
+        c3.ws.sock.shutdown(socket.SHUT_RDWR); c3.close(); t_drop = time.time()
+        time.sleep(5); c.ok("ping")
+        e = c.err("control.acquire", {}, -32004)  # 宽限期内仍被持有
+        assert (e.get("data") or {}).get("holder", {}).get("session_id") == h3["session_id"], e
+        p = None
+        while p is None and time.time() - t_drop < 25:
+            try: p = c.wait_note("control.changed", lambda p: p.get("reason") == "auto_release", timeout=5)
+            except AssertionError: c.ok("ping")
+        assert p, "no auto_release within 25s"
+        dt = time.time() - t_drop
+        assert 13.0 <= dt <= 25.0 and p["holder"] is None and p["held_by_me"] is False, (dt, p)
+        ci = c.ok("control.acquire"); assert ci["held_by_me"] is True
+        c.wait_note("control.changed", lambda p: p.get("reason") == "acquire" and p.get("held_by_me") is True)
+        c.ok("control.release"); c.notes.clear()
+        print(f"    auto_release after {dt:.1f}s")
 
     @case("too_many_clients")
     def _():

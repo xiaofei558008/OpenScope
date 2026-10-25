@@ -1,6 +1,6 @@
 # OpenScope 远程调试（网络外发）现状与方案设计
 
-> 版本 v0.5（2026-10-25，M1 remote.dll 落地后补充，见第 7 节修订记录），作者：程序员小程。M0（mock + 一致性测试）与 M1（remote.dll）已实现。
+> 版本 v0.6（2026-10-25，新增 control.changed 通知，见第 7 节修订记录），作者：程序员小程。M0（mock + 一致性测试）与 M1（remote.dll）已实现。
 > 讨论对象：Tom、小微（微信小程序）、网页端负责人（待定）。
 
 ## 1. 现状
@@ -169,6 +169,7 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 - **控制权冲突**：`-32004`，`error.data.holder` 给出当前持有者；远程烧录/写内存方法统一回 `-32003`。
 - **vars.write** 必须 operator + 控制权：`vars.write {id|name, value, req_id?}` → `{id:int, value:number, req_id:string|null, duplicate:bool}`。`value` 为实际写入值（remote.dll 为按变量类型截断/转换后的值）；同一会话内相同 `req_id` 的重复请求不再写目标，原样返回首次结果但 `duplicate:true`；未带 `req_id` 时 `req_id:null, duplicate:false`。
 - **control 结构**（`session.hello`、`status`、`control.acquire`、`control.release` 共用）：`{held_by_me:bool, holder:{session_id:string, client:"web"|"mp"|"os"}|null, since:int|null}`，`since` 为当前持有者获得控制权的 Unix 微秒；无人持有时 `holder/since` 为 null。`-32004` 错误的 `error.data.holder` 也用同一 `{session_id, client}` 结构。`control.release` 额外带 `released:true`。持有者断线后控制权随会话保留，但超过 **15 s** 未恢复即自动释放（防止小程序切后台长期占用）。
+- **control.changed 通知**（v0.6）：控制权发生任何变化时，服务端向**所有在线会话**推送 `{"jsonrpc":"2.0","method":"control.changed","params":{held_by_me, holder:{session_id,client}|null, since, reason}}`，`held_by_me` 按接收方计算；`reason` 取值：`"acquire"`（获取）、`"release"`（主动 `control.release` 或持有者 `session.bye`）、`"auto_release"`（持有者断线 15 s 自动释放）、`"expired"`（持有者会话过期回收）。重复 acquire 不推送。`control.release` 结果中的 `released:true` 保留。通知与请求 result 的先后顺序不作保证，客户端以通知中的状态为准。
 - **auth.elevate**：仅可申请 `operator`；remote.dll 在接探针一端**弹窗确认**（超时/拒绝回 `-32003`）；另有仅供测试的自动确认开关（配置项，默认关闭）。mock 自动批准。申请 `admin` 远程端一律拒绝：`-32003`，`error.data.os_err=-6`。
 
 ### 3.10 M1：remote.dll 实现与启用（v0.5）
@@ -231,3 +232,4 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 | v0.3 | 2026-10-25 | 程序员小程 | M0 落地：新增 3.9（pair.claim 方法名、握手前方法白名单、子协议 orp.v1、帧记录布局与 n u16、t0 为 Unix µs、seq 会话级递增、history 帧 stream_id=0、请求上限 256KB、心跳 30s/会话保留 120s、control 冲突 data.holder、kind=3 暂不实现） |
 | v0.4 | 2026-10-25 | 程序员小程 | 按小微/小序反馈：定义 vars.write 返回 `{id,value,req_id,duplicate}`；明确 stream.subscribe 返回 vars 为数字 id、名称/类型在 stream.meta；心跳统一 10 s（3.3 同步，caps.heartbeat_s）；定义 control 结构 `{held_by_me,holder_client,since}`；控制权持有者断线 15 s 自动释放；control 结构改为 `{held_by_me, holder:{session_id,client}|null, since}`（取代 holder_client）；history.fetch 支持名称并在 result 声明 value_type/变量元信息；保证 stream.meta 先于数据帧；冻结 vars.list 字段与分页参数；请求过大回显 id；定义 close code 4000/4001/4002；删除 json_stream/stream.data；admin 提升远程一律拒绝（os_err -6）；elevate 改为探针端弹窗确认 + 测试用自动确认开关 |
 | v0.5 | 2026-10-25 | 程序员小程 | M1 remote.dll 落地：新增 3.10（启用方式/配置/测试开关）；vars.read 结果增加 `source`（mem/acq）；连接数超限明确以 1013 关闭；vars.list `type` 取值表与 `writable` 判定；一致性测试新增 `--write-value`，流/历史用例改用 `--stream-vars` 指定的变量（真机） |
+| v0.6 | 2026-10-25 | 程序员小程 | 采纳小序提议：3.9 新增服务端通知 `control.changed {held_by_me, holder, since, reason:"acquire"\|"release"\|"auto_release"\|"expired"}`，控制权任何变化推给所有在线会话；mock 与 remote.dll 实现；一致性测试新增 control_changed_broadcast、control_auto_release_after_disconnect |

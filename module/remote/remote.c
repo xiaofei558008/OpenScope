@@ -92,7 +92,7 @@ typedef struct Trk { int used, id, refs; int64_t idle_since; int64_t* ts; double
 typedef struct VarInfo { int id; char name[256]; char addr[24]; int size; char type[24]; int writable; } VarInfo;
 
 typedef struct Rec { int vid; int64_t ts; double a, b, c; } Rec;
-typedef struct Out { RConn* conn; uint8_t* data; int len; struct Out* next; } Out;
+typedef struct Out { RConn* conn; uint8_t* data; int len; int text; struct Out* next; } Out;
 
 static const OS_Framework* g_fw;
 static volatile LONG g_running, g_clients;
@@ -368,6 +368,26 @@ static void control_json(int me, char* out, int cap)
               g_control == me ? "true" : "false", h->sid, h->client, (long long)g_control_since);
 }
 
+/* 控制权变化通知（持 g_cs）：给所有在线会话排队 control.changed，held_by_me 按接收方计算；锁外 flush_out 发送 */
+static void ctl_changed_queue(const char* reason, Out** tail)
+{
+    int i;
+    for (i = 0; i < R_MAX_SESS; i++) {
+        char cj[320], msg[480]; size_t L; Out* o;
+        if (!g_sess[i].used || !g_sess[i].conn) continue;
+        control_json(i, cj, sizeof(cj));
+        L = strlen(cj); cj[L - 1] = 0;   /* 去掉末尾 '}' */
+        _snprintf(msg, sizeof(msg), "{\"jsonrpc\":\"2.0\",\"method\":\"control.changed\",\"params\":%s,\"reason\":\"%s\"}}", cj, reason);
+        o = (Out*)calloc(1, sizeof(Out));
+        if (!o) continue;
+        o->data = (uint8_t*)_strdup(msg);
+        if (!o->data) { free(o); continue; }
+        o->len = (int)strlen(msg); o->text = 1;
+        rc_ref(g_sess[i].conn); o->conn = g_sess[i].conn;
+        (*tail)->next = o; *tail = o;
+    }
+}
+
 static void holder_json(char* out, int cap)
 {
     Sess* h = (g_control >= 0 && g_sess[g_control].used) ? &g_sess[g_control] : NULL;
@@ -528,7 +548,8 @@ static void flush_out(Out* head)
     Out* o = head->next;
     while (o) {
         Out* nx = o->next;
-        os_ws_send_bin(o->conn->ws, o->data, (uint32_t)o->len);
+        if (o->text) os_ws_send_text(o->conn->ws, (const char*)o->data);
+        else os_ws_send_bin(o->conn->ws, o->data, (uint32_t)o->len);
         rc_unref(o->conn);
         free(o->data); free(o);
         o = nx;
@@ -578,12 +599,14 @@ static DWORD WINAPI pump_thread(LPVOID p)
             if (!s->conn) {
                 if (g_control == i && t - s->detached_at > R_CONTROL_GRACE_US) {
                     g_control = -1;
+                    ctl_changed_queue("auto_release", &tail);
                     rlog2(OS_LOG_INFO, "remote: 会话 %s（%s）断线超过 15s，自动释放控制权", s->sid, s->client);
                 }
                 if (t - s->detached_at > R_SESSION_KEEP_US) {
+                    int held = g_control == i;
                     sess_release_subs(s);
-                    if (g_control == i) g_control = -1;
                     memset(s, 0, sizeof(*s));
+                    if (held) { g_control = -1; ctl_changed_queue("expired", &tail); }
                 }
                 continue;
             }
@@ -1075,22 +1098,24 @@ static void m_history(Ctx* x, Sess* s, const char* prm)
 static void m_control(Ctx* x, Sess* s, int acquire)
 {
     char res[320], hd[160]; int me = (int)(s - g_sess);
+    Out head; Out* tail = &head;
+    head.next = NULL;
     EnterCriticalSection(&g_cs);
     if (acquire) {
         if (s->role < ROLE_OPERATOR) { LeaveCriticalSection(&g_cs); reply_err(x, E_FORBIDDEN, "permission denied: need operator", "{\"need\":\"operator\"}"); return; }
         if (g_control >= 0 && g_control != me && g_sess[g_control].used) { holder_json(hd, sizeof(hd)); LeaveCriticalSection(&g_cs); reply_err(x, E_LOCKED, "control locked", hd); return; }
-        if (g_control != me) g_control_since = now_us();
-        g_control = me;
+        if (g_control != me) { g_control_since = now_us(); g_control = me; ctl_changed_queue("acquire", &tail); }
         control_json(me, res, sizeof(res));
     } else {
         size_t L;
-        if (g_control == me) g_control = -1;
+        if (g_control == me) { g_control = -1; ctl_changed_queue("release", &tail); }
         control_json(me, res, sizeof(res));
         L = strlen(res);
         _snprintf(res + L - 1, sizeof(res) - L + 1, ",\"released\":true}");
     }
     LeaveCriticalSection(&g_cs);
     reply_raw(x, res);
+    flush_out(&head);
 }
 
 static void m_status(Ctx* x, Sess* s)
@@ -1114,14 +1139,18 @@ static void dispatch(Ctx* x, const char* method, const char* prm)
     if (x->sess < 0 || !g_sess[x->sess].used || g_sess[x->sess].conn != x->conn) { x->sess = -1; reply_err(x, E_UNAUTH, "session.hello with valid token required", NULL); return; }
     s = &g_sess[x->sess];
     if (!strcmp(method, "session.bye")) {
+        Out head; Out* tail = &head; int held;
+        head.next = NULL;
         EnterCriticalSection(&g_cs);
         sess_release_subs(s);
-        if (g_control == x->sess) g_control = -1;
+        held = g_control == x->sess;
         if (s->conn) rc_unref(s->conn);
         memset(s, 0, sizeof(*s));
         x->sess = -1;
+        if (held) { g_control = -1; ctl_changed_queue("release", &tail); }
         LeaveCriticalSection(&g_cs);
         reply_raw(x, "{}");
+        flush_out(&head);
         return;
     }
     if (!strcmp(method, "status")) { m_status(x, s); return; }

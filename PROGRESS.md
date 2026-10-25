@@ -450,3 +450,7 @@
 - netws 只增不改：os_ws_server_upgrade_proto / os_ws_recv_capped_head / os_ws_send_close；ai_bridge vars.list 增加 type / writable 字段。
 - 真机（ST-Link + G431RB）一致性测试 5 次连续 20/20；10 min 推流 + 300 次反复连接 0 失败，句柄稳定（~281→293，不随连接次数增长）。
 - 规范 v0.5：vars.read 增加 source；超限 1013 关闭；一致性测试增加 --write-value。
+
+## 2026-10-25 规范 v0.6：control.changed 通知
+- 控制权任何变化（acquire/release/auto_release/expired）推送 control.changed 给所有在线会话，held_by_me 按接收方计算；mock 与 remote.dll 实现。
+- 一致性测试 22 例（新增广播、持有者断线 15 s 自动释放）：mock 3 次、真机 3 次全部通过；build.bat 通过。

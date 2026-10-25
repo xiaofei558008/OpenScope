@@ -220,6 +220,16 @@ class Server:
         except Exception:
             pass
 
+    async def broadcast_control(self, reason):
+        """控制权任何变化 → 推 control.changed 给所有在线会话，held_by_me 按接收方计算"""
+        for x in list(self.sessions.values()):
+            if x.ws:
+                try: await self.notify(x, "control.changed", dict(self.control_info(x), reason=reason))
+                except Exception: pass
+
+    def control_changed(self, reason):
+        asyncio.get_event_loop().create_task(self.broadcast_control(reason))
+
     async def notify(self, sess, method, params):
         if sess.ws:
             await self.send_json(sess.ws, {"jsonrpc": "2.0", "method": method, "params": params})
@@ -265,7 +275,7 @@ class Server:
         if not sess:
             raise RpcError(E_UNAUTH, "session.hello with valid token required")
         if method == "session.bye":
-            await self.drop_session(sess); return {}
+            await self.drop_session(sess, "release"); return {}
         if method == "status":
             return {"device_id": self.device_id, "connected": int(self.sim.connected), "role": sess.role,
                     "control": self.control_info(sess), "sessions": len(self.sessions), "orp": ORP_VER}
@@ -283,13 +293,16 @@ class Server:
             self.need_role(sess, "operator")
             if self.control and self.control != sess.sid and self.control in self.sessions:
                 self.need_control(sess)
-            if self.control != sess.sid:
+            changed = self.control != sess.sid
+            if changed:
                 self.control_since = now_us()
             self.control = sess.sid
+            if changed: self.control_changed("acquire")
             return self.control_info(sess)
         if method == "control.release":
             if self.control == sess.sid:
-                self.control = None
+                self.control = None; self.control_since = None
+                self.control_changed("release")
             return dict(self.control_info(sess), released=True)
         if method == "vars.list":
             needle = str(p.get("needle", "") or "")
@@ -457,10 +470,12 @@ class Server:
         return {"frames": len(frames), "records": len(recs), "kind": kind, "stream_id": 0, "t0": t0, "t1": t1,
                 "value_type": vt, "vars": metas}
 
-    async def drop_session(self, sess):
-        if self.control == sess.sid:
-            self.control = None
+    async def drop_session(self, sess, reason="expired"):
+        held = self.control == sess.sid
+        if held:
+            self.control = None; self.control_since = None
         self.sessions.pop(sess.sid, None)
+        if held: await self.broadcast_control(reason)
 
     # -- 连接 --
     async def handler(self, ws):
@@ -532,10 +547,12 @@ class Server:
                     print(f"[hb] {s.client}:{s.sid[:6]} 心跳超时，断开（会话保留 {SESSION_KEEP:.0f}s）", flush=True)
                     try: await s.ws.close(code=4000, reason="heartbeat timeout")
                     except Exception: pass
+                    s.last_rx = t  # 避免关闭完成前每轮重复关闭/刷日志
                 if not s.ws:
                     if s.detached_at and self.control == s.sid and t - s.detached_at > CONTROL_GRACE:
                         print(f"[ctl] {s.client}:{s.sid[:6]} 断线超过 {CONTROL_GRACE:.0f}s，自动释放控制权", flush=True)
-                        self.control = None
+                        self.control = None; self.control_since = None
+                        await self.broadcast_control("auto_release")
                     if s.detached_at and t - s.detached_at > SESSION_KEEP:
                         await self.drop_session(s)
                     continue
