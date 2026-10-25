@@ -1268,19 +1268,43 @@ static int parse_one_die(DW_Unit* u, uint64_t off, int parent, DW_Abbrev* abbrev
             p += len;
             break;
         }
-        case DW_FORM_block1:
+        /* DWARF2/3 块形式（TASKING TriCore 等用 DW_FORM_block/block1 表示 DW_AT_location、
+         * DW_AT_data_member_location）：与 exprloc 一样保存为 kind 8，并正确跳过数据。
+         * 原实现把 DW_FORM_block 当成仅 ULEB 的 loclistx，未跳过块数据，导致后续 DIE 错位。 */
+        case DW_FORM_block1: {
+            uint64_t len;
             if (p >= end) return -1;
-            p += 1 + *p;
+            len = *p++;
+            if (p + len > end) return -1;
+            die_add_attr(d, an, 8, len, p);
+            p += len;
             break;
-        case DW_FORM_block2:
+        }
+        case DW_FORM_block2: {
+            uint64_t len;
             if (p + 2 > end) return -1;
-            p += 2 + rd_u16(p, f->le);
+            len = rd_u16(p, f->le); p += 2;
+            if (p + len > end) return -1;
+            die_add_attr(d, an, 8, len, p);
+            p += len;
             break;
-        case DW_FORM_block4:
+        }
+        case DW_FORM_block4: {
+            uint64_t len;
             if (p + 4 > end) return -1;
-            p += 4 + rd_u32(p, f->le);
+            len = rd_u32(p, f->le); p += 4;
+            if (p + len > end) return -1;
+            die_add_attr(d, an, 8, len, p);
+            p += len;
             break;
-        case DW_FORM_block:
+        }
+        case DW_FORM_block: {
+            uint64_t len = rd_uleb(p, end, &p);
+            if (p + len > end) return -1;
+            die_add_attr(d, an, 8, len, p);
+            p += len;
+            break;
+        }
         case DW_FORM_loclistx:
         case DW_FORM_rnglistx:
             rd_uleb(p, end, &p);
@@ -2254,6 +2278,7 @@ const char* os_elf_arch_name(OS_ElfFile* f)
     switch (f->machine) {
     case 3:   return "x86";
     case 8:   return "MIPS";
+    case 44:  return "TriCore";
     case 40:  return (f->flags & 0x100000) ? "ARM Cortex-M" : "ARM";
     case 62:  return "x86-64";
     case 183: return "AArch64";

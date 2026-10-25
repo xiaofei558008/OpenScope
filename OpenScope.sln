@@ -16,6 +16,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "aiapi", "module\aiapi\aiapi
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "remote", "module\remote\remote.vcxproj", "{B7D3E2F1-4C5A-4E6B-8D9C-0A1B2C3D4E5F}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "das", "module\das\das.vcxproj", "{7E3D2A91-4C6B-4F1E-8A2D-D45C0F9B1E37}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -50,6 +52,10 @@ Global
 		{B7D3E2F1-4C5A-4E6B-8D9C-0A1B2C3D4E5F}.Debug|x64.Build.0 = Debug|x64
 		{B7D3E2F1-4C5A-4E6B-8D9C-0A1B2C3D4E5F}.Release|x64.ActiveCfg = Release|x64
 		{B7D3E2F1-4C5A-4E6B-8D9C-0A1B2C3D4E5F}.Release|x64.Build.0 = Release|x64
+		{7E3D2A91-4C6B-4F1E-8A2D-D45C0F9B1E37}.Debug|x64.ActiveCfg = Debug|x64
+		{7E3D2A91-4C6B-4F1E-8A2D-D45C0F9B1E37}.Debug|x64.Build.0 = Debug|x64
+		{7E3D2A91-4C6B-4F1E-8A2D-D45C0F9B1E37}.Release|x64.ActiveCfg = Release|x64
+		{7E3D2A91-4C6B-4F1E-8A2D-D45C0F9B1E37}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
