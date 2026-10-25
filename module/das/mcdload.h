@@ -40,6 +40,7 @@ static int mcd_bind(McdApi* a, char* err, int errcap)
     int i;
     memset(a, 0, sizeof(*a));
     path[0] = 0;
+    if (!err || errcap <= 0) { static char dummy[2]; err = dummy; errcap = (int)sizeof(dummy); } /* errcap<=0 防护 */
     el = GetEnvironmentVariableA("OPENSCOPE_DAS_DIR", envdir, sizeof(envdir));
     dirs[0] = (el > 0 && el < sizeof(envdir)) ? envdir : NULL;
     dirs[1] = "C:\\Program Files\\DAS64\\clients";

@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include <limits.h>
 #if !defined(_WIN32) && !defined(_vsnprintf)
 #define _vsnprintf vsnprintf /* 非 Windows 测试桩 */
 #endif
@@ -109,9 +110,9 @@ static int mod_scan(OS_ScanReq* req)
     uint32_t n = DAS_MAX_SERVERS, i;
     if (!req || !req->items || req->capacity <= 0) return OS_ERR_INVALID_ARG;
     req->count = 0;
-    if (das_ensure_init() != OS_ERR_OK) return OS_ERR_FAIL;
     memset(si, 0, sizeof(si));
     EnterCriticalSection(&g_ctx.cs);
+    if (das_ensure_init() != OS_ERR_OK) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
     if (g_ctx.api.qry_servers("localhost", TRUE, 0, &n, si) != MCD_RET_ACT_NONE) n = 0;
     LeaveCriticalSection(&g_ctx.cs);
     for (i = 0; i < n && i < DAS_MAX_SERVERS && req->count < req->capacity; i++) {
@@ -138,9 +139,9 @@ static int mod_disconnect_locked(void)
 
 static int mod_disconnect(void)
 {
-    g_ctx.want_connected = 0;
-    if (!g_ctx.bound) return OS_ERR_OK;
     EnterCriticalSection(&g_ctx.cs);
+    g_ctx.want_connected = 0;
+    if (!g_ctx.bound) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_OK; }
     mod_disconnect_locked();
     LeaveCriticalSection(&g_ctx.cs);
     return OS_ERR_OK;
@@ -192,8 +193,8 @@ fail:
 static int mod_connect(void)
 {
     int rc;
-    if (das_ensure_init() != OS_ERR_OK) return OS_ERR_FAIL;
     EnterCriticalSection(&g_ctx.cs);
+    if (das_ensure_init() != OS_ERR_OK) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
     rc = mod_connect_locked();
     g_ctx.want_connected = (rc == OS_ERR_OK);
     LeaveCriticalSection(&g_ctx.cs);
@@ -289,6 +290,7 @@ static int mod_read(OS_MemReq* req)
     int r;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
     if (!req->size) return 0;
+    if (req->size > (uint32_t)INT_MAX) return OS_ERR_INVALID_ARG; /* 返回值为 int 字节数 */
     if (!das_range_fits32(req->address, req->size)) return OS_ERR_INVALID_ARG; /* B1 */
     EnterCriticalSection(&g_ctx.cs);
     if (das_ensure_connected_locked() != OS_ERR_OK) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
@@ -386,15 +388,42 @@ static int mod_cpu_state(OS_CpuState* out)
 }
 
 /* JSON 字符串转义（B6） */
+/* 有效 UTF-8 序列长度（1..4），无效返回 0（含过长编码、代理区、> U+10FFFF、截断） */
+static int das_utf8_len(const unsigned char* p)
+{
+    unsigned char c = p[0];
+    if (c < 0x80) return 1;
+    if (c >= 0xC2 && c <= 0xDF) return (p[1] & 0xC0) == 0x80 ? 2 : 0;
+    if (c >= 0xE0 && c <= 0xEF) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80) return 0;
+        if (c == 0xE0 && p[1] < 0xA0) return 0;   /* 过长 */
+        if (c == 0xED && p[1] >= 0xA0) return 0;  /* 代理区 */
+        return 3;
+    }
+    if (c >= 0xF0 && c <= 0xF4) {
+        if ((p[1] & 0xC0) != 0x80 || (p[2] & 0xC0) != 0x80 || (p[3] & 0xC0) != 0x80) return 0;
+        if (c == 0xF0 && p[1] < 0x90) return 0;
+        if (c == 0xF4 && p[1] >= 0x90) return 0;
+        return 4;
+    }
+    return 0;
+}
+
+/* JSON 字符串转义（B6）：校验 UTF-8，无效字节替换为 U+FFFD；截断时不切断多字节字符 */
 static void das_json_esc(const char* in, char* out, size_t cap)
 {
     size_t o = 0;
-    if (!cap) return;
-    for (; in && *in && o + 7 < cap; in++) {
-        unsigned char ch = (unsigned char)*in;
-        if (ch == '"' || ch == '\\') { out[o++] = '\\'; out[o++] = (char)ch; }
-        else if (ch < 0x20) { o += (size_t)sprintf(out + o, "\\u%04x", ch); }
-        else out[o++] = (char)ch;
+    const unsigned char* p = (const unsigned char*)in;
+    if (!out || !cap) return;
+    while (p && *p) {
+        unsigned char ch = *p;
+        char tmp[8]; size_t n; int L;
+        if (ch == '"' || ch == '\\') { tmp[0] = '\\'; tmp[1] = (char)ch; n = 2; L = 1; }
+        else if (ch < 0x20) { n = (size_t)sprintf(tmp, "\\u%04x", ch); L = 1; }
+        else if ((L = das_utf8_len(p)) > 0) { memcpy(tmp, p, (size_t)L); n = (size_t)L; }
+        else { tmp[0] = (char)0xEF; tmp[1] = (char)0xBF; tmp[2] = (char)0xBD; n = 3; L = 1; }
+        if (o + n >= cap) break;   /* 整个单元放不下就停止，不切半个字符 */
+        memcpy(out + o, tmp, n); o += n; p += L;
     }
     out[o] = 0;
 }
@@ -435,11 +464,13 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
             return rc;
         }
     case OS_CMD_DISCONNECT:   return mod_disconnect();
-    case OS_CMD_IS_CONNECTED: if (out) *(int*)out = g_ctx.connected ? 1 : 0; return OS_ERR_OK;
+    case OS_CMD_IS_CONNECTED:
+        if (out) { EnterCriticalSection(&g_ctx.cs); *(int*)out = g_ctx.connected ? 1 : 0; LeaveCriticalSection(&g_ctx.cs); }
+        return OS_ERR_OK;
     case OS_CMD_READ_MEM:     return mod_read((OS_MemReq*)in);
     case OS_CMD_WRITE_MEM:    return mod_write((OS_MemReq*)in);
     case OS_CMD_GET_INFO:
-        if (out) memcpy(out, &g_ctx.info, sizeof(g_ctx.info));
+        if (out) { EnterCriticalSection(&g_ctx.cs); memcpy(out, &g_ctx.info, sizeof(g_ctx.info)); LeaveCriticalSection(&g_ctx.cs); }
         return OS_ERR_OK;
     case OS_CMD_HALT: case OS_CMD_GO: case OS_CMD_RESET: case OS_CMD_RESET_RUN:
         return das_run_ctl(cmd);
