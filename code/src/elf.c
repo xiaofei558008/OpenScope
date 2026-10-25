@@ -10,6 +10,7 @@
  */
 
 #include "elf.h"
+#include "dwloc.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -53,6 +54,17 @@ struct OS_ElfFile {
     const uint8_t* dbg_addr;          uint64_t dbg_addr_size;
     const uint8_t* dbg_line;          uint64_t dbg_line_size;
     const uint8_t* dbg_line_str;      uint64_t dbg_line_str_size;
+    const uint8_t* dbg_loc;           uint64_t dbg_loc_size;
+    const uint8_t* dbg_loclists;      uint64_t dbg_loclists_size;
+    const uint8_t* dbg_ranges;        uint64_t dbg_ranges_size;
+    const uint8_t* dbg_rnglists;      uint64_t dbg_rnglists_size;
+    const uint8_t* dbg_frame;         uint64_t dbg_frame_size;
+
+    /* 函数/作用域/局部变量表（局部变量窗口；malloc，os_elf_close 释放） */
+    struct ElfCu*    fcus;   int fcu_count,  fcu_cap;
+    struct ElfFunc*  funcs;  int func_count, func_cap;
+    struct ElfScope* scopes; int scope_count, scope_cap;
+    struct ElfLocal* locals; int local_count, local_cap;
 
     /* .debug_line 矩阵（文件名 os_alloc；recs 用 realloc） */
     char**   line_files;
@@ -301,6 +313,11 @@ static int elf_parse_sections(OS_ElfFile* f, char* errbuf, int errbuf_len)
     f->dbg_addr = elf_find_section(f, ".debug_addr", &f->dbg_addr_size, NULL);
     f->dbg_line = elf_find_section(f, ".debug_line", &f->dbg_line_size, NULL);
     f->dbg_line_str = elf_find_section(f, ".debug_line_str", &f->dbg_line_str_size, NULL);
+    f->dbg_loc = elf_find_section(f, ".debug_loc", &f->dbg_loc_size, NULL);
+    f->dbg_loclists = elf_find_section(f, ".debug_loclists", &f->dbg_loclists_size, NULL);
+    f->dbg_ranges = elf_find_section(f, ".debug_ranges", &f->dbg_ranges_size, NULL);
+    f->dbg_rnglists = elf_find_section(f, ".debug_rnglists", &f->dbg_rnglists_size, NULL);
+    f->dbg_frame = elf_find_section(f, ".debug_frame", &f->dbg_frame_size, NULL);
     return 0;
 }
 
@@ -1294,8 +1311,10 @@ static int parse_one_die(DW_Unit* u, uint64_t off, int parent, DW_Abbrev* abbrev
             break;
         }
         case DW_FORM_loclistx:
+            die_add_attr(d, an, 10, rd_uleb(p, end, &p), NULL);
+            break;
         case DW_FORM_rnglistx:
-            rd_uleb(p, end, &p);
+            die_add_attr(d, an, 11, rd_uleb(p, end, &p), NULL);
             break;
         case DW_FORM_flag_present:
             die_add_attr(d, an, 1, 1, NULL);
@@ -1548,6 +1567,7 @@ static OS_Type* shallow_clone(DW_Unit* u, OS_Type* src, const char* name, int64_
     t->is_signed = src->is_signed;
     t->is_ptr = src->is_ptr;
     t->member_offset = off;
+    t->base = src;
     t->children = src->children;
     t->child_count = src->child_count;
     if (has_bit) {
@@ -1944,6 +1964,382 @@ static void unit_add_variable(DW_Unit* u, DW_Die* d)
     ++f->var_count;
 }
 
+/* ------------------------------------------------------------------ */
+/* 函数 / 词法作用域 / 局部变量与参数（供局部变量窗口按 PC 求值）       */
+/* ------------------------------------------------------------------ */
+
+#define DW_TAG_formal_parameter_  0x05
+#define DW_TAG_lexical_block_     0x0b
+#define DW_TAG_inlined_subroutine_ 0x1d
+#define DW_TAG_subprogram_        0x2e
+#define DW_TAG_variable_          0x34
+#define DW_AT_high_pc_            0x12
+#define DW_AT_frame_base_         0x40
+#define DW_AT_ranges_             0x55
+#define DW_AT_rnglists_base_      0x74
+#define DW_AT_loclists_base_      0x8c
+
+typedef struct ElfCu {
+    uint16_t version;
+    uint8_t  addr_size;
+    uint64_t base;          /* CU low_pc（位置/范围列表基址） */
+    uint64_t addr_base, loclists_base, rnglists_base;
+} ElfCu;
+
+/* 位置描述：kind 0=无属性 1=表达式 2=列表(偏移已解析为节内绝对偏移) 3=常量 */
+typedef struct ElfLoc {
+    uint8_t  kind;
+    const uint8_t* expr;
+    uint32_t len;
+    uint64_t list_off;
+    int64_t  cval;
+} ElfLoc;
+
+typedef struct ElfFunc {
+    const char* name;
+    uint64_t lo, hi;        /* hi 不含；rkind!=0 时为 ranges 包络 */
+    uint8_t  rkind;         /* 0=lo/hi 1=v4 ranges 2=v5 rnglists */
+    uint64_t roff;
+    ElfLoc   fb;
+    int      cu;
+    int      first_scope, nscopes;
+    int      first_local, nlocals;
+} ElfFunc;
+
+typedef struct ElfScope {
+    int      parent;        /* -1 = 函数级 */
+    uint64_t lo, hi;
+    uint8_t  rkind;
+    uint64_t roff;
+    int      depth;
+} ElfScope;
+
+typedef struct ElfLocal {
+    const char* name;
+    OS_Type*    type;
+    uint8_t     is_param;
+    int         scope;      /* 相对 first_scope 的下标；-1 = 函数级 */
+    ElfLoc      loc;
+} ElfLocal;
+
+static void* grow(void* p, int* cap, int need, size_t es)
+{
+    int nc;
+    void* np;
+    if (need <= *cap) return p;
+    nc = *cap ? *cap * 2 : 64;
+    while (nc < need) nc *= 2;
+    np = realloc(p, (size_t)nc * es);
+    if (!np) return NULL;
+    *cap = nc;
+    return np;
+}
+
+static uint64_t list_index_off(OS_ElfFile* f, const uint8_t* sec, uint64_t sec_size, uint64_t base, uint64_t idx)
+{
+    /* DWARF5 offsets 表：base 指向表首，元素为 4 字节偏移（相对 base） */
+    uint64_t pos = base + idx * 4;
+    if (!sec || pos + 4 > sec_size) return ~(uint64_t)0;
+    return base + rd_u32(sec + pos, f->le);
+}
+
+static void loc_from_attr(OS_ElfFile* f, DW_Unit* u, const ElfCu* cu, DW_Attr* a, ElfLoc* out)
+{
+    memset(out, 0, sizeof(*out));
+    if (!a) return;
+    if (a->kind == 8) { out->kind = 1; out->expr = a->p; out->len = (uint32_t)a->v; return; }
+    if (a->kind == 10) {
+        uint64_t o = list_index_off(f, f->dbg_loclists, f->dbg_loclists_size, cu->loclists_base, a->v);
+        if (o != ~(uint64_t)0) { out->kind = 2; out->list_off = o; }
+        return;
+    }
+    if (a->kind == 1) { out->kind = 2; out->list_off = a->v; return; }
+    (void)u;
+}
+
+static DW_Attr* die_attr(DW_Die* d, uint64_t name)
+{
+    int i;
+    for (i = 0; i < d->nattrs; i++) if (d->attrs[i].name == name) return &d->attrs[i];
+    return NULL;
+}
+
+/* 取 abstract_origin / specification 指向的 DIE（可跨 CU） */
+static DW_Die* die_origin(OS_ElfFile* f, DW_Die* d, DW_Unit** ou)
+{
+    DW_Attr* a = die_attr(d, DW_AT_abstract_origin);
+    int idx = -1;
+    if (!a) a = die_attr(d, DW_AT_specification);
+    if (!a) return NULL;
+    return die_glob_find(f, const_u64(a), ou, &idx);
+}
+
+static int die_pc_range(DW_Unit* u, const ElfCu* cu, DW_Die* d, uint64_t* lo, uint64_t* hi,
+                        uint8_t* rkind, uint64_t* roff)
+{
+    DW_Attr* l = die_attr(d, DW_AT_low_pc);
+    DW_Attr* h = die_attr(d, DW_AT_high_pc_);
+    DW_Attr* r = die_attr(d, DW_AT_ranges_);
+    OS_ElfFile* f = u->f;
+    *rkind = 0; *roff = 0; *lo = *hi = 0;
+    if (l && h) {
+        *lo = unit_addr(u, l);
+        if (l->kind != 7 && l->kind != 9) *lo = l->v;
+        if (h->kind == 9 || h->kind == 7) *hi = unit_addr(u, h);
+        else *hi = *lo + const_u64(h);
+        return *hi > *lo;
+    }
+    if (r) {
+        if (u->version >= 5) {
+            uint64_t o = (r->kind == 11)
+                ? list_index_off(f, f->dbg_rnglists, f->dbg_rnglists_size, cu->rnglists_base, r->v)
+                : r->v;
+            if (o == ~(uint64_t)0) return 0;
+            *rkind = 2; *roff = o;
+        } else {
+            *rkind = 1; *roff = r->v;
+        }
+        *lo = 0; *hi = ~(uint64_t)0;
+        return 1;
+    }
+    return 0;
+}
+
+static void collect_funcs(OS_ElfFile* f, DW_Unit* u)
+{
+    ElfCu cu;
+    int i, cu_idx;
+    if (u->ndies <= 0) return;
+    memset(&cu, 0, sizeof(cu));
+    cu.version = u->version;
+    cu.addr_size = u->addr_size;
+    cu.addr_base = u->addr_base;
+    {
+        DW_Die* c = &u->dies[0];
+        DW_Attr* a = die_attr(c, DW_AT_low_pc);
+        if (a) cu.base = (a->kind == 7 || a->kind == 9) ? unit_addr(u, a) : a->v;
+        a = die_attr(c, DW_AT_loclists_base_); if (a) cu.loclists_base = a->v;
+        a = die_attr(c, DW_AT_rnglists_base_); if (a) cu.rnglists_base = a->v;
+    }
+    {
+        ElfCu* nc = (ElfCu*)grow(f->fcus, &f->fcu_cap, f->fcu_count + 1, sizeof(ElfCu));
+        if (!nc) return;
+        f->fcus = nc;
+        cu_idx = f->fcu_count;
+        f->fcus[f->fcu_count++] = cu;
+    }
+    for (i = 0; i < u->ndies; i++) {
+        DW_Die* d = &u->dies[i];
+        ElfFunc fn;
+        DW_Unit* ou = NULL;
+        DW_Die* od;
+        DW_Attr* a;
+        int j, scope_stack_die[64], scope_stack_idx[64], ssp = 0;
+        if (d->tag != DW_TAG_subprogram_) continue;
+        if (die_attr(d, DW_AT_declaration)) continue;
+        memset(&fn, 0, sizeof(fn));
+        if (!die_pc_range(u, &cu, d, &fn.lo, &fn.hi, &fn.rkind, &fn.roff)) continue;
+        a = die_attr(d, DW_AT_name);
+        if (a) fn.name = unit_str(u, a);
+        if (!fn.name && (od = die_origin(f, d, &ou)) != NULL) {
+            a = die_attr(od, DW_AT_name);
+            if (a) fn.name = unit_str(ou, a);
+            if (!fn.name) { DW_Unit* ou2 = NULL; DW_Die* od2 = die_origin(f, od, &ou2); if (od2 && (a = die_attr(od2, DW_AT_name))) fn.name = unit_str(ou2, a); }
+        }
+        fn.name = os_strdup(f, fn.name ? fn.name : "?");
+        loc_from_attr(f, u, &cu, die_attr(d, DW_AT_frame_base_), &fn.fb);
+        fn.cu = cu_idx;
+        fn.first_scope = f->scope_count;
+        fn.first_local = f->local_count;
+        /* 后代 DIE 在 DFS 顺序中连续：j 的祖先链含 i 即为后代 */
+        for (j = i + 1; j < u->ndies; j++) {
+            DW_Die* e = &u->dies[j];
+            int par = e->parent, k, scope_rel = -1, depth = 0;
+            int in = 0;
+            for (k = par; k >= 0; k = u->dies[k].parent) if (k == i) { in = 1; break; }
+            if (!in) break;
+            /* 嵌套函数的内容不属于本函数 */
+            for (k = par; k > i; k = u->dies[k].parent) if (u->dies[k].tag == DW_TAG_subprogram_) break;
+            if (k > i) continue;
+            /* 最近的作用域祖先 */
+            while (ssp > 0) {
+                int sd = scope_stack_die[ssp - 1], anc = 0;
+                for (k = par; k >= 0 && k >= sd; k = u->dies[k].parent) if (k == sd) { anc = 1; break; }
+                if (anc) break;
+                ssp--;
+            }
+            if (ssp > 0) { scope_rel = scope_stack_idx[ssp - 1]; depth = ssp; }
+            if (e->tag == DW_TAG_lexical_block_ || e->tag == DW_TAG_inlined_subroutine_) {
+                ElfScope sc;
+                ElfScope* ns;
+                memset(&sc, 0, sizeof(sc));
+                if (!die_pc_range(u, &cu, e, &sc.lo, &sc.hi, &sc.rkind, &sc.roff)) { sc.lo = fn.lo; sc.hi = fn.hi; }
+                sc.parent = scope_rel;
+                sc.depth = depth + 1;
+                ns = (ElfScope*)grow(f->scopes, &f->scope_cap, f->scope_count + 1, sizeof(ElfScope));
+                if (!ns) return;
+                f->scopes = ns;
+                f->scopes[f->scope_count++] = sc;
+                if (ssp < 64) { scope_stack_die[ssp] = j; scope_stack_idx[ssp] = f->scope_count - 1 - fn.first_scope; ssp++; }
+            } else if (e->tag == DW_TAG_formal_parameter_ || e->tag == DW_TAG_variable_) {
+                ElfLocal lv;
+                ElfLocal* nl;
+                DW_Attr* ta = die_attr(e, DW_AT_type);
+                DW_Attr* na = die_attr(e, DW_AT_name);
+                DW_Attr* la = die_attr(e, DW_AT_location);
+                DW_Attr* ca = die_attr(e, DW_AT_const_value);
+                DW_Unit* tu = u;
+                if (die_attr(e, DW_AT_declaration)) continue;   /* extern 声明 */
+                memset(&lv, 0, sizeof(lv));
+                lv.is_param = (e->tag == DW_TAG_formal_parameter_);
+                lv.scope = scope_rel;
+                if (!na || !ta) {
+                    DW_Unit* ou3 = NULL;
+                    DW_Die* o = die_origin(f, e, &ou3);
+                    if (o) {
+                        if (!na) { na = die_attr(o, DW_AT_name); if (na) lv.name = unit_str(ou3, na); na = NULL; }
+                        if (!ta) { ta = die_attr(o, DW_AT_type); tu = ou3; }
+                    }
+                }
+                if (na) lv.name = unit_str(u, na);
+                if (!lv.name) continue;
+                lv.name = os_strdup(f, lv.name);
+                if (ta) {
+                    DW_Unit* tu2 = NULL;
+                    int tidx = -1;
+                    (void)tu;
+                    if (die_glob_find(f, const_u64(ta), &tu2, &tidx)) lv.type = build_type(tu2, tidx, 0);
+                }
+                if (la) loc_from_attr(f, u, &cu, la, &lv.loc);
+                else if (ca) {
+                    if (ca->kind == 8) { lv.loc.kind = 1; lv.loc.expr = NULL; lv.loc.len = 0; lv.loc.kind = 4; lv.loc.expr = ca->p; lv.loc.len = (uint32_t)ca->v; }
+                    else { lv.loc.kind = 3; lv.loc.cval = (int64_t)ca->v; }
+                }
+                nl = (ElfLocal*)grow(f->locals, &f->local_cap, f->local_count + 1, sizeof(ElfLocal));
+                if (!nl) return;
+                f->locals = nl;
+                f->locals[f->local_count++] = lv;
+            }
+        }
+        fn.nscopes = f->scope_count - fn.first_scope;
+        fn.nlocals = f->local_count - fn.first_local;
+        {
+            ElfFunc* nf = (ElfFunc*)grow(f->funcs, &f->func_cap, f->func_count + 1, sizeof(ElfFunc));
+            if (!nf) return;
+            f->funcs = nf;
+            f->funcs[f->func_count++] = fn;
+        }
+    }
+}
+
+static int range_has(OS_ElfFile* f, const ElfCu* cu, uint8_t rkind, uint64_t roff, uint64_t lo, uint64_t hi, uint64_t pc)
+{
+    if (rkind == 0) return pc >= lo && pc < hi;
+    if (rkind == 1)
+        return dwloc_ranges_v4_contains(f->dbg_ranges, (size_t)f->dbg_ranges_size, roff, cu->addr_size, f->le, cu->base, pc);
+    return dwloc_ranges_v5_contains(f->dbg_rnglists, (size_t)f->dbg_rnglists_size, roff, cu->addr_size, f->le, cu->base,
+                                    f->dbg_addr, (size_t)f->dbg_addr_size, cu->addr_base, pc);
+}
+
+/* 按 PC 选位置表达式；返回 1 有表达式，0 无（不覆盖/无属性），-1 列表损坏 */
+static int loc_select(OS_ElfFile* f, const ElfCu* cu, const ElfLoc* l, uint64_t pc, const uint8_t** e, uint32_t* n)
+{
+    size_t len = 0;
+    int r;
+    if (l->kind == 1 || l->kind == 4) { *e = l->expr; *n = l->len; return 1; }
+    if (l->kind != 2) return 0;
+    if (cu->version >= 5)
+        r = dwloc_loclist_v5(f->dbg_loclists, (size_t)f->dbg_loclists_size, l->list_off, cu->addr_size, f->le, cu->base,
+                             f->dbg_addr, (size_t)f->dbg_addr_size, cu->addr_base, pc, e, &len);
+    else
+        r = dwloc_loclist_v4(f->dbg_loc, (size_t)f->dbg_loc_size, l->list_off, cu->addr_size, f->le, cu->base, pc, e, &len);
+    *n = (uint32_t)len;
+    return r;
+}
+
+static const ElfFunc* func_find(OS_ElfFile* f, uint64_t pc)
+{
+    int i;
+    const ElfFunc* best = NULL;
+    if (!f) return NULL;
+    for (i = 0; i < f->func_count; i++) {
+        const ElfFunc* fn = &f->funcs[i];
+        if (!range_has(f, &f->fcus[fn->cu], fn->rkind, fn->roff, fn->lo, fn->hi, pc)) continue;
+        /* 多个命中（嵌套/重叠）取范围最小者 */
+        if (!best || (fn->hi - fn->lo) < (best->hi - best->lo)) best = fn;
+    }
+    return best;
+}
+
+int os_elf_func_at(OS_ElfFile* f, uint64_t pc, char* name, int cap, uint64_t* lo, uint64_t* hi)
+{
+    const ElfFunc* fn = func_find(f, pc);
+    if (!fn) return 0;
+    if (name && cap > 0) snprintf(name, (size_t)cap, "%s", fn->name);
+    if (lo) *lo = fn->lo;
+    if (hi) *hi = fn->hi;
+    return 1;
+}
+
+int os_elf_locals_at(OS_ElfFile* f, uint64_t pc, OS_LocalSym* out, int max,
+                     const uint8_t** fb_expr, uint32_t* fb_len)
+{
+    const ElfFunc* fn = func_find(f, pc);
+    const ElfCu* cu;
+    int i, n = 0, pass;
+    uint8_t in_scope[512];
+    if (fb_expr) *fb_expr = NULL;
+    if (fb_len) *fb_len = 0;
+    if (!fn) return -1;
+    cu = &f->fcus[fn->cu];
+    if (fb_expr && fb_len) {
+        const uint8_t* e = NULL; uint32_t l = 0;
+        if (loc_select(f, cu, &fn->fb, pc, &e, &l) == 1) { *fb_expr = e; *fb_len = l; }
+    }
+    for (i = 0; i < fn->nscopes && i < 512; i++) {
+        const ElfScope* sc = &f->scopes[fn->first_scope + i];
+        int ok = range_has(f, cu, sc->rkind, sc->roff, sc->lo, sc->hi, pc);
+        if (ok && sc->parent >= 0 && sc->parent < i) ok = in_scope[sc->parent];
+        in_scope[i] = (uint8_t)ok;
+    }
+    /* 参数在前，局部在后 */
+    for (pass = 0; pass < 2; pass++) {
+        for (i = 0; i < fn->nlocals; i++) {
+            const ElfLocal* lv = &f->locals[fn->first_local + i];
+            OS_LocalSym* o;
+            const uint8_t* e = NULL;
+            uint32_t l = 0;
+            int r;
+            if ((pass == 0) != (lv->is_param != 0)) continue;
+            if (lv->scope >= 0 && (lv->scope >= 512 || !in_scope[lv->scope])) continue;
+            if (n >= max) return n;
+            o = &out[n++];
+            memset(o, 0, sizeof(*o));
+            o->name = lv->name;
+            o->type = lv->type;
+            o->is_param = lv->is_param;
+            o->depth = lv->scope >= 0 ? f->scopes[fn->first_scope + lv->scope].depth : 0;
+            if (lv->loc.kind == 3) { o->loc_kind = OS_LOC_CONST; o->const_val = lv->loc.cval; continue; }
+            if (lv->loc.kind == 4) { o->loc_kind = OS_LOC_CONST_BYTES; o->expr = lv->loc.expr; o->expr_len = lv->loc.len; continue; }
+            if (lv->loc.kind == 0) { o->loc_kind = OS_LOC_OPTIMIZED_OUT; continue; }
+            r = loc_select(f, cu, &lv->loc, pc, &e, &l);
+            if (r == 1 && l > 0) { o->loc_kind = OS_LOC_EXPR; o->expr = e; o->expr_len = l; }
+            else if (r == 1) o->loc_kind = OS_LOC_OPTIMIZED_OUT;     /* 空表达式 = 优化掉 */
+            else o->loc_kind = OS_LOC_NOT_AT_PC;
+        }
+    }
+    return n;
+}
+
+int os_elf_cfa_at(OS_ElfFile* f, uint64_t pc, int* reg, int64_t* off)
+{
+    if (!f || !f->dbg_frame) return 0;
+    return dwloc_cfa_rule(f->dbg_frame, (size_t)f->dbg_frame_size, f->is64 ? 8 : 4, f->le, pc, reg, off);
+}
+
+int os_elf_func_count(OS_ElfFile* f) { return f ? f->func_count : 0; }
+
+
 static void parse_dwarf(OS_ElfFile* f)
 {
     uint64_t off = 0;
@@ -2009,6 +2405,10 @@ static void parse_dwarf(OS_ElfFile* f)
                 unit_add_variable(u, &u->dies[i]);
         }
     }
+
+    /* 函数 / 作用域 / 局部变量（局部变量窗口） */
+    for (ui = 0; ui < f->n_units; ui++)
+        collect_funcs(f, &f->units[ui]);
 
 done:
     for (ui = 0; ui < f->n_units; ui++) {
@@ -2159,6 +2559,10 @@ void os_elf_close(OS_ElfFile* f)
     free((void*)f->data);
     free(f->line_recs);
     free(f->line_files); /* 元素由 os_alloc 释放 */
+    free(f->fcus);
+    free(f->funcs);
+    free(f->scopes);
+    free(f->locals);
     a = f->allocs;
     while (a) {
         OS_Alloc* next = a->next;

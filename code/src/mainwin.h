@@ -27,6 +27,7 @@ int os_mainwin_active_tab(void);
 void os_mainwin_select_tab(int idx);
 void os_mainwin_refresh_layout(void);
 HWND os_win_create_by_type(const char* type, const wchar_t* title);
+int  os_mainwin_locals_open_safe(void); /* 任意线程：打开/聚焦局部变量窗口 */
 /* N11: 在 tab 内新建 type 窗口（tab<0=新建 tab，tab 有效=附加到该 tab 组） */
 HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title);
 /* N11/Bug3: 子窗口获得焦点时登记为“当前窗口” */

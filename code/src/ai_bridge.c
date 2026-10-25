@@ -4,6 +4,7 @@
  * 新增软件能力时在此登记方法，并同步写入 tools.list / help。
  */
 #include "app.h"
+#include "locals.h"
 #include "mainwin.h"
 #include "module_mgr.h"
 #include "datasrv.h"
@@ -221,6 +222,9 @@ static const AI_Tool g_tools[] = {
     {"bp.set", "设置硬件断点", "{\"address\":\"0x08001234\",\"note\":\"\"}"},
     {"bp.clear", "清除断点（all=1 全清）", "{\"address\":\"0x08001234\",\"all\":0}"},
     {"bp.list", "列出当前硬件断点", "{}"},
+    {"debug.locals", "CPU 停住时当前函数(帧0)的参数与局部变量（expand=展开层数，默认1）", "{\"expand\":1}"},
+    {"debug.regs", "CPU 停住时读核心寄存器（ARM R0-R15/xPSR，TriCore D/A/PC/PSW/PCXI）", "{}"},
+    {"debug.locals_window", "打开/聚焦局部变量窗口（界面同步）", "{}"},
     {"bp.set_line", "按源码文件+行号设硬件断点", "{\"path\":\"D:\\\\proj\\\\main.c\",\"line\":100,\"note\":\"\"}"},
     {"bp.clear_line", "按源码文件+行号清断点", "{\"path\":\"D:\\\\proj\\\\main.c\",\"line\":100}"},
     {"src.status", "源码索引与 DWARF 行表摘要", "{}"},
@@ -1408,6 +1412,41 @@ int os_ai_call(const char* method, const char* params_json,
         if (rc != OS_ERR_OK)
             return ai_fail(result_json, result_cap, rc, "bp.clear failed");
         os_src_refresh_bps();
+        return ai_ok(result_json, result_cap, NULL);
+    }
+    if (strcmp(method, "debug.locals") == 0) {
+        OS_LocSnap snap;
+        int depth = 1;
+        json_get_int(params, "expand", &depth);
+        if (depth < 0) depth = 0;
+        if (depth > 6) depth = 6;
+        os_locals_snapshot(&snap, NULL, NULL, depth);
+        os_locals_to_json(&snap, result_json, result_cap);
+        os_locals_free(&snap);
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "debug.regs") == 0) {
+        OS_RegSet rs;
+        int i, n = 0, rc, first = 1;
+        if (!g_app.driver || !g_app.connected)
+            return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
+        memset(&rs, 0, sizeof(rs));
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_REG_READ, NULL, &rs);
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, rc == OS_ERR_BUSY ? "cpu running" : "reg read failed");
+        n += _snprintf(result_json + n, result_cap - n, "{\"ok\":true,\"arch\":\"%s\",\"regs\":{",
+                       rs.arch == OS_ARCH_TRICORE ? "tricore" : "arm");
+        for (i = 0; i < rs.count && i < OS_REG_MAX && n < result_cap - 48; i++) {
+            if (!rs.valid[i] || !rs.name[i][0]) continue;
+            n += _snprintf(result_json + n, result_cap - n, "%s\"%s\":\"0x%08X\"", first ? "" : ",", rs.name[i], rs.value[i]);
+            first = 0;
+        }
+        _snprintf(result_json + n, result_cap - n, "}}");
+        return OS_ERR_OK;
+    }
+    if (strcmp(method, "debug.locals_window") == 0) {
+        if (os_mainwin_locals_open_safe() != 0)
+            return ai_fail(result_json, result_cap, OS_ERR_FAIL, "open failed");
         return ai_ok(result_json, result_cap, NULL);
     }
     if (strcmp(method, "bp.list") == 0) {

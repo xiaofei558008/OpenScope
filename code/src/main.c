@@ -1,4 +1,5 @@
 #include "app.h"
+#include "locals.h"
 #include "chartwin.h"
 #include "numwin.h"
 #include "srcwin.h"
@@ -407,6 +408,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     os_chart_register();
     os_num_register();
     os_src_register();
+    os_locals_register();
     os_mainwin_register();
     os_help_register(); /* 需求12：帮助文档窗口类（F1） */
     os_theme_load(); /* F20: 创建主窗口前读回持久化主题，标题栏/控件从首帧即按主题渲染 */

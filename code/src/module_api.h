@@ -78,7 +78,8 @@ enum {
     OS_CMD_BP_CLEAR       = 39, /* in: OS_BpReq*（address；clear_all=1 全清） */
     /* AI 自动化：模块可选返回自身工具描述 JSON（追加到 tools.list） */
     OS_CMD_AI_DESCRIBE    = 40, /* out: char*（调用方提供缓冲，建议 ≥4KB） */
-    OS_CMD_BP_LIST        = 41  /* out: OS_BpList* 当前已设断点 */
+    OS_CMD_BP_LIST        = 41, /* out: OS_BpList* 当前已设断点 */
+    OS_CMD_REG_READ       = 42  /* out: OS_RegSet* 读 CPU 寄存器（仅停核时；运行中返回 OS_ERR_BUSY） */
 };
 
 /* 仿真口类型 */
@@ -164,6 +165,21 @@ typedef struct OS_CpuState {
     /* 主状态文案（主机可直接显示）：RUNNING / STOP / RESET / POWERON / — */
     char     state[24];
 } OS_CpuState;
+
+/* 寄存器：OS_CMD_REG_READ。下标即 DWARF 寄存器号：
+ *   OS_ARCH_ARM_CM : 0..15 = R0..R15（13=SP 14=LR 15=PC），16 = xPSR
+ *   OS_ARCH_TRICORE: 0..15 = D0..D15，16..31 = A0..A15（26=A10/SP 27=A11/RA），
+ *                    40 = PC，41 = PSW，42 = PCXI（32..39 为 E 寄存器对，由宿主用 D 合成） */
+#define OS_ARCH_ARM_CM  1
+#define OS_ARCH_TRICORE 2
+#define OS_REG_MAX      48
+typedef struct OS_RegSet {
+    int      arch;
+    int      count;                  /* 有意义的下标上限（不含） */
+    uint32_t value[OS_REG_MAX];
+    uint8_t  valid[OS_REG_MAX];
+    char     name[OS_REG_MAX][8];
+} OS_RegSet;
 
 /* 断点：OS_CMD_BP_SET / CLEAR / LIST */
 #define OS_BP_MAX 16

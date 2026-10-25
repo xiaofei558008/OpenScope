@@ -828,6 +828,27 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link StepOut: LR=0x%08X", lr);
         return OS_ERR_OK;
     }
+    case OS_CMD_REG_READ: {
+        /* 停核时读 R0..R15 + xPSR（J-Link Cortex-M 寄存器下标 0..15，16=XPSR） */
+        OS_RegSet* rs = (OS_RegSet*)out;
+        static const char* const nm[17] = {"R0","R1","R2","R3","R4","R5","R6","R7","R8","R9","R10","R11","R12","SP","LR","PC","xPSR"};
+        int i;
+        if (!rs) return OS_ERR_INVALID_ARG;
+        memset(rs, 0, sizeof(*rs));
+        rs->arch = OS_ARCH_ARM_CM;
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.read_reg || !g_ctx.api.is_halted) return OS_ERR_UNSUPPORTED;
+        EnterCriticalSection(&g_ctx.cs);
+        if (!g_ctx.api.is_halted()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_BUSY; }
+        for (i = 0; i < 17; i++) {
+            rs->value[i] = g_ctx.api.read_reg(i);
+            rs->valid[i] = 1;
+            _snprintf(rs->name[i], sizeof(rs->name[i]) - 1, "%s", nm[i]);
+        }
+        LeaveCriticalSection(&g_ctx.cs);
+        rs->count = 17;
+        return OS_ERR_OK;
+    }
     case OS_CMD_BP_SET:
         return jlink_bp_set((const OS_BpReq*)in);
     case OS_CMD_BP_CLEAR:

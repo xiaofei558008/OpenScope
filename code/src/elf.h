@@ -43,6 +43,7 @@ typedef struct OS_Type {
     int           array_count;   /* 数组元素个数 */
     int           child_count;
     struct OS_Type** children;   /* malloc 数组，可为 NULL */
+    const struct OS_Type* base;  /* 结构体成员节点：指向成员的原始类型（类型名/array_count），否则 NULL */
 } OS_Type;
 
 /* 顶层全局变量 */
@@ -82,6 +83,34 @@ int         os_elf_addr_of_line(OS_ElfFile* f, const char* path_or_name, int lin
 /* 按地址查源文件与行号；成功返回 1 */
 int         os_elf_line_of_addr(OS_ElfFile* f, uint32_t addr,
                                 char* file_out, int file_cap, int* line_out);
+
+/* ---- 函数 / 局部变量（DWARF subprogram/lexical_block/formal_parameter/variable）---- */
+enum {
+    OS_LOC_OPTIMIZED_OUT = 0, /* 无 DW_AT_location，或空表达式 */
+    OS_LOC_EXPR          = 1, /* expr/expr_len 为当前 PC 下的位置表达式 */
+    OS_LOC_NOT_AT_PC     = 2, /* 位置列表在当前 PC 不覆盖 */
+    OS_LOC_CONST         = 3, /* DW_AT_const_value 整数（const_val） */
+    OS_LOC_CONST_BYTES   = 4  /* DW_AT_const_value 块（expr/expr_len 为原始字节） */
+};
+typedef struct OS_LocalSym {
+    const char*    name;
+    const OS_Type* type;     /* 可能为 NULL */
+    int            is_param;
+    int            depth;    /* 作用域嵌套深度：0=函数级 */
+    int            loc_kind; /* OS_LOC_* */
+    const uint8_t* expr;
+    uint32_t       expr_len;
+    int64_t        const_val;
+} OS_LocalSym;
+
+/* 按 PC 找函数；成功返回 1 */
+int os_elf_func_at(OS_ElfFile* f, uint64_t pc, char* name, int cap, uint64_t* lo, uint64_t* hi);
+/* 当前 PC 作用域内的参数与局部变量（参数在前）；无函数返回 -1。fb_* 为当前 PC 的 frame_base 表达式 */
+int os_elf_locals_at(OS_ElfFile* f, uint64_t pc, OS_LocalSym* out, int max,
+                     const uint8_t** fb_expr, uint32_t* fb_len);
+/* .debug_frame：pc 处 CFA = reg + off；成功返回 1 */
+int os_elf_cfa_at(OS_ElfFile* f, uint64_t pc, int* reg, int64_t* off);
+int os_elf_func_count(OS_ElfFile* f);
 
 #ifdef __cplusplus
 }

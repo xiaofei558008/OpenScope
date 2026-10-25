@@ -14,6 +14,7 @@
  *  - OS_CMD_READ_MEM    内存读：大块拆分为 ≤1KB 事务，一次 txlist 批量执行；SFR 区以 4 字节对齐访问
  *  - OS_CMD_WRITE_MEM   内存写：拒绝 PFLASH/DFLASH/UCB 区（0x8xxxxxxx / 0xAxxxxxxx），永不写 UCB
  *  - HALT / GO / RESET / RESET_RUN / GET_CPU_STATE / GET_INFO / IS_CONNECTED / AI_DESCRIBE
+ *  - REG_READ：停核时经 CSFR 读 D0-15/A0-15/PC/PSW/PCXI（局部变量求值用）
  *  - BP_SET / BP_CLEAR / BP_LIST：MCD 触发器硬件断点（最多 8，按 qry_trig_info 收紧）；
  *    STEP/STEP_IN/STEP_OVER：指令单步；STEP_OUT：临时断点于 A11 返回地址
  *  - FLASH_DOWNLOAD / FLASH_ERASE：不支持（返回 OS_ERR_FAIL 并提示用 MemTool / TASKING dbgtc），
@@ -311,6 +312,40 @@ static int mod_read(OS_MemReq* req)
         r = das_read_locked(req->address, (uint8_t*)req->data, req->size);
     LeaveCriticalSection(&g_ctx.cs);
     return r == 0 ? (int)req->size : OS_ERR_TIMEOUT;
+}
+
+/* 寄存器（停核时）：CSFR 映射 D0..D15 @+0xFF00、A0..A15 @+0xFF80、PCXI/PSW/PC @+0xFE00/04/08 */
+static int das_reg_read(OS_RegSet* rs)
+{
+    mcd_core_state_st st;
+    uint32_t d[16], a[16], sys[3];
+    uint64_t base;
+    int i;
+    if (!rs) return OS_ERR_INVALID_ARG;
+    memset(rs, 0, sizeof(*rs));
+    rs->arch = OS_ARCH_TRICORE;
+    EnterCriticalSection(&g_ctx.cs);
+    if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
+    memset(&st, 0, sizeof(st));
+    if (g_ctx.api.qry_state(g_ctx.core, &st) != MCD_RET_ACT_NONE) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_FAIL; }
+    if (st.state == MCD_CORE_STATE_RUNNING) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_BUSY; }
+    base = 0xF8810000ull + (uint64_t)g_ctx.core_index * 0x20000ull;
+    if (das_xfer_locked(base + 0xFF00u, (uint8_t*)d, sizeof(d), 0) != 0 ||
+        das_xfer_locked(base + 0xFF80u, (uint8_t*)a, sizeof(a), 0) != 0 ||
+        das_xfer_locked(base + 0xFE00u, (uint8_t*)sys, sizeof(sys), 0) != 0) {
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_FAIL;
+    }
+    LeaveCriticalSection(&g_ctx.cs);
+    for (i = 0; i < 16; i++) {
+        rs->value[i] = d[i]; rs->valid[i] = 1; das_fmt(rs->name[i], sizeof(rs->name[i]), "D%d", i);
+        rs->value[16 + i] = a[i]; rs->valid[16 + i] = 1; das_fmt(rs->name[16 + i], sizeof(rs->name[16 + i]), "A%d", i);
+    }
+    rs->value[40] = sys[2]; rs->valid[40] = 1; das_fmt(rs->name[40], 8, "PC");
+    rs->value[41] = sys[1]; rs->valid[41] = 1; das_fmt(rs->name[41], 8, "PSW");
+    rs->value[42] = sys[0]; rs->valid[42] = 1; das_fmt(rs->name[42], 8, "PCXI");
+    rs->count = 43;
+    return OS_ERR_OK;
 }
 
 static int mod_write(OS_MemReq* req)
@@ -685,6 +720,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_STEP_OUT:      return das_step_out();
     case OS_CMD_BP_SET: case OS_CMD_BP_CLEAR: case OS_CMD_BP_LIST:
         return das_bp_cmd(cmd, in, out);
+    case OS_CMD_REG_READ:      return das_reg_read((OS_RegSet*)out);
     case OS_CMD_AI_DESCRIBE:   return mod_describe((char*)out);
     case OS_CMD_ELF_RELOADED:  return OS_ERR_OK;
     case OS_CMD_FLASH_DOWNLOAD:

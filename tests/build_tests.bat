@@ -23,7 +23,7 @@ if errorlevel 1 (
 )
 
 cl /nologo /W2 /utf-8 /I code\src tests\elf_smoke.c ^
-    code\src\elf.c code\src\vartree.c code\src\util.c tests\ws_stub.c ^
+    code\src\elf.c code\src\dwloc.c code\src\vartree.c code\src\util.c tests\ws_stub.c ^
     /Fe:tests\bin\elf_smoke.exe /link user32.lib gdi32.lib
 if errorlevel 1 (
   echo [ERROR] elf_smoke build failed
@@ -31,7 +31,7 @@ if errorlevel 1 (
 )
 
 cl /nologo /W2 /utf-8 /I code\src tests\dump_elf.c ^
-    code\src\elf.c code\src\vartree.c code\src\util.c tests\ws_stub.c ^
+    code\src\elf.c code\src\dwloc.c code\src\vartree.c code\src\util.c tests\ws_stub.c ^
     /Fe:tests\bin\dump_elf.exe /link user32.lib gdi32.lib
 if errorlevel 1 (
   echo [ERROR] dump_elf build failed
@@ -39,7 +39,7 @@ if errorlevel 1 (
 )
 
 cl /nologo /W2 /utf-8 /I code\src tests\enc_smoke.c ^
-    code\src\elf.c code\src\vartree.c code\src\util.c tests\ws_stub.c ^
+    code\src\elf.c code\src\dwloc.c code\src\vartree.c code\src\util.c tests\ws_stub.c ^
     /Fe:tests\bin\enc_smoke.exe /link user32.lib gdi32.lib
 if errorlevel 1 (
   echo [ERROR] enc_smoke build failed
@@ -50,6 +50,19 @@ cl /nologo /W2 /utf-8 /I code\src tests\replay_smoke.c code\src\datalog.c tests\
     /Fe:tests\bin\replay_smoke.exe /link user32.lib
 if errorlevel 1 (
   echo [ERROR] replay_smoke build failed
+  exit /b 1
+)
+
+cl /nologo /W2 /utf-8 /I code\src tests\dwloc_test.c code\src\dwloc.c ^
+    /Fe:tests\bin\dwloc_test.exe
+if errorlevel 1 (
+  echo [ERROR] dwloc_test build failed
+  exit /b 1
+)
+echo Running dwloc test...
+tests\bin\dwloc_test.exe
+if errorlevel 1 (
+  echo [ERROR] dwloc_test FAILED
   exit /b 1
 )
 

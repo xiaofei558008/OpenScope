@@ -460,10 +460,27 @@ static uint32_t stlink_fpb_comp_word(uint32_t addr)
     return comp;
 }
 
+/* FPB 命中要停核，DHCSR.C_DEBUGEN 必须为 1；HOTPLUG Attach 后可能为 0，
+ * 此时 BKPT 匹配会升级为 HardFault（目标卡死在 HardFault_Handler）。只置 C_DEBUGEN，不 halt。 */
+static int stlink_ensure_debugen(void)
+{
+    OS_MemReq rd;
+    uint8_t b[4];
+    uint32_t dhcsr;
+    memset(&rd, 0, sizeof(rd));
+    rd.address = 0xE000EDF0u; rd.size = 4; rd.data = b;
+    if (mod_read(&rd) < 0) return -1;
+    dhcsr = (uint32_t)b[0] | ((uint32_t)b[1] << 8) | ((uint32_t)b[2] << 16) | ((uint32_t)b[3] << 24);
+    if (dhcsr & 1u) return 0;
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 断点: DHCSR.C_DEBUGEN=0（Attach），置位以便断点停核");
+    return stlink_write_u32(0xE000EDF0u, 0xA05F0001u);
+}
+
 static int stlink_fpb_slot_write(int slot, uint32_t addr_or_zero)
 {
     uint32_t comp = addr_or_zero ? stlink_fpb_comp_word(addr_or_zero) : 0;
     if (slot < 0 || slot >= STLINK_FPB_MAX) return -1;
+    if (addr_or_zero && stlink_ensure_debugen() < 0) return -1;
     if (stlink_write_u32(STLINK_FPB_CTRL, 3u) < 0) return -1; /* KEY|ENABLE */
     return stlink_write_u32(STLINK_FPB_COMP0 + (uint32_t)slot * 4u, comp);
 }
@@ -508,6 +525,22 @@ static int stlink_fpb_free_slot(int slot)
         if (g_fpb[i].addr) any = 1;
     if (!any) stlink_write_u32(STLINK_FPB_CTRL, 2u); /* KEY, disable unit */
     return 0;
+}
+
+/* 停在 FPB 断点地址上时，直接 Run/Step 会在同一条指令再次命中（PC 不前进）。
+ * 先临时关掉该比较器单步越过，再恢复。返回 1 = 已越过（或不在断点上 0）。 */
+static int stlink_step_past_bp(void)
+{
+    unsigned int pc = 0;
+    int slot;
+    if (!g_ctx.api.read_cortex_reg || g_ctx.api.read_cortex_reg(15, &pc) != 0) return 0;
+    slot = stlink_fpb_find(pc & ~1u);
+    if (slot < 0) return 0;
+    stlink_write_u32(STLINK_FPB_COMP0 + (uint32_t)slot * 4u, 0);
+    if (g_ctx.api.step_cpu) g_ctx.api.step_cpu();
+    else stlink_step_dhcsr();
+    stlink_write_u32(STLINK_FPB_COMP0 + (uint32_t)slot * 4u, stlink_fpb_comp_word(g_fpb[slot].addr));
+    return 1;
 }
 
 static int stlink_bp_set(const OS_BpReq* req)
@@ -558,6 +591,33 @@ static int stlink_bp_list(OS_BpList* list)
     return OS_ERR_OK;
 }
 
+
+/* 寄存器（停核时）：readCortexReg 0..15 = R0..R15，16 = xPSR */
+static int stlink_reg_read(OS_RegSet* rs)
+{
+    OS_MemReq mreq;
+    uint8_t buf[4];
+    uint32_t dhcsr;
+    unsigned int i, v;
+    static const char* const nm[17] = {"R0","R1","R2","R3","R4","R5","R6","R7","R8","R9","R10","R11","R12","SP","LR","PC","xPSR"};
+    if (!rs) return OS_ERR_INVALID_ARG;
+    memset(rs, 0, sizeof(*rs));
+    rs->arch = OS_ARCH_ARM_CM;
+    if (!g_ctx.api.read_cortex_reg) return OS_ERR_UNSUPPORTED;
+    memset(&mreq, 0, sizeof(mreq));
+    mreq.address = 0xE000EDF0u; mreq.size = 4; mreq.data = buf;
+    if (mod_read(&mreq) < 0) return OS_ERR_FAIL;
+    dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
+    if (!(dhcsr & (1u << 17))) return OS_ERR_BUSY; /* 运行中：不读（readCortexReg 可能强制 halt） */
+    for (i = 0; i < 17; i++) {
+        v = 0;
+        if (g_ctx.api.read_cortex_reg(i, &v) == 0) { rs->value[i] = v; rs->valid[i] = 1; }
+        _snprintf(rs->name[i], sizeof(rs->name[i]) - 1, "%s", nm[i]);
+    }
+    rs->count = 17;
+    return OS_ERR_OK;
+}
+
 static int stlink_step_out(void)
 {
     unsigned int lr = 0;
@@ -578,6 +638,7 @@ static int stlink_step_out(void)
         if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link StepOut: 无空闲 FPB 槽");
         return OS_ERR_FAIL;
     }
+    stlink_step_past_bp();
     if (g_ctx.api.run_cpu) g_ctx.api.run_cpu();
     memset(&rd, 0, sizeof(rd));
     rd.address = 0xE000EDF0u;
@@ -922,6 +983,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         return OS_ERR_FAIL;
     case OS_CMD_GO:
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        stlink_step_past_bp();
         if (g_ctx.api.run_cpu) {
             int rc = g_ctx.api.run_cpu();
             return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
@@ -960,6 +1022,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_STEP:
     case OS_CMD_STEP_IN:
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (stlink_step_past_bp()) return OS_ERR_OK;
         if (g_ctx.api.step_cpu) {
             int rc = g_ctx.api.step_cpu();
             return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
@@ -968,6 +1031,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_STEP_OVER:
         /* 迭代1：等同 Step */
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (stlink_step_past_bp()) return OS_ERR_OK;
         if (g_ctx.api.step_cpu) {
             int rc = g_ctx.api.step_cpu();
             return (rc == 0) ? OS_ERR_OK : OS_ERR_FAIL;
@@ -976,6 +1040,9 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_STEP_OUT:
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         return stlink_step_out();
+    case OS_CMD_REG_READ:
+        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        return stlink_reg_read((OS_RegSet*)out);
     case OS_CMD_BP_SET:
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         return stlink_bp_set((const OS_BpReq*)in);

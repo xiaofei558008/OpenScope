@@ -86,6 +86,7 @@ typedef struct {
 #define IDM_TREE_FIND 2703 /* Ctrl+F 快速搜索变量（加速键，main.c 消息循环层拦截） */
 #define IDM_SRC_QUICK 2704 /* Ctrl+P 快速打开源码文件 */
 #define IDM_WIN_SOURCE 2705 /* 新建源码窗口 */
+#define IDM_WIN_LOCALS 2730 /* 局部变量窗口 */
 
 typedef enum {
     OS_ACQ_STOPPED = 0,

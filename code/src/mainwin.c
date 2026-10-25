@@ -1,5 +1,6 @@
 #include "app.h"
 #include "mainwin.h"
+#include "locals.h"
 #include "dockbar.h"
 #include "srcmap.h"
 #include "bpwin.h"
@@ -468,6 +469,7 @@ static void refresh_cpu_status(void)
     if (!g_app.connected || !g_app.driver || !g_app.driver->command || g_app.net_mode) {
         SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
         g_cpu_prev_halted = -1;
+        os_locals_on_cpu(-1, 0, 0);
         return;
     }
     memset(&st, 0, sizeof(st));
@@ -478,6 +480,7 @@ static void refresh_cpu_status(void)
         return;
     }
     follow_pc_to_source(&st);
+    os_locals_on_cpu(st.halted, st.pc_valid ? (uint32_t)st.pc : 0, 1);
     g_cpu_prev_halted = st.halted;
     if (st.pc_valid) g_cpu_prev_pc = st.pc;
     _snprintf(label, sizeof(label), "%s", st.state[0] ? st.state : "-");
@@ -1031,6 +1034,11 @@ HWND os_win_create_by_type(const char* type, const wchar_t* title)
         if (h) add_win_item(h, 0, NULL, NULL, title);
         return h;
     }
+    if (strcmp(type, "locals") == 0) {
+        h = os_locals_create(g_app.hTab, 0, 0, 200, 150, title);
+        if (h) add_win_item(h, 0, NULL, NULL, title);
+        return h;
+    }
     if (strcmp(type, "source") == 0) {
         h = os_src_create(g_app.hTab, 0, 0, 200, 150, title);
         if (h) add_win_item(h, 0, NULL, NULL, title);
@@ -1065,6 +1073,7 @@ static void new_win_context_menu(void)
     AppendMenuW(m, MF_STRING, IDM_WIN_CHART, L"新建波形窗口");
     AppendMenuW(m, MF_STRING, IDM_WIN_NUM, L"新建数值窗口");
     AppendMenuW(m, MF_STRING, IDM_WIN_SOURCE, L"新建源码窗口");
+    AppendMenuW(m, MF_STRING, IDM_WIN_LOCALS, L"局部变量窗口");
     for (i = 0; i < g_modwin_menu_count; i++) {
         wchar_t wname[128];
         os_utf8_to_wide_buf(g_modwin_menu[i].wt->display_name ? g_modwin_menu[i].wt->display_name
@@ -2599,6 +2608,7 @@ void os_mainwin_rebuild_window_menu(void)
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_CHART, L"波形窗口");
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_NUM, L"数值窗口");
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_SOURCE, L"源码窗口");
+    AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_LOCALS, L"局部变量");
     g_modwin_menu_count = 0;
     for (i = 0; i < g_app.winmod_count; i++) {
         const OS_WindowType* wt = g_app.winmods[i]->window_types;
@@ -4620,6 +4630,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_mainwin_rebuild_window_menu();
         SetTimer(hwnd, 1, 2000, NULL);
         SetTimer(hwnd, 3, 200, NULL); /* N9(d): 变量栏自动隐藏轮询 */
+        SetTimer(hwnd, 4, 500, NULL); /* 局部变量窗口：仅查询 CPU 运行/停住状态（不读变量） */
         g_app.tree_auto = 0;          /* 默认钉住常显（不影响既有操作） */
         refresh_tree_pin();
         os_log_set(os_mainwin_append_log);
@@ -4780,6 +4791,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if (wParam == 1) check_elf_mtime();
         else if (wParam == 2) os_replay_tick();
         else if (wParam == 3) { tree_auto_tick(); os_tab_edit_focus_check(); }
+        else if (wParam == 4) {
+            /* 只有打开了局部变量窗口才查询 CPU 状态；变量只在停住且 PC 变化时读一次 */
+            if (os_locals_window_count() > 0 && g_app.connected && !g_app.net_mode)
+                refresh_cpu_status();
+        }
         return 0;
     /* Windows 将 WM_MOUSEWHEEL 发送给拥有键盘焦点的窗口，而非鼠标下方的窗口。
      * 当用户点击左侧变量树后，焦点在树——此后在波形绘图区滚轮缩放会被树吞掉。
@@ -5222,6 +5238,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         case IDM_WIN_CHART: cmd_add_window(1); break;
         case IDM_WIN_NUM: cmd_add_window(0); break;
+        case IDM_WIN_LOCALS: os_locals_open(); break;
         case IDM_WIN_SOURCE:
             if (g_srcidx.count <= 0) refresh_src_tree();
             if (g_srcidx.count <= 0) {
@@ -5597,6 +5614,9 @@ LRESULT os_mainwin_src_ui(OS_SrcUiReq* req)
     } else if (req->op == 1) {
         req->result = os_mainwin_src_follow_pc(req->pc, req->out_path,
                                                (int)sizeof(req->out_path), &req->out_line);
+    } else if (req->op == 2) {
+        req->result = os_locals_open() ? 0 : -1;
+        refresh_cpu_status();
     }
     return req->result;
 }
@@ -5617,6 +5637,14 @@ int os_mainwin_src_open_safe(const char* path_utf8, int goto_line)
     req.op = 0;
     req.line = goto_line;
     if (path_utf8) _snprintf(req.path, sizeof(req.path), "%s", path_utf8);
+    return src_ui_invoke(&req);
+}
+
+int os_mainwin_locals_open_safe(void)
+{
+    OS_SrcUiReq req;
+    memset(&req, 0, sizeof(req));
+    req.op = 2;
     return src_ui_invoke(&req);
 }
 
