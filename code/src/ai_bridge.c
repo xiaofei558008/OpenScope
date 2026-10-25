@@ -115,6 +115,18 @@ static int ai_ok(char* out, int cap, const char* body)
     return OS_ERR_OK;
 }
 
+/* 传输失败后模块可能已 drop_link，同步宿主标志避免僵尸“已连接” */
+static void ai_xcp_resync(void)
+{
+    int c = 0;
+    if (g_app.xcpmod && g_app.xcpmod->command)
+        g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+    if (g_app.xcp_connected != c) {
+        g_app.xcp_connected = c;
+        os_mainwin_request_ui_sync();
+    }
+}
+
 static int ai_fail(char* out, int cap, int code, const char* msg)
 {
     if (out && cap > 0)
@@ -1002,7 +1014,11 @@ int os_ai_call(const char* method, const char* params_json,
         memset(&req, 0, sizeof(req));
         req.address = addr; req.size = (uint32_t)size; req.data = buf;
         rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
-        if (rc < 0) { free(buf); return ai_fail(result_json, result_cap, rc, "xcp read failed"); }
+        if (rc < 0) {
+            free(buf);
+            ai_xcp_resync();
+            return ai_fail(result_json, result_cap, rc, "xcp read failed");
+        }
         for (i = 0; i < size && n < (int)sizeof(hex) - 3; i++)
             n += _snprintf(hex + n, sizeof(hex) - n, "%02x", buf[i]);
         free(buf);
@@ -1039,8 +1055,10 @@ int os_ai_call(const char* method, const char* params_json,
         memset(&req, 0, sizeof(req));
         req.address = addr; req.size = (uint32_t)n; req.data = buf;
         rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
-        if (rc != OS_ERR_OK)
+        if (rc != OS_ERR_OK) {
+            ai_xcp_resync();
             return ai_fail(result_json, result_cap, rc, "xcp write failed");
+        }
         _snprintf(result_json, result_cap,
             "{\"ok\":true,\"address\":\"0x%llX\",\"size\":%d}",
             (unsigned long long)addr, n);
@@ -1134,8 +1152,10 @@ int os_ai_call(const char* method, const char* params_json,
         req.size = s.size;
         req.data = buf;
         rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
-        if (rc < 0)
+        if (rc < 0) {
+            ai_xcp_resync();
             return ai_fail(result_json, result_cap, rc, "xcp read failed");
+        }
         value[0] = 0;
         os_xcpsym_format_value(&s, buf, (int)s.size, value, sizeof(value));
         hex_encode(buf, (int)s.size, hex, sizeof(hex));
@@ -1191,8 +1211,10 @@ int os_ai_call(const char* method, const char* params_json,
             req.size = s.size;
             req.data = raw;
             rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
-            if (rc < 0)
+            if (rc < 0) {
+                ai_xcp_resync();
                 return ai_fail(result_json, result_cap, rc, "bitfield read failed");
+            }
             base = 0;
             for (i = 0; i < (int)s.size; i++) base |= ((uint64_t)raw[i]) << (8 * i);
             val = 0;
@@ -1211,8 +1233,10 @@ int os_ai_call(const char* method, const char* params_json,
             req.data = enc;
             rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
         }
-        if (rc != OS_ERR_OK)
+        if (rc != OS_ERR_OK) {
+            ai_xcp_resync();
             return ai_fail(result_json, result_cap, rc, "xcp write failed");
+        }
         json_escape(s.name, name_json, sizeof(name_json));
         json_escape(text, val_json, sizeof(val_json));
         _snprintf(result_json, result_cap,

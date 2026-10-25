@@ -260,6 +260,177 @@ void os_theme_listview_header(HWND list)
     RedrawWindow(hdr, NULL, NULL, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
 }
 
+/* ---------------- 菜单 / 窗口树暗色 ---------------- */
+
+void os_theme_menu(HMENU menu)
+{
+    MENUINFO mi;
+    if (!menu) return;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    mi.fMask = MIM_BACKGROUND | MIM_APPLYTOSUBMENUS;
+    /* 暗色用 PANEL；亮色恢复系统默认（NULL） */
+    mi.hbrBack = g_dark ? os_theme_brush(TH_PANEL) : NULL;
+    SetMenuInfo(menu, &mi);
+}
+
+static void flush_menu_themes(void)
+{
+    static OS_Theme_FlushMenuThemes flush_menu;
+    static int inited;
+    if (!inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) flush_menu = (OS_Theme_FlushMenuThemes)GetProcAddress(ux, (LPCSTR)136);
+        inited = 1;
+    }
+    if (flush_menu) flush_menu();
+}
+
+void os_theme_hwnd_dark(HWND hwnd)
+{
+    static OS_Theme_AllowDarkModeForWindow allow_dark;
+    static int ad_inited;
+    typedef HRESULT (WINAPI* SetWinThemeFn)(HWND, LPCWSTR, LPCWSTR);
+    static SetWinThemeFn set_theme;
+    static int st_inited;
+    if (!hwnd || !IsWindow(hwnd)) return;
+    if (!ad_inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) allow_dark = (OS_Theme_AllowDarkModeForWindow)GetProcAddress(ux, (LPCSTR)133);
+        ad_inited = 1;
+    }
+    if (!st_inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) set_theme = (SetWinThemeFn)GetProcAddress(ux, "SetWindowTheme");
+        st_inited = 1;
+    }
+    if (allow_dark) allow_dark(hwnd, g_dark ? TRUE : FALSE);
+    if (set_theme) set_theme(hwnd, g_dark ? L"DarkMode_Explorer" : L"Explorer", NULL);
+}
+
+/* 弹出菜单窗口类 #32768：创建时打暗色，否则下拉框仍浅色 */
+static HHOOK g_menu_hook;
+static int g_menu_hook_depth;
+
+static LRESULT CALLBACK menu_cbt_proc(int code, WPARAM wParam, LPARAM lParam)
+{
+    if (code == HCBT_CREATEWND && g_dark) {
+        CBT_CREATEWNDW* cw = (CBT_CREATEWNDW*)lParam;
+        CREATESTRUCTW* cs = cw ? cw->lpcs : NULL;
+        if (cs && cs->lpszClass) {
+            const wchar_t* cls = NULL;
+            wchar_t buf[64];
+            if (IS_INTRESOURCE(cs->lpszClass)) {
+                /* atom：用 GetClassName 在窗口创建后处理；此处无法可靠取名 */
+            } else {
+                cls = cs->lpszClass;
+            }
+            if (cls && (wcscmp(cls, L"#32768") == 0 || _wcsicmp(cls, L"Menu") == 0)) {
+                /* HWND 在 CREATE 时尚未完全就绪，延迟到 ACTIVATE */
+            }
+            (void)buf;
+        }
+    }
+    if (code == HCBT_ACTIVATE && g_dark) {
+        HWND h = (HWND)wParam;
+        wchar_t cls[64];
+        if (GetClassNameW(h, cls, 64) > 0 &&
+            (wcscmp(cls, L"#32768") == 0 || _wcsicmp(cls, L"Menu") == 0)) {
+            os_theme_hwnd_dark(h);
+        }
+    }
+    return CallNextHookEx(g_menu_hook, code, wParam, lParam);
+}
+
+static void menu_hook_push(void)
+{
+    if (g_menu_hook_depth++ == 0)
+        g_menu_hook = SetWindowsHookExW(WH_CBT, menu_cbt_proc, NULL, GetCurrentThreadId());
+}
+
+static void menu_hook_pop(void)
+{
+    if (g_menu_hook_depth <= 0) return;
+    if (--g_menu_hook_depth == 0 && g_menu_hook) {
+        UnhookWindowsHookEx(g_menu_hook);
+        g_menu_hook = NULL;
+    }
+}
+
+void os_theme_menu_show(HMENU menu)
+{
+    os_theme_menu(menu);
+    flush_menu_themes();
+    if (g_dark) menu_hook_push();
+}
+
+void os_theme_menu_end(void)
+{
+    if (g_dark) menu_hook_pop();
+}
+
+static void ctrl_set_dark_theme_local(HWND h)
+{
+    typedef HRESULT (WINAPI* SetWinThemeFn)(HWND, LPCWSTR, LPCWSTR);
+    static SetWinThemeFn fn;
+    static int inited;
+    const wchar_t* name;
+    if (!h || !IsWindow(h)) return;
+    if (!inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) fn = (SetWinThemeFn)GetProcAddress(ux, "SetWindowTheme");
+        inited = 1;
+    }
+    if (!fn) return;
+    name = g_dark ? L"DarkMode_Explorer" : L"Explorer";
+    fn(h, name, NULL);
+    SendMessageW(h, WM_THEMECHANGED, 0, 0);
+}
+
+static BOOL CALLBACK enum_dark_child(HWND h, LPARAM lp)
+{
+    static OS_Theme_AllowDarkModeForWindow allow_dark;
+    static int ad_inited;
+    (void)lp;
+    if (!ad_inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) allow_dark = (OS_Theme_AllowDarkModeForWindow)GetProcAddress(ux, (LPCSTR)133);
+        ad_inited = 1;
+    }
+    if (allow_dark) allow_dark(h, g_dark ? TRUE : FALSE);
+    ctrl_set_dark_theme_local(h);
+    EnumChildWindows(h, enum_dark_child, 0);
+    return TRUE;
+}
+
+void os_theme_window_tree(HWND root)
+{
+    static OS_Theme_AllowDarkModeForWindow allow_dark;
+    static int ad_inited;
+    if (!root || !IsWindow(root)) return;
+    if (!ad_inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) allow_dark = (OS_Theme_AllowDarkModeForWindow)GetProcAddress(ux, (LPCSTR)133);
+        ad_inited = 1;
+    }
+    if (allow_dark) allow_dark(root, g_dark ? TRUE : FALSE);
+    ctrl_set_dark_theme_local(root);
+    EnumChildWindows(root, enum_dark_child, 0);
+    /* DWM 标题栏 */
+    {
+        BOOL v = g_dark ? TRUE : FALSE;
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (dwm) {
+            HRESULT (WINAPI* fn)(HWND, int, const void*, DWORD) =
+                (HRESULT (WINAPI*)(HWND, int, const void*, DWORD))GetProcAddress(dwm, "DwmSetWindowAttribute");
+            if (fn) {
+                if (fn(root, 20, &v, sizeof(v)) != 0)
+                    fn(root, 19, &v, sizeof(v));
+            }
+        }
+    }
+}
+
 /* ---------------- 主题应用 ---------------- */
 
 /* mainwin.c 定义：把树/日志/状态栏/数字窗口列表等控件颜色刷成当前主题 */
@@ -267,11 +438,36 @@ void os_mainwin_apply_theme(void);
 
 void os_theme_apply(HWND hMain)
 {
+    HMENU m;
+    HWND top;
+    static OS_Theme_FlushMenuThemes flush_menu;
+    static int flush_inited;
     if (!hMain) hMain = g_main_hwnd;
+    if (!flush_inited) {
+        HMODULE ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux) flush_menu = (OS_Theme_FlushMenuThemes)GetProcAddress(ux, (LPCSTR)136);
+        flush_inited = 1;
+    }
     sys_dark_apply(g_dark);
     if (hMain && IsWindow(hMain)) {
+        os_theme_window_tree(hMain);
+        m = GetMenu(hMain);
+        if (m) {
+            os_theme_menu(m);
+            DrawMenuBar(hMain);
+        }
         RedrawWindow(hMain, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE | RDW_UPDATENOW);
     }
+    /* 顶层工具窗（dock 浮窗、XCP 窗等）：递归暗色 */
+    for (top = GetWindow(GetDesktopWindow(), GW_CHILD); top; top = GetWindow(top, GW_HWNDNEXT)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(top, &pid);
+        if (pid != GetCurrentProcessId()) continue;
+        if (top == hMain) continue;
+        if (!IsWindowVisible(top)) continue;
+        os_theme_window_tree(top);
+    }
+    if (flush_menu) flush_menu();
     os_mainwin_apply_theme();
 }
 

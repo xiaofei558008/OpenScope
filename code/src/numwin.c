@@ -5,6 +5,7 @@
 #include "datasrv.h"
 #include "util.h"
 #include "theme.h"
+#include "workspace.h"
 #include <commctrl.h>
 #include <string.h>
 
@@ -121,7 +122,14 @@ void os_num_push(HWND hwnd, const OS_Sample* s)
     if (row < 0) return;
     /* N10: 未勾选“实时更新”的行冻结，值保持不变，方便对比/手动写入 */
     if (!ListView_GetCheckState(nw->list, row)) return;
-    os_utf8_to_wide_buf(os_fw_leaf_name(s->var_id) ? os_fw_leaf_name(s->var_id) : "", wname, 300);
+    {
+        char label[320];
+        const OS_Leaf* L = os_vartree_leaf(s->var_id);
+        os_ws_leaf_label(L, label, sizeof(label));
+        if (!label[0] && os_fw_leaf_name(s->var_id))
+            _snprintf(label, sizeof(label), "%s", os_fw_leaf_name(s->var_id));
+        os_utf8_to_wide_buf(label, wname, 300);
+    }
     _snwprintf(waddr, 64, L"0x%llX", (unsigned long long)s->address);
     os_utf8_to_wide_buf(s->text, wval, 80);
     ListView_SetItemText(nw->list, row, NUM_COL_NAME, wname);
@@ -140,7 +148,12 @@ void os_num_add_var(HWND hwnd, int leaf_id)
     if (!nw) return;
     if (num_row_of(nw, leaf_id) >= 0 || nw->count >= OS_MAX_NUM_ROWS) return;
     L = os_vartree_leaf(leaf_id);
-    os_utf8_to_wide_buf(L ? L->name : "?", wname, 300);
+    {
+        char label[320];
+        os_ws_leaf_label(L, label, sizeof(label));
+        if (!label[0]) _snprintf(label, sizeof(label), "%s", L ? L->name : "?");
+        os_utf8_to_wide_buf(label, wname, 300);
+    }
     _snwprintf(waddr, 64, L"0x%llX", (unsigned long long)(L ? L->address : 0));
     memset(&item, 0, sizeof(item));
     item.mask = LVIF_TEXT;
@@ -498,6 +511,7 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 HMENU m = CreatePopupMenu();
                 POINT pt;
                 int row = ListView_GetNextItem(nw->list, -1, LVNI_SELECTED);
+                os_theme_menu_show(m);
                 AppendMenuW(m, MF_STRING, MENU_NUM_ADD, L"添加变量...");
                 AppendMenuW(m, MF_STRING | (row < 0 ? MF_GRAYED : 0), MENU_NUM_REMOVE, L"移除选中变量");
                 AppendMenuW(m, MF_STRING | (row < 0 ? MF_GRAYED : 0), MENU_NUM_WRITE, L"写入值（就地编辑）");
@@ -505,6 +519,7 @@ static LRESULT CALLBACK num_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 AppendMenuW(m, MF_STRING, MENU_NUM_CLOSE, L"关闭窗口");
                 GetCursorPos(&pt);
                 TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
+                os_theme_menu_end();
                 DestroyMenu(m);
                 return 0;
             }

@@ -5,6 +5,7 @@
 #include "numwin.h"
 #include "vartree.h"
 #include "batchplan.h"
+#include "workspace.h"
 #include <string.h>
 
 /* Bug10: 边缘目标高速下连接瞬时掉线（mod_read 重连节流 500ms 内读失败累积）。
@@ -29,9 +30,10 @@ static int os_batch_run_limit(void)
     return os_bp_run_limit(g_app.speed_khz);
 }
 
-/* 观测叶按地址排序后的批次项（高速模式收集表） */
+/* 观测叶按 (project_id, addr) 排序后的批次项 */
 typedef struct {
     int      idx;    /* g_app.leaves 下标 */
+    int      project_id;
     uint64_t addr;
     uint32_t size;   /* 实际读取字节（≤64，与单叶读一致） */
 } WatchLeaf;
@@ -66,17 +68,73 @@ static int cmp_watch_leaf(const void* a, const void* b)
 {
     const WatchLeaf* x = (const WatchLeaf*)a;
     const WatchLeaf* y = (const WatchLeaf*)b;
+    if (x->project_id < y->project_id) return -1;
+    if (x->project_id > y->project_id) return 1;
     if (x->addr < y->addr) return -1;
     if (x->addr > y->addr) return 1;
-    return 0; /* 同址叶（位域/别名/联合成员）：共享字节一次读出 */
+    return 0;
 }
 
-/* 一块连续内存一次读回，按叶偏移切分产出样本。
- * Bug10: 块读瞬时失败（mod_read 自动重连可自愈）只节流记日志，不中断采集；
- * 成功时更新 last_ok_ms 供停摆判定。 */
+static int acq_is_connected(void)
+{
+    int i;
+    OS_Module* m;
+    void* ctx;
+    if (g_app.xcp_connected && g_app.xcpmod) return 1;
+    if (g_app.connected && g_app.driver) return 1;
+    for (i = 0; i < os_ws()->project_count; i++) {
+        if (os_ws_resolve_mod(os_ws_project_at(i), &m, &ctx) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+int os_ds_any_connected(void)
+{
+    return acq_is_connected();
+}
+
+static int acq_read_mem_mod(OS_Module* mod, void* ctx, OS_MemReq* req)
+{
+    if (!mod || !mod->command || !req) return OS_ERR_NOT_CONNECTED;
+    return mod->command(ctx, OS_CMD_READ_MEM, req, NULL);
+}
+
+static int acq_read_mem(OS_MemReq* req)
+{
+    OS_Module* m = NULL;
+    void* ctx = NULL;
+    OS_Project* pr = os_ws_active();
+    if (!req) return OS_ERR_INVALID_ARG;
+    if (pr && os_ws_resolve_mod(pr, &m, &ctx) == 0)
+        return acq_read_mem_mod(m, ctx, req);
+    if (g_app.xcp_connected && g_app.xcpmod && g_app.xcpmod->command)
+        return g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, req, NULL);
+    if (g_app.driver && g_app.driver->command)
+        return g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, req, NULL);
+    return OS_ERR_NOT_CONNECTED;
+}
+
+static int acq_write_mem(OS_MemReq* req)
+{
+    OS_Module* m = NULL;
+    void* ctx = NULL;
+    OS_Project* pr = os_ws_active();
+    if (!req) return OS_ERR_INVALID_ARG;
+    if (pr && os_ws_resolve_mod(pr, &m, &ctx) == 0)
+        return m->command(ctx, OS_CMD_WRITE_MEM, req, NULL);
+    if (g_app.xcp_connected && g_app.xcpmod && g_app.xcpmod->command)
+        return g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, req, NULL);
+    if (g_app.driver && g_app.driver->command)
+        return g_app.driver->command(g_app.driver_ctx, OS_CMD_WRITE_MEM, req, NULL);
+    return OS_ERR_NOT_CONNECTED;
+}
+
+/* 一块连续内存一次读回（指定 Project 模块）。t_cycle_us=本轮 poll 共享时间戳（host-aligned）。 */
 static void read_run(WatchLeaf* wl, int first, int count, uint8_t* buf,
                      OS_Sample* batch, int* n,
-                     int* fail_count, ULONGLONG* last_ok_ms)
+                     int* fail_count, ULONGLONG* last_ok_ms,
+                     OS_Module* mod, void* ctx, int64_t t_cycle_us)
 {
     uint64_t run_addr = wl[first].addr;
     uint32_t run_sz = 0;
@@ -94,15 +152,16 @@ static void read_run(WatchLeaf* wl, int first, int count, uint8_t* buf,
                    (unsigned long long)run_addr, run_sz, count);
         return;
     }
+    if (!mod) return;
     memset(buf, 0, run_sz);
     req.address = run_addr;
     req.size = run_sz;
     req.data = buf;
-    r = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &req, NULL);
+    r = acq_read_mem_mod(mod, ctx, &req);
     if (r != (int)run_sz) {
         if ((*fail_count)++ < 3)
-            os_log(OS_LOG_ERROR, "块读 @0x%llX 失败 (ret=%d, %d 变量)",
-                   (unsigned long long)run_addr, r, count);
+            os_log(OS_LOG_ERROR, "块读 @0x%llX 失败 (ret=%d, %d 变量, proj=%d)",
+                   (unsigned long long)run_addr, r, count, wl[first].project_id);
         return;
     }
     *fail_count = 0;
@@ -113,9 +172,10 @@ static void read_run(WatchLeaf* wl, int first, int count, uint8_t* buf,
         const uint8_t* rawp = buf + (wl[k].addr - run_addr);
         uint32_t sz = wl[k].size;
         memset(s, 0, sizeof(*s));
-        s->ts_us = os_time_us();
+        s->ts_us = t_cycle_us > 0 ? t_cycle_us : os_time_us();
         s->var_id = L->id;
         s->address = L->address;
+        s->project_id = L->project_id;
         memcpy(s->raw, rawp, sz < 8 ? sz : 8);
         s->size = sz;
         os_format_raw(s->text, sizeof(s->text), rawp, sz, L->kind, L->is_signed, L->is_ptr,
@@ -151,14 +211,11 @@ static DWORD WINAPI poll_thread(LPVOID p)
     }
     while (!g_app.stop_poll) {
         int n = 0, i, nw = 0, run_first;
-        int connected = 0;
-        int tx_count = 0;   /* 本周期 J-Link 读事务次数（合并效果诊断） */
+        int connected = acq_is_connected();
+        int tx_count = 0;   /* 本周期读事务次数（合并效果诊断） */
         uint64_t run_addr, run_end;
-        if (g_app.driver && g_app.driver->command) {
-            g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &connected);
-        }
         if (!connected && GetTickCount64() - last_ok_ms > OS_POLL_STALL_MS) {
-            os_log(OS_LOG_ERROR, "采集停止：MCU 连接已断开");
+            os_log(OS_LOG_ERROR, "采集停止：MCU/XCP 连接已断开");
             break;
         }
         if (GetTickCount64() - last_ok_ms > OS_POLL_STALL_MS) {
@@ -182,6 +239,7 @@ static DWORD WINAPI poll_thread(LPVOID p)
             if (sz > 64) sz = 64;
             if (sz < 1) sz = 1;
             wl[nw].idx = i;
+            wl[nw].project_id = L->project_id;
             wl[nw].addr = L->address;
             wl[nw].size = sz;
             nw++;
@@ -191,27 +249,49 @@ static DWORD WINAPI poll_thread(LPVOID p)
         if (nw > 0) {
             int gap_lim = os_batch_gap_limit();
             int run_lim = os_batch_run_limit();
+            int seg0, seg1;
+            int64_t t_cycle = os_time_us(); /* 本周期共享时间戳，便于跨 MCU 对齐对比 */
             qsort(wl, nw, sizeof(WatchLeaf), cmp_watch_leaf);
-            run_first = 0;
-            run_addr = wl[0].addr;
-            run_end = run_addr + wl[0].size;
-            for (i = 1; i < nw; i++) {
-                uint64_t a = wl[i].addr;
-                uint64_t end = a + wl[i].size;
-                if (os_bp_should_split(run_addr, run_end, a, wl[i].size, gap_lim, run_lim)) {
-                    read_run(wl, run_first, i - run_first, buf, batch, &n,
-                             &fail_count, &last_ok_ms);
-                    tx_count++;
-                    run_first = i;
-                    run_addr = a;
-                    run_end = end;
-                } else if (end > run_end) {
-                    run_end = end;
+            /* 按 project_id 分段；段内再按地址合并块读（多 MCU 并行源） */
+            seg0 = 0;
+            while (seg0 < nw) {
+                OS_Module* mod = NULL;
+                void* ctx = NULL;
+                OS_Project* pr = os_ws_project(wl[seg0].project_id);
+                int pid = wl[seg0].project_id;
+                for (seg1 = seg0 + 1; seg1 < nw && wl[seg1].project_id == pid; seg1++) {}
+                if (!pr || os_ws_resolve_mod(pr, &mod, &ctx) != 0) {
+                    /* 禁止回退到其它 MCU，避免串读；跳过本段 */
+                    static int skip_log;
+                    if (skip_log++ < 8)
+                        os_log(OS_LOG_WARN, "采集跳过 project_id=%d（未连接）", pid);
+                    seg0 = seg1;
+                    continue;
                 }
+                if (mod) {
+                    run_first = seg0;
+                    run_addr = wl[seg0].addr;
+                    run_end = run_addr + wl[seg0].size;
+                    for (i = seg0 + 1; i < seg1; i++) {
+                        uint64_t a = wl[i].addr;
+                        uint64_t end = a + wl[i].size;
+                        if (os_bp_should_split(run_addr, run_end, a, wl[i].size, gap_lim, run_lim)) {
+                            read_run(wl, run_first, i - run_first, buf, batch, &n,
+                                     &fail_count, &last_ok_ms, mod, ctx, t_cycle);
+                            tx_count++;
+                            run_first = i;
+                            run_addr = a;
+                            run_end = end;
+                        } else if (end > run_end) {
+                            run_end = end;
+                        }
+                    }
+                    read_run(wl, run_first, seg1 - run_first, buf, batch, &n,
+                             &fail_count, &last_ok_ms, mod, ctx, t_cycle);
+                    tx_count++;
+                }
+                seg0 = seg1;
             }
-            read_run(wl, run_first, nw - run_first, buf, batch, &n,
-                     &fail_count, &last_ok_ms);
-            tx_count++;
         }
         if (n > 0) {
             os_ds_push_batch(batch, n);
@@ -275,20 +355,18 @@ static DWORD WINAPI poll_thread(LPVOID p)
 
 int os_ds_start(void)
 {
-    int conn = 0;
+    int conn;
     if (g_app.acq_state == OS_ACQ_RUNNING) return 0;
-    if (!g_app.driver || !g_app.driver->command) {
-        os_log(OS_LOG_ERROR, "无驱动模块，无法采集");
-        return -1;
-    }
-    /* 网络驱动的远端实例可能无硬件连接：快速失败，避免启动注定退出的采集线程 */
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &conn);
+    conn = acq_is_connected();
     if (!conn) {
-        os_log(OS_LOG_WARN, "MCU 未连接（%s），无法开始采集", g_app.driver->name);
+        if (!g_app.driver && !g_app.xcpmod)
+            os_log(OS_LOG_ERROR, "无探针驱动 / XCP 模块，无法采集");
+        else
+            os_log(OS_LOG_WARN, "请先连接探针或 XCP，再开始采集");
         return -1;
     }
     if (g_app.watch_count <= 0) {
-        os_log(OS_LOG_WARN, "没有观测变量，请先在左侧变量树勾选");
+        os_log(OS_LOG_WARN, "没有观测变量，请先将变量添加到波形/数值窗口");
         return -1;
     }
     g_app.stop_poll = 0;
@@ -310,10 +388,10 @@ int os_ds_start(void)
         return -1;
     }
     if (g_app.poll_interval_ms > 0)
-        os_log(OS_LOG_INFO, "采集已开始（周期 %d ms，%d 个变量）",
+        os_log(OS_LOG_INFO, "采集已开始（Workspace 多源，周期 %d ms，%d 个变量）",
                g_app.poll_interval_ms, g_app.watch_count);
     else
-        os_log(OS_LOG_INFO, "采集已开始（自由运行高速模式，%d 个变量）",
+        os_log(OS_LOG_INFO, "采集已开始（Workspace 多源，自由运行，%d 个变量）",
                g_app.watch_count);
     return 0;
 }
@@ -414,8 +492,8 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
     if (errlen > 0 && err) err[0] = 0;
     L = os_vartree_leaf(id);
     if (!L) { if (err && errlen) _snprintf(err, errlen, "变量 ID 无效"); return -1; }
-    if (!g_app.driver || !g_app.driver->command) {
-        /* 需求 14：本机无探针驱动（远端显示侧）→ 写值经网络转发到探针侧执行 */
+    if (!acq_is_connected()) {
+        /* 需求 14：本机无探针/XCP（远端显示侧）→ 写值经网络转发到探针侧执行 */
         if (g_app.netmod && g_app.netmod->command) {
             OS_NetWriteReq nreq;
             int rc;
@@ -430,7 +508,7 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
             if (err && errlen) _snprintf(err, errlen, "网络写入失败 (rc=%d)", rc);
             return -1;
         }
-        if (err && errlen) _snprintf(err, errlen, "无驱动模块");
+        if (err && errlen) _snprintf(err, errlen, "未连接探针或 XCP");
         return -1;
     }
     memset(raw, 0, sizeof(raw));
@@ -443,7 +521,7 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
         rr.address = L->address;
         rr.size = L->size;
         rr.data = cur;
-        r = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &rr, NULL);
+        r = acq_read_mem(&rr);
         if (r != (int)L->size) {
             if (err && errlen) _snprintf(err, errlen, "位域读回失败 (ret=%d)", r);
             return -1;
@@ -473,7 +551,7 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
     wr.address = L->address;
     wr.size = (uint32_t)n;
     wr.data = raw;
-    r = g_app.driver->command(g_app.driver_ctx, OS_CMD_WRITE_MEM, &wr, NULL);
+    r = acq_write_mem(&wr);
     if (r != OS_ERR_OK) {
         /* 注：本机有驱动时写失败不转发网络——否则探针侧写失败会与远端
          * 互相回传形成乒乓循环；只有纯远端显示侧（无驱动）才走网络转发。 */
@@ -489,7 +567,7 @@ int os_ds_write_leaf(int id, const char* text, char* err, int errlen)
         rr.address = L->address;
         rr.size = (uint32_t)n;
         rr.data = rb;
-        r = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &rr, NULL);
+        r = acq_read_mem(&rr);
         memset(&s, 0, sizeof(s));
         s.ts_us = os_time_us();
         s.var_id = L->id;

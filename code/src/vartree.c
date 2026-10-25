@@ -1,13 +1,20 @@
 #include "app.h"
 #include "vartree.h"
+#include "workspace.h"
+#include "elf.h"
 #include <commctrl.h>
 #include <string.h>
+#include <stdlib.h>
 
 static char g_missing[64][256];
 static int  g_missing_count;
 /* 需求2：树填充（删除重建）期间屏蔽 TVN_ITEMCHANGED 勾选联动——
  * 重建时树节点 lParam（旧叶 id+1）指向新叶表的错误变量，通知回写会误置观测标志 */
 static int  g_tree_filling;
+/* merge_elf 时强制叶 project_id；-1=用 active */
+static int  g_flatten_pid = -1;
+/* fill_tree 时按 Project 解析叶名 */
+static int  g_fill_pid = -1;
 
 static void add_leaf(const char* name, uint64_t addr, uint32_t size, OS_TypeKind kind,
                      int is_signed, int is_ptr, int is_bitfield, int bit_off, int bit_size,
@@ -29,6 +36,7 @@ static void add_leaf(const char* name, uint64_t addr, uint32_t size, OS_TypeKind
     L->is_bitfield = is_bitfield;
     L->bit_offset = (uint8_t)bit_off;
     L->bit_size = (uint8_t)bit_size;
+    L->project_id = (g_flatten_pid >= 0) ? g_flatten_pid : os_ws_active_id();
     if (enum_type) {
         for (i = 0; i < enum_type->child_count && i < 64; i++) {
             const OS_Type* e = enum_type->children[i];
@@ -122,22 +130,50 @@ static int was_watched(const char* name)
     return 0;
 }
 
+/* A2L 叶快照（ELF 重建时保留） */
+typedef struct {
+    char     name[256];
+    uint64_t address;
+    uint32_t size;
+    OS_TypeKind kind;
+    int      is_signed;
+    int      project_id;
+    int      watched;
+} OS_A2lSnap;
+
 int os_vartree_build(void)
 {
     static char old_watch[OS_MAX_LEAVES][256];
     static int old_count;
+    static OS_A2lSnap a2l_snap[OS_MAX_LEAVES];
+    static int a2l_n;
     char err[256];
-    int i, n;
+    int i, n, pid = os_ws_active_id();
     /* 保存旧观测（按全名） */
     old_count = 0;
+    a2l_n = 0;
     for (i = 0; i < g_app.leaf_count && old_count < OS_MAX_LEAVES; i++) {
         if (g_app.leaves[i].watched) {
             _snprintf(old_watch[old_count], 256, "%s", g_app.leaves[i].name);
             old_count++;
         }
+        /* 保留全部 A2L 叶（含其它 Project），避免 ELF 重载冲掉 */
+        if (g_app.leaves[i].from_a2l && a2l_n < OS_MAX_LEAVES) {
+            OS_A2lSnap* s = &a2l_snap[a2l_n++];
+            _snprintf(s->name, 256, "%s", g_app.leaves[i].name);
+            s->address = g_app.leaves[i].address;
+            s->size = g_app.leaves[i].size;
+            s->kind = g_app.leaves[i].kind;
+            s->is_signed = g_app.leaves[i].is_signed;
+            s->project_id = g_app.leaves[i].project_id;
+            s->watched = g_app.leaves[i].watched ? 1 : 0;
+        }
     }
     os_vartree_clear();
-    if (!g_app.elf) return 0;
+    if (!g_app.elf) {
+        /* 无 ELF 仍恢复 A2L / synth */
+        goto restore_extra;
+    }
     n = os_elf_var_count(g_app.elf);
     for (i = 0; i < n; i++) {
         const OS_Variable* v = os_elf_var_at(g_app.elf, i);
@@ -149,12 +185,18 @@ int os_vartree_build(void)
                      OS_TYPE_OTHER, 0, 0, 0, 0, 0, NULL);
         }
     }
+    /* 本 ELF 叶打上当前 Project */
+    for (i = 0; i < g_app.leaf_count; i++) {
+        if (!g_app.leaves[i].from_a2l && !g_app.leaves[i].is_synth)
+            g_app.leaves[i].project_id = pid;
+    }
     /* 恢复观测，记录缺失 */
     g_missing_count = 0;
     for (i = 0; i < old_count; i++) {
         int found = 0, j;
         for (j = 0; j < g_app.leaf_count; j++) {
-            if (!strcmp(g_app.leaves[j].name, old_watch[i])) {
+            if (!strcmp(g_app.leaves[j].name, old_watch[i]) &&
+                g_app.leaves[j].project_id == pid) {
                 g_app.leaves[j].watched = 1;
                 g_app.watch_count++;
                 found = 1;
@@ -167,11 +209,46 @@ int os_vartree_build(void)
         }
     }
     (void)err;
+restore_extra:
+    /* 重新挂回 A2L 叶（同 project+名已存在则只标 from_a2l） */
+    for (i = 0; i < a2l_n; i++) {
+        OS_A2lSnap* s = &a2l_snap[i];
+        int j, found = 0;
+        for (j = 0; j < g_app.leaf_count; j++) {
+            if (g_app.leaves[j].project_id == s->project_id &&
+                !strcmp(g_app.leaves[j].name, s->name)) {
+                g_app.leaves[j].from_a2l = 1;
+                g_app.leaves[j].address = s->address;
+                g_app.leaves[j].size = s->size;
+                if (s->watched && !g_app.leaves[j].watched) {
+                    g_app.leaves[j].watched = 1;
+                    g_app.watch_count++;
+                }
+                found = 1;
+                break;
+            }
+        }
+        if (!found && g_app.leaf_count < OS_MAX_LEAVES) {
+            OS_Leaf* L = &g_app.leaves[g_app.leaf_count];
+            memset(L, 0, sizeof(*L));
+            L->id = g_app.leaf_count;
+            _snprintf(L->name, sizeof(L->name), "%s", s->name);
+            L->address = s->address;
+            L->size = s->size;
+            L->kind = s->kind;
+            L->is_signed = s->is_signed;
+            L->from_a2l = 1;
+            L->project_id = s->project_id;
+            L->watched = s->watched ? 1 : 0;
+            if (L->watched) g_app.watch_count++;
+            g_app.leaf_count++;
+        }
+    }
     /* 需求14：远端同步变量在 ELF 重建后重新应用（ELF 重载不丢网络变量） */
     if (g_app.synth_count > 0)
         os_vartree_synths_apply();
-    os_log(OS_LOG_INFO, "ELF 变量表重建: %d 个叶子（原观测 %d 个，缺失 %d 个）",
-           g_app.leaf_count, old_count, g_missing_count);
+    os_log(OS_LOG_INFO, "ELF 变量表重建: %d 个叶子（原观测 %d 个，缺失 %d 个，A2L 保留 %d）",
+           g_app.leaf_count, old_count, g_missing_count, a2l_n);
     return g_app.leaf_count;
 }
 
@@ -264,11 +341,86 @@ const char* os_vartree_missing_at(int i)
 
 int os_vartree_find_by_name(const char* name)
 {
+    return os_vartree_find_by_name_proj(name, -1);
+}
+
+int os_vartree_find_by_name_proj(const char* name, int project_id)
+{
     int i;
+    if (!name) return -1;
     for (i = 0; i < g_app.leaf_count; i++) {
+        if (project_id >= 0 && g_app.leaves[i].project_id != project_id) continue;
         if (!strcmp(g_app.leaves[i].name, name)) return i;
     }
     return -1;
+}
+
+int os_vartree_merge_elf(int project_id, const wchar_t* path_w)
+{
+    OS_Project* pr = os_ws_project(project_id);
+    char utf8[MAX_PATH], err[256];
+    OS_ElfFile* elf;
+    OS_Leaf* keep = NULL;
+    int keep_n = 0, i, n;
+    if (!pr || !path_w || !path_w[0]) return -1;
+    /* 采集启停由调用方（load_elf_path 等）负责，避免单元测试链接 datasrv */
+    os_wide_to_utf8_buf(path_w, utf8, MAX_PATH);
+    elf = os_elf_open(utf8, err, sizeof(err));
+    if (!elf) {
+        os_log(OS_LOG_WARN, "ELF 合并失败 (project=%d): %s", project_id, err);
+        return -1;
+    }
+    /* 保留其它 Project 的叶 + 本 Project 的 A2L/synth */
+    keep = (OS_Leaf*)malloc(sizeof(OS_Leaf) * (size_t)(g_app.leaf_count + 1));
+    if (!keep) { os_elf_close(elf); return -1; }
+    for (i = 0; i < g_app.leaf_count; i++) {
+        OS_Leaf* L = &g_app.leaves[i];
+        if (L->project_id != project_id || L->from_a2l || L->is_synth)
+            keep[keep_n++] = *L;
+    }
+    os_vartree_clear();
+    for (i = 0; i < keep_n; i++) {
+        g_app.leaves[g_app.leaf_count] = keep[i];
+        g_app.leaves[g_app.leaf_count].id = g_app.leaf_count;
+        if (g_app.leaves[g_app.leaf_count].watched) g_app.watch_count++;
+        g_app.leaf_count++;
+    }
+    free(keep);
+    /* 展开本 Project ELF */
+    g_flatten_pid = project_id;
+    n = os_elf_var_count(elf);
+    for (i = 0; i < n; i++) {
+        const OS_Variable* v = os_elf_var_at(elf, i);
+        if (!v) continue;
+        if (v->type)
+            flatten(v->type, v->address, v->name, 0);
+        else
+            add_leaf(v->name, v->address, v->symbol_size ? (uint32_t)v->symbol_size : 4,
+                     OS_TYPE_OTHER, 0, 0, 0, 0, 0, NULL);
+    }
+    g_flatten_pid = -1;
+    if (pr->elf && pr->elf != g_app.elf) os_elf_close(pr->elf);
+    pr->elf = elf;
+    _snwprintf(pr->elf_path, MAX_PATH, L"%s", path_w);
+    /* 活动 Project 同步全局 g_app.elf（兼容旧代码） */
+    if (os_ws_active_id() == project_id) {
+        if (g_app.elf && g_app.elf != elf) {
+            /* 若旧全局 elf 属于其它 project，勿关 */
+            int owned = 0, j;
+            for (j = 0; j < os_ws()->project_count; j++) {
+                OS_Project* p2 = os_ws_project_at(j);
+                if (p2 && p2->elf == g_app.elf && p2->id != project_id) { owned = 1; break; }
+            }
+            if (!owned) os_elf_close(g_app.elf);
+        }
+        g_app.elf = elf;
+        _snwprintf(g_app.elf_path, MAX_PATH, L"%s", path_w);
+        g_app.elf_mtime = os_file_mtime_ms(path_w);
+    }
+    if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    os_log(OS_LOG_INFO, "Project %s 合并 ELF: %ls（叶表 %d）",
+           pr->name, path_w, g_app.leaf_count);
+    return g_app.leaf_count;
 }
 
 static int tree_select_recursive(HWND tree, HTREEITEM h, const wchar_t* target)
@@ -406,73 +558,44 @@ int os_vartree_set_watch(int id, int on)
     return 0;
 }
 
-static void set_check(HWND tree, HTREEITEM h, int checked); /* 定义在下方 fill_tree 区 */
-
-/* 递归查找 lParam=id+1 的树节点并设置勾选（配合 set_watch 联动左侧勾选框） */
-static int set_check_walk(HWND hTree, HTREEITEM node, int id, int on)
-{
-    HTREEITEM child;
-    TVITEMW item;
-    while (node) {
-        memset(&item, 0, sizeof(item));
-        item.mask = TVIF_PARAM;
-        item.hItem = node;
-        if (TreeView_GetItem(hTree, &item) && item.lParam == (LPARAM)(id + 1)) {
-            set_check(hTree, node, on);
-            return 1;
-        }
-        child = TreeView_GetChild(hTree, node);
-        if (child && set_check_walk(hTree, child, id, on)) return 1;
-        node = TreeView_GetNextSibling(hTree, node);
-    }
-    return 0;
-}
-
-/* 程序化设置某个叶变量在左侧树的勾选状态（lParam=id+1）。
- * 供“添加变量到窗口”时联动勾选，避免整树重建丢失展开状态。 */
+/* 兼容旧调用：树已无勾选框 */
 void os_vartree_set_check_ui(HWND hTree, int id, int on)
 {
-    HTREEITEM root;
-    if (!hTree || !IsWindow(hTree) || id < 0) return;
-    root = TreeView_GetRoot(hTree);
-    if (root) set_check_walk(hTree, root, id, on);
+    (void)hTree; (void)id; (void)on;
 }
 
 /* ---------- TreeView 填充 ---------- */
-
-static void set_check(HWND tree, HTREEITEM h, int checked)
-{
-    TVITEMW item;
-    memset(&item, 0, sizeof(item));
-    item.mask = TVIF_STATE;
-    item.hItem = h;
-    item.stateMask = TVIS_STATEIMAGEMASK;
-    item.state = INDEXTOSTATEIMAGEMASK(checked ? 2 : 1);
-    TreeView_SetItem(tree, &item);
-}
 
 static HTREEITEM add_node(HWND tree, HTREEITEM parent, const wchar_t* text, LPARAM lparam,
                           int leaf, int checked)
 {
     TVINSERTSTRUCTW ins;
+    (void)leaf;
+    (void)checked; /* 勾选框已移除；观测由窗口添加驱动 */
     memset(&ins, 0, sizeof(ins));
     ins.hParent = parent;
     ins.hInsertAfter = TVI_LAST;
-    ins.item.mask = TVIF_TEXT | TVIF_PARAM | TVIF_STATE;
+    ins.item.mask = TVIF_TEXT | TVIF_PARAM;
     ins.item.pszText = (LPWSTR)text;
     ins.item.lParam = lparam;
-    /* 需求2：重建后勾选状态随 watched 恢复（填充期间通知被 g_tree_filling 屏蔽，不会回写） */
-    ins.item.stateMask = TVIS_STATEIMAGEMASK;
-    ins.item.state = INDEXTOSTATEIMAGEMASK(checked ? 2 : 1);
     return TreeView_InsertItem(tree, &ins);
 }
 
 static void tree_add_leaf(HWND tree, HTREEITEM parent, const OS_Leaf* L)
 {
-    wchar_t wname[320], wfull[420];
+    wchar_t wname[320], wfull[480], wproj[80];
+    OS_Project* pr = os_ws_project(L->project_id);
     os_utf8_to_wide_buf(L->name, wname, 320);
-    _snwprintf(wfull, 420, L"%s  @0x%llX", wname, (unsigned long long)L->address);
-    add_node(tree, parent, wfull, (LPARAM)(L->id + 1), 1, L->watched ? 1 : 0);
+    wproj[0] = 0;
+    if (pr) {
+        wchar_t pn[64];
+        os_utf8_to_wide_buf(pr->name, pn, 64);
+        _snwprintf(wproj, 80, L"[%s] ", pn);
+    }
+    _snwprintf(wfull, 480, L"%s%s  @0x%llX%s",
+               wproj, wname, (unsigned long long)L->address,
+               L->from_a2l ? L" (A2L)" : L"");
+    add_node(tree, parent, wfull, (LPARAM)(L->id + 1), 1, 0);
 }
 
 static void tree_add_type(HWND tree, HTREEITEM parent, const OS_Type* t, const char* name,
@@ -493,7 +616,7 @@ static void tree_add_type(HWND tree, HTREEITEM parent, const OS_Type* t, const c
                 char leafpath[300];
                 int bid;
                 _snprintf(leafpath, 300, "%s.%s", name, c->name ? c->name : "anon");
-                bid = os_vartree_find_by_name(leafpath);
+                bid = os_vartree_find_by_name_proj(leafpath, g_fill_pid);
                 os_utf8_to_wide_buf(leafpath, wname, 320);
                 _snwprintf(wfull, 420, L"%s  @0x%llX  [bit %u:%u]",
                            wname, (unsigned long long)(addr + (uint64_t)c->member_offset),
@@ -531,7 +654,7 @@ static void tree_add_type(HWND tree, HTREEITEM parent, const OS_Type* t, const c
     }
     /* 叶子：查 leaf id */
     {
-        int id = os_vartree_find_by_name(name);
+        int id = os_vartree_find_by_name_proj(name, g_fill_pid);
         if (id >= 0) {
             tree_add_leaf(tree, parent, &g_app.leaves[id]);
         } else {
@@ -544,41 +667,88 @@ static void tree_add_type(HWND tree, HTREEITEM parent, const OS_Type* t, const c
 
 int os_vartree_is_filling(void) { return g_tree_filling; }
 
-void os_vartree_fill_tree(HWND hTree)
+static void fill_elf_under(HWND hTree, HTREEITEM parent, OS_ElfFile* elf)
 {
     int i, n;
     wchar_t wname[320];
     HTREEITEM h;
-    g_tree_filling = 1;
-    TreeView_DeleteAllItems(hTree);
-    if (g_app.elf) {
-        n = os_elf_var_count(g_app.elf);
-        for (i = 0; i < n; i++) {
-            const OS_Variable* v = os_elf_var_at(g_app.elf, i);
-            if (!v) continue;
-            os_utf8_to_wide_buf(v->name, wname, 320);
-            if (v->type && (v->type->kind == OS_TYPE_STRUCT || v->type->kind == OS_TYPE_UNION ||
-                            v->type->kind == OS_TYPE_ARRAY)) {
-                h = add_node(hTree, NULL, wname, (LPARAM)-1, 0, 0);
-                tree_add_type(hTree, h, v->type, v->name, v->address);
-            } else if (v->type) {
-                tree_add_type(hTree, NULL, v->type, v->name, v->address);
-            } else {
-                wchar_t wfull[420];
-                _snwprintf(wfull, 420, L"%s  @0x%llX  [%llu B]",
-                           wname, (unsigned long long)v->address,
-                           (unsigned long long)v->symbol_size);
-                add_node(hTree, NULL, wfull, (LPARAM)-1, 0, 0);
-            }
+    if (!elf) return;
+    n = os_elf_var_count(elf);
+    for (i = 0; i < n; i++) {
+        const OS_Variable* v = os_elf_var_at(elf, i);
+        if (!v) continue;
+        os_utf8_to_wide_buf(v->name, wname, 320);
+        if (v->type && (v->type->kind == OS_TYPE_STRUCT || v->type->kind == OS_TYPE_UNION ||
+                        v->type->kind == OS_TYPE_ARRAY)) {
+            h = add_node(hTree, parent, wname, (LPARAM)-1, 0, 0);
+            tree_add_type(hTree, h, v->type, v->name, v->address);
+        } else if (v->type) {
+            tree_add_type(hTree, parent, v->type, v->name, v->address);
+        } else {
+            wchar_t wfull[420];
+            int id = os_vartree_find_by_name_proj(v->name, g_fill_pid);
+            _snwprintf(wfull, 420, L"%s  @0x%llX  [%llu B]",
+                       wname, (unsigned long long)v->address,
+                       (unsigned long long)v->symbol_size);
+            add_node(hTree, parent, wfull, (LPARAM)(id >= 0 ? id + 1 : -1), 0, 0);
         }
     }
-    /* 需求14：远端同步变量（上传/下载 ELF 应用进来的）追加展示——本机无 ELF 时也显示 */
+}
+
+void os_vartree_fill_tree(HWND hTree)
+{
+    int pi, i;
+    g_tree_filling = 1;
+    TreeView_DeleteAllItems(hTree);
+    /* 按 Project 分组；无 Project 时退回全局 ELF */
+    if (os_ws()->project_count > 0) {
+        for (pi = 0; pi < os_ws()->project_count; pi++) {
+            OS_Project* pr = os_ws_project_at(pi);
+            wchar_t wroot[160], pn[64];
+            HTREEITEM root;
+            OS_ElfFile* elf;
+            char kind8[16];
+            if (!pr) continue;
+            os_utf8_to_wide_buf(pr->name, pn, 64);
+            _snprintf(kind8, sizeof(kind8), "%s", pr->kind == OS_PROJ_XCP ? "XCP" : "Probe");
+            {
+                wchar_t wk[16];
+                os_utf8_to_wide_buf(kind8, wk, 16);
+                _snwprintf(wroot, 160, L"%s%s (%s)%s",
+                           (pi == os_ws()->active) ? L"● " : L"",
+                           pn, wk, pr->connected ? L" [已连接]" : L"");
+            }
+            root = add_node(hTree, NULL, wroot, (LPARAM)-1, 0, 0);
+            elf = pr->elf ? pr->elf : ((os_ws_active_id() == pr->id) ? g_app.elf : NULL);
+            g_fill_pid = pr->id;
+            fill_elf_under(hTree, root, elf);
+            g_fill_pid = -1;
+            for (i = 0; i < g_app.leaf_count; i++) {
+                OS_Leaf* L = &g_app.leaves[i];
+                if (L->project_id != pr->id) continue;
+                if (L->is_synth) { tree_add_leaf(hTree, root, L); continue; }
+                if (L->from_a2l) {
+                    int in_elf = 0, j, nv;
+                    if (elf) {
+                        nv = os_elf_var_count(elf);
+                        for (j = 0; j < nv; j++) {
+                            const OS_Variable* v = os_elf_var_at(elf, j);
+                            if (v && !strcmp(v->name, L->name)) { in_elf = 1; break; }
+                        }
+                    }
+                    if (!in_elf) tree_add_leaf(hTree, root, L);
+                }
+            }
+        }
+    } else if (g_app.elf) {
+        fill_elf_under(hTree, NULL, g_app.elf);
+    }
+    /* 无 project_id 归属的 synth 挂根 */
     for (i = 0; i < g_app.leaf_count; i++) {
-        if (g_app.leaves[i].is_synth)
+        if (g_app.leaves[i].is_synth && !os_ws_project(g_app.leaves[i].project_id))
             tree_add_leaf(hTree, NULL, &g_app.leaves[i]);
     }
     g_tree_filling = 0;
-    (void)set_check;
 }
 
 /* ---------- 框架回调 ---------- */

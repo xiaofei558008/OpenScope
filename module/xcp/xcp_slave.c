@@ -694,7 +694,7 @@ void xcp_slave_tick(XcpSlave* s, uint16_t event, uint32_t time_us)
 int xcp_slave_input(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp, int rsp_cap)
 {
     if (!s || !cmd || !rsp || len < 1 || rsp_cap < XCP_MAX_CTO)
-        return put_err(rsp, XCP_ERR_GENERIC);
+        return rsp ? put_err(rsp, XCP_ERR_GENERIC) : -1;
     if (cmd[0] == XCP_CMD_SYNCH) return put_err(rsp, XCP_ERR_CMD_SYNCH);
     if (cmd[0] == XCP_CMD_CONNECT) return cmd_connect(s, rsp);
     if (!s->connected) return put_err(rsp, XCP_ERR_CMD_BUSY);

@@ -170,24 +170,54 @@ int os_modmgr_driver_index(void)
 
 int os_modmgr_select_driver(int idx)
 {
+    int c = 0;
     if (idx < 0 || idx >= g_app.driver_count) return OS_ERR_INVALID_ARG;
-    if (g_app.driver && g_app.driver->command && g_app.driver != g_app.drivers[idx])
-        g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+    /* Workspace 多 MCU：切换 UI 当前驱动时不断开其它驱动，允许 J-Link/ST-Link 并行连接 */
     g_app.driver = g_app.drivers[idx];
     g_app.driver_ctx = g_app.driver_ctxs[idx];
+    if (g_app.driver && g_app.driver->command)
+        g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+    g_app.connected = c;
     return OS_ERR_OK;
 }
 
 void os_modmgr_shutdown(void)
 {
     int i;
-    if (g_app.driver && g_app.driver->command) {
-        g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+    int done[OS_MAX_MODULES];
+    memset(done, 0, sizeof(done));
+
+    /* 1) 先停 AI：其 WebSocket 客户端线程可能仍在调 xcp/driver */
+    for (i = 0; i < g_app.mod_count; i++) {
+        if (g_app.mods[i].capabilities & OS_CAP_AI) {
+            if (g_app.mods[i].deinit) g_app.mods[i].deinit(g_app.mod_ctx[i]);
+            done[i] = 1;
+        }
     }
+
+    /* 2) 断开 XCP 并清宿主指针，避免 deinit 后悬空调用 */
+    if (g_app.xcpmod && g_app.xcpmod->command)
+        g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+    g_app.xcpmod = NULL;
+    g_app.xcpmod_ctx = NULL;
+    g_app.xcp_connected = 0;
+
+    /* 断开全部探针驱动（Workspace 多 MCU 可能并行连接） */
+    for (i = 0; i < g_app.driver_count; i++) {
+        if (g_app.drivers[i] && g_app.drivers[i]->command)
+            g_app.drivers[i]->command(g_app.driver_ctxs[i], OS_CMD_DISCONNECT, NULL, NULL);
+    }
+    g_app.connected = 0;
+
+    /* 3) 其余模块逆序卸载 */
     for (i = g_app.mod_count - 1; i >= 0; i--) {
-        if (g_app.mods[i].deinit) g_app.mods[i].deinit(g_app.mod_ctx[i]);
+        if (!done[i] && g_app.mods[i].deinit)
+            g_app.mods[i].deinit(g_app.mod_ctx[i]);
     }
     g_app.mod_count = 0;
     g_app.driver = NULL;
+    g_app.driver_ctx = NULL;
+    g_app.netmod = NULL;
+    g_app.netmod_ctx = NULL;
     g_app.winmod_count = 0;
 }

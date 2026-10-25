@@ -52,6 +52,9 @@ void os_dockbar_save(void);
 /* 强制某栏停靠到 side（FLOAT 时用当前浮窗位置） */
 void os_dockbar_set_dock(int id, OS_DockSide side);
 
+/* 主题切换后刷新两栏背景/自绘按钮 */
+void os_dockbar_apply_theme(void);
+
 #ifdef __cplusplus
 }
 #endif

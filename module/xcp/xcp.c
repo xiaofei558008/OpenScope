@@ -28,6 +28,25 @@ static XcpCtx g_ctx;
 static const OS_Framework* g_fw;
 static TrMap g_map[32];
 static int g_map_n;
+static volatile LONG g_alive;    /* 1=可接受命令 */
+static volatile LONG g_inflight; /* 进行中的 command 数 */
+
+/* 进入命令路径：失败则勿再碰 CS（可能已 Delete）。 */
+static int cmd_enter(void)
+{
+    if (InterlockedCompareExchange(&g_alive, 1, 1) != 1) return 0;
+    InterlockedIncrement(&g_inflight);
+    if (InterlockedCompareExchange(&g_alive, 1, 1) != 1) {
+        InterlockedDecrement(&g_inflight);
+        return 0;
+    }
+    return 1;
+}
+
+static void cmd_leave(void)
+{
+    InterlockedDecrement(&g_inflight);
+}
 
 static void xlog(int level, const char* fmt, ...)
 {
@@ -54,10 +73,23 @@ static void fill_info(void)
     g_ctx.info.connected = g_ctx.connected;
 }
 
+/* 传输故障时直接丢链路，不发 DISCONNECT（避免再阻塞/二次失败）。调用方须已持锁。 */
+static void drop_link_unlocked(void)
+{
+    if (g_ctx.tr && g_ctx.tr->close && g_ctx.link)
+        g_ctx.tr->close(g_ctx.link);
+    g_ctx.link = NULL;
+    g_ctx.tr = NULL;
+    g_ctx.connected = 0;
+    g_ctx.master.connected = 0;
+    g_ctx.last_opts[0] = 0;
+}
+
 static int mod_scan(OS_ScanReq* req)
 {
     int n = 0, t, i;
     if (!req || !req->items || req->capacity <= 0) return OS_ERR_INVALID_ARG;
+    EnterCriticalSection(&g_ctx.cs);
     g_map_n = 0;
     for (t = 0; t < xcp_transport_count() && n < req->capacity; t++) {
         const XcpTransport* tr = xcp_transport_at(t);
@@ -79,6 +111,7 @@ static int mod_scan(OS_ScanReq* req)
         }
     }
     req->count = n;
+    LeaveCriticalSection(&g_ctx.cs);
     xlog(OS_LOG_INFO, "XCP 扫描: %d 个端点（serial/can/tcp）", n);
     return OS_ERR_OK;
 }
@@ -87,11 +120,7 @@ static int mod_disconnect(void)
 {
     EnterCriticalSection(&g_ctx.cs);
     if (g_ctx.connected) xcp_master_disconnect(&g_ctx.master);
-    if (g_ctx.tr && g_ctx.tr->close && g_ctx.link) g_ctx.tr->close(g_ctx.link);
-    g_ctx.link = NULL;
-    g_ctx.tr = NULL;
-    g_ctx.connected = 0;
-    g_ctx.last_opts[0] = 0;
+    drop_link_unlocked();
     LeaveCriticalSection(&g_ctx.cs);
     xlog(OS_LOG_INFO, "XCP 已断开");
     return OS_ERR_OK;
@@ -180,6 +209,13 @@ static int mod_read(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     rc = xcp_master_upload(&g_ctx.master, (uint32_t)req->address, req->data, (int)req->size);
+    /* -1 传输/帧错误：链路已不可信，立即丢弃；-2 从机 ERR 可保留会话 */
+    if (rc == -1) {
+        xlog(OS_LOG_WARN, "XCP UPLOAD 传输失败，已断开 addr=0x%08X", (unsigned)req->address);
+        drop_link_unlocked();
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_TIMEOUT;
+    }
     LeaveCriticalSection(&g_ctx.cs);
     if (rc != 0) xlog(OS_LOG_WARN, "XCP UPLOAD 失败 addr=0x%08X size=%u",
                       (unsigned)req->address, (unsigned)req->size);
@@ -194,6 +230,12 @@ static int mod_write(OS_MemReq* req)
     EnterCriticalSection(&g_ctx.cs);
     if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     rc = xcp_master_download(&g_ctx.master, (uint32_t)req->address, req->data, (int)req->size);
+    if (rc == -1) {
+        xlog(OS_LOG_WARN, "XCP DOWNLOAD 传输失败，已断开 addr=0x%08X", (unsigned)req->address);
+        drop_link_unlocked();
+        LeaveCriticalSection(&g_ctx.cs);
+        return OS_ERR_TIMEOUT;
+    }
     LeaveCriticalSection(&g_ctx.cs);
     if (rc != 0) xlog(OS_LOG_WARN, "XCP DOWNLOAD 失败 addr=0x%08X", (unsigned)req->address);
     return rc == 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
@@ -216,28 +258,50 @@ static int mod_ai_describe(char* out)
 
 static int mod_command(void* ctx, int cmd, void* in, void* out)
 {
+    int connected, rc;
     (void)ctx;
-    switch (cmd) {
-    case OS_CMD_SCAN: return mod_scan((OS_ScanReq*)in);
-    case OS_CMD_CONNECT: return mod_connect((const OS_ConnectCfg*)in);
-    case OS_CMD_DISCONNECT: return mod_disconnect();
-    case OS_CMD_IS_CONNECTED:
-        if (out) *(int*)out = g_ctx.connected ? 1 : 0;
-        return OS_ERR_OK;
-    case OS_CMD_READ_MEM: return mod_read((OS_MemReq*)in);
-    case OS_CMD_WRITE_MEM: return mod_write((OS_MemReq*)in);
-    case OS_CMD_GET_INFO:
-        if (out) { fill_info(); memcpy(out, &g_ctx.info, sizeof(g_ctx.info)); }
-        return OS_ERR_OK;
-    case OS_CMD_AI_DESCRIBE:
+    if (cmd == OS_CMD_AI_DESCRIBE)
         return mod_ai_describe((char*)out);
+    if (!cmd_enter()) {
+        if (cmd == OS_CMD_IS_CONNECTED && out) *(int*)out = 0;
+        return OS_ERR_FAIL;
+    }
+    switch (cmd) {
+    case OS_CMD_SCAN: rc = mod_scan((OS_ScanReq*)in); break;
+    case OS_CMD_CONNECT: rc = mod_connect((const OS_ConnectCfg*)in); break;
+    case OS_CMD_DISCONNECT: rc = mod_disconnect(); break;
+    case OS_CMD_IS_CONNECTED:
+        EnterCriticalSection(&g_ctx.cs);
+        connected = g_ctx.connected ? 1 : 0;
+        LeaveCriticalSection(&g_ctx.cs);
+        if (out) *(int*)out = connected;
+        rc = OS_ERR_OK;
+        break;
+    case OS_CMD_READ_MEM: rc = mod_read((OS_MemReq*)in); break;
+    case OS_CMD_WRITE_MEM: rc = mod_write((OS_MemReq*)in); break;
+    case OS_CMD_GET_INFO:
+        if (out) {
+            EnterCriticalSection(&g_ctx.cs);
+            fill_info();
+            memcpy(out, &g_ctx.info, sizeof(g_ctx.info));
+            LeaveCriticalSection(&g_ctx.cs);
+        }
+        rc = OS_ERR_OK;
+        break;
     case OS_CMD_HALT:
     case OS_CMD_GO:
     case OS_CMD_RESET:
-        return g_ctx.connected ? OS_ERR_OK : OS_ERR_NOT_CONNECTED;
+        EnterCriticalSection(&g_ctx.cs);
+        connected = g_ctx.connected;
+        LeaveCriticalSection(&g_ctx.cs);
+        rc = connected ? OS_ERR_OK : OS_ERR_NOT_CONNECTED;
+        break;
     default:
-        return OS_ERR_FAIL;
+        rc = OS_ERR_FAIL;
+        break;
     }
+    cmd_leave();
+    return rc;
 }
 
 static int mod_init(const OS_Framework* fw, void** out_ctx)
@@ -248,6 +312,8 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     g_ctx.connected = 0;
     g_ctx.link = NULL;
     g_ctx.tr = NULL;
+    InterlockedExchange(&g_inflight, 0);
+    InterlockedExchange(&g_alive, 1);
     xcp_transport_init_builtins();
     xlog(OS_LOG_INFO,
          "xcp 模块: ASAM XCP 1.3，传输 serial/can/tcp（与探针、网络并行）");
@@ -256,8 +322,26 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
 
 static void mod_deinit(void* ctx)
 {
+    int spin;
     (void)ctx;
-    if (g_ctx.connected || g_ctx.link) mod_disconnect();
+    if (InterlockedExchange(&g_alive, 0) == 0) return;
+    /* 等进行中的 command 退出后再碰 CS / Delete */
+    for (spin = 0; spin < 500 && InterlockedCompareExchange(&g_inflight, 0, 0) != 0; spin++)
+        Sleep(10);
+    if (InterlockedCompareExchange(&g_inflight, 0, 0) != 0) {
+        /* 仍有调用方：只丢链路，保留 CS，避免 Delete 后 UAF 崩溃 */
+        xlog(OS_LOG_WARN, "XCP deinit: 仍有进行中的命令，跳过 DeleteCriticalSection");
+        EnterCriticalSection(&g_ctx.cs);
+        drop_link_unlocked();
+        LeaveCriticalSection(&g_ctx.cs);
+        return;
+    }
+    if (g_ctx.connected || g_ctx.link) {
+        EnterCriticalSection(&g_ctx.cs);
+        if (g_ctx.connected) xcp_master_disconnect(&g_ctx.master);
+        drop_link_unlocked();
+        LeaveCriticalSection(&g_ctx.cs);
+    }
     DeleteCriticalSection(&g_ctx.cs);
 }
 

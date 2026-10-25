@@ -22,9 +22,14 @@
 
 static const OS_Framework* g_fw;
 static volatile LONG g_running;
+static volatile LONG g_clients; /* 存活的 client_thread 数 */
 static HANDLE g_thread;
 static int g_listen = -1;
 static int g_port = AI_DEFAULT_PORT;
+static CRITICAL_SECTION g_conn_cs;
+static int g_conn_cs_ready;
+static OS_WSConn* g_conns[AI_MAX_CLIENTS];
+static int g_conn_n;
 
 typedef struct AiClient {
     OS_WSConn*    conn;
@@ -32,6 +37,39 @@ typedef struct AiClient {
     int           min_level; /* OS_LOG_* 严重度下限 */
     int           listening; /* 已注册 fw log listener */
 } AiClient;
+
+static void conn_track_add(OS_WSConn* c)
+{
+    if (!c || !g_conn_cs_ready) return;
+    EnterCriticalSection(&g_conn_cs);
+    if (g_conn_n < AI_MAX_CLIENTS)
+        g_conns[g_conn_n++] = c;
+    LeaveCriticalSection(&g_conn_cs);
+}
+
+static void conn_track_del(OS_WSConn* c)
+{
+    int i;
+    if (!c || !g_conn_cs_ready) return;
+    EnterCriticalSection(&g_conn_cs);
+    for (i = 0; i < g_conn_n; i++) {
+        if (g_conns[i] == c) {
+            g_conns[i] = g_conns[--g_conn_n];
+            break;
+        }
+    }
+    LeaveCriticalSection(&g_conn_cs);
+}
+
+static void conn_shutdown_all(void)
+{
+    int i;
+    if (!g_conn_cs_ready) return;
+    EnterCriticalSection(&g_conn_cs);
+    for (i = 0; i < g_conn_n; i++)
+        os_ws_shutdown(g_conns[i]);
+    LeaveCriticalSection(&g_conn_cs);
+}
 
 static int log_severity(int level)
 {
@@ -355,11 +393,17 @@ static DWORD WINAPI client_thread(LPVOID p)
 {
     AiClient cl;
     uint8_t* buf;
+    InterlockedIncrement(&g_clients);
     memset(&cl, 0, sizeof(cl));
     cl.conn = (OS_WSConn*)p;
     cl.min_level = OS_LOG_DEBUG;
     buf = (uint8_t*)malloc(AI_RECV_CAP);
-    if (!buf) { os_ws_close(cl.conn); return 0; }
+    if (!buf) {
+        conn_track_del(cl.conn);
+        os_ws_close(cl.conn);
+        InterlockedDecrement(&g_clients);
+        return 0;
+    }
     while (InterlockedCompareExchange(&g_running, 1, 1) == 1) {
         int op = 0, n = os_ws_recv(cl.conn, buf, AI_RECV_CAP - 1, &op);
         if (n <= 0) break;
@@ -371,7 +415,9 @@ static DWORD WINAPI client_thread(LPVOID p)
     if (cl.listening && g_fw && g_fw->log_remove_listener)
         g_fw->log_remove_listener(ai_on_log, &cl);
     free(buf);
+    conn_track_del(cl.conn);
     os_ws_close(cl.conn);
+    InterlockedDecrement(&g_clients);
     return 0;
 }
 
@@ -387,9 +433,17 @@ static DWORD WINAPI listen_thread(LPVOID p)
             Sleep(50);
             continue;
         }
+        if (InterlockedCompareExchange(&g_clients, 0, 0) >= AI_MAX_CLIENTS) {
+            os_ws_close(c);
+            continue;
+        }
+        conn_track_add(c);
         th = CreateThread(NULL, 0, client_thread, c, 0, NULL);
         if (th) CloseHandle(th);
-        else os_ws_close(c);
+        else {
+            conn_track_del(c);
+            os_ws_close(c);
+        }
     }
     return 0;
 }
@@ -397,12 +451,17 @@ static DWORD WINAPI listen_thread(LPVOID p)
 static int ai_start(int port)
 {
     if (g_running) return OS_ERR_BUSY;
+    if (!g_conn_cs_ready) {
+        InitializeCriticalSection(&g_conn_cs);
+        g_conn_cs_ready = 1;
+    }
     g_port = port > 0 ? port : AI_DEFAULT_PORT;
     g_listen = os_ws_listen("127.0.0.1", g_port);
     if (g_listen < 0) {
         if (g_fw) g_fw->log(OS_LOG_ERROR, "aiapi: 监听 127.0.0.1:%d 失败", g_port);
         return OS_ERR_FAIL;
     }
+    InterlockedExchange(&g_clients, 0);
     InterlockedExchange(&g_running, 1);
     g_thread = CreateThread(NULL, 0, listen_thread, NULL, 0, NULL);
     if (!g_thread) {
@@ -416,16 +475,21 @@ static int ai_start(int port)
 
 static void ai_stop(void)
 {
+    int spin;
     InterlockedExchange(&g_running, 0);
     if (g_listen >= 0) {
         os_ws_close_listen(g_listen);
         g_listen = -1;
     }
+    /* 唤醒阻塞在 recv 上的客户端，避免卸载其他模块时仍在 RPC */
+    conn_shutdown_all();
     if (g_thread) {
         WaitForSingleObject(g_thread, 3000);
         CloseHandle(g_thread);
         g_thread = NULL;
     }
+    for (spin = 0; spin < 500 && InterlockedCompareExchange(&g_clients, 0, 0) != 0; spin++)
+        Sleep(10);
 }
 
 static int ai_init(const OS_Framework* fw, void** out_ctx)
@@ -452,6 +516,11 @@ static void ai_deinit(void* ctx)
     (void)ctx;
     ai_stop();
     g_fw = NULL;
+    if (g_conn_cs_ready) {
+        DeleteCriticalSection(&g_conn_cs);
+        g_conn_cs_ready = 0;
+        g_conn_n = 0;
+    }
 }
 
 static int ai_command(void* ctx, int cmd, void* in, void* out)

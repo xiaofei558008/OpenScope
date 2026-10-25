@@ -11,8 +11,11 @@
 #include "theme.h"
 #include "version.h"
 #include "helpwin.h"
+#include "workspace.h"
 #include <string.h>
 #include <commctrl.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
 
 #pragma comment(linker, "\"/manifestdependency:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
@@ -101,9 +104,33 @@ static LONG WINAPI os_crash_filter(EXCEPTION_POINTERS* ep)
             frame = (DWORD64*)*frame;
         }
     }
+    /* 写 minidump 便于复现分析 */
+    {
+        wchar_t dir[MAX_PATH], dump[MAX_PATH];
+        HANDLE hf;
+        if (GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH) > 0) {
+            _snwprintf(dir, MAX_PATH, L"%s\\OpenScope", dir);
+            CreateDirectoryW(dir, NULL);
+            _snwprintf(dump, MAX_PATH, L"%s\\crash.dmp", dir);
+        } else {
+            _snwprintf(dump, MAX_PATH, L"crash.dmp");
+        }
+        hf = CreateFileW(dump, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hf != INVALID_HANDLE_VALUE) {
+            MINIDUMP_EXCEPTION_INFORMATION mei;
+            mei.ThreadId = GetCurrentThreadId();
+            mei.ExceptionPointers = ep;
+            mei.ClientPointers = FALSE;
+            MiniDumpWriteDump(GetCurrentProcess(), GetCurrentProcessId(), hf,
+                              MiniDumpWithDataSegs, ep ? &mei : NULL, NULL, NULL);
+            CloseHandle(hf);
+            crash_write("%s [FATAL] minidump written", ts);
+        }
+    }
     /* 经 alerts 环；AI 静默（--ai-silent / ui.silent）时不阻塞弹窗 */
     os_alert_fatal("OpenScope 崩溃",
-                   "OpenScope 发生未处理异常，详细信息已写入日志文件 openscope.log。",
+                   "OpenScope 发生未处理异常，详细信息已写入 openscope.log 与 %LOCALAPPDATA%\\OpenScope\\crash.dmp。",
                    0);
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -389,6 +416,12 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     if (!hMain) return 1;
     os_log_set(os_mainwin_append_log);
     os_modmgr_load();
+    os_ws_init(); /* Workspace：默认 Probe + XCP 双 Project */
+    {
+        OS_Project* pr = os_ws_project_at(0);
+        if (pr && pr->kind == OS_PROJ_PROBE)
+            pr->driver_index = os_modmgr_driver_index();
+    }
     os_mainwin_update_buttons(); /* 模块加载后启用“连接”按钮 */
     os_mainwin_rebuild_window_menu();
     os_mainwin_cfg_init(); /* 主界面连接配置：接口/速度/J-Link 设备列表 */

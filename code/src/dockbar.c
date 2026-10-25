@@ -4,6 +4,8 @@
 #include "dockbar.h"
 #include "app.h"
 #include "util.h"
+#include "theme.h"
+#include "toolicon.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -139,6 +141,7 @@ static void ensure_float(OS_DockBar* b)
                crc.bottom > 0 ? crc.bottom : OS_DOCKBAR_THICK, TRUE);
     ShowWindow(b->hwnd, SW_SHOW);
     show_bar_children(b->hwnd);
+    os_theme_window_tree(b->hFloat);
 }
 
 void os_dockbar_set_dock(int id, OS_DockSide side)
@@ -175,12 +178,14 @@ static void paint_grip(HWND hwnd, HDC hdc)
 {
     RECT rc;
     int i;
+    COLORREF dim = os_theme(TH_DIMTEXT);
+    COLORREF hi = os_theme(TH_BORDER);
     GetClientRect(hwnd, &rc);
-    FillRect(hdc, &rc, GetSysColorBrush(COLOR_BTNFACE));
+    FillRect(hdc, &rc, os_theme_brush(TH_PANEL));
     for (i = 4; i + 4 < rc.bottom && i < 28; i += 4) {
-        SetPixel(hdc, 4, i, GetSysColor(COLOR_BTNSHADOW));
-        SetPixel(hdc, 6, i, GetSysColor(COLOR_BTNHIGHLIGHT));
-        SetPixel(hdc, 8, i, GetSysColor(COLOR_BTNSHADOW));
+        SetPixel(hdc, 4, i, dim);
+        SetPixel(hdc, 6, i, hi);
+        SetPixel(hdc, 8, i, dim);
     }
 }
 
@@ -212,7 +217,10 @@ static LRESULT CALLBACK dockbar_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return 0;
     }
     case WM_CTLCOLORSTATIC:
-        return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+    case WM_CTLCOLORBTN:
+        SetBkColor((HDC)wp, os_theme(TH_PANEL));
+        SetTextColor((HDC)wp, os_theme(TH_TEXT));
+        return (LRESULT)os_theme_brush(TH_PANEL);
     case WM_COMMAND:
         /* 按钮命令转发给主窗 */
         if (g_main) PostMessageW(g_main, WM_COMMAND, wp, lp);
@@ -226,13 +234,21 @@ static LRESULT CALLBACK dockbar_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_NOTIFY:
         return 0;
     case WM_DRAWITEM:
+        if (os_toolicon_draw((const DRAWITEMSTRUCT*)lp))
+            return TRUE;
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC hdc = BeginPaint(hwnd, &ps);
-        FillRect(hdc, &ps.rcPaint, GetSysColorBrush(COLOR_BTNFACE));
+        FillRect(hdc, &ps.rcPaint, os_theme_brush(TH_PANEL));
         EndPaint(hwnd, &ps);
         return 0;
+    }
+    case WM_ERASEBKGND: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect((HDC)wp, &rc, os_theme_brush(TH_PANEL));
+        return 1;
     }
     case WM_LBUTTONDBLCLK:
         if (b) {
@@ -384,7 +400,7 @@ void os_dockbar_register(HINSTANCE inst)
     wc.lpfnWndProc = dockbar_proc;
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = NULL; /* 自绘，随主题切换 */
     wc.lpszClassName = k_cls;
     RegisterClassW(&wc);
     wc.lpfnWndProc = float_proc;
@@ -543,5 +559,23 @@ void os_dockbar_save(void)
         WritePrivateProfileStringW(key, L"w", num, path);
         _snwprintf(num, 32, L"%d", g_bars[i].float_h);
         WritePrivateProfileStringW(key, L"h", num, path);
+    }
+}
+
+void os_dockbar_apply_theme(void)
+{
+    int i;
+    for (i = 0; i < OS_DOCKBAR_COUNT; i++) {
+        HWND bar = g_bars[i].hwnd;
+        HWND c;
+        if (!bar || !IsWindow(bar)) continue;
+        os_theme_window_tree(bar);
+        InvalidateRect(bar, NULL, TRUE);
+        for (c = GetWindow(bar, GW_CHILD); c; c = GetWindow(c, GW_HWNDNEXT))
+            InvalidateRect(c, NULL, TRUE);
+        if (g_bars[i].hFloat && IsWindow(g_bars[i].hFloat)) {
+            os_theme_window_tree(g_bars[i].hFloat);
+            InvalidateRect(g_bars[i].hFloat, NULL, TRUE);
+        }
     }
 }

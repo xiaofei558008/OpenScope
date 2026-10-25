@@ -6,6 +6,7 @@
 #include "module_api.h"
 #include "util.h"
 #include "srcwin.h"
+#include "theme.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -272,8 +273,25 @@ static LRESULT CALLBACK bp_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SendMessageW(c, WM_SETFONT, (WPARAM)font, TRUE);
 
         bp_refresh_list(hwnd);
+        os_theme_window_tree(hwnd);
         return 0;
     }
+    case WM_ERASEBKGND: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect((HDC)wp, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        SetTextColor((HDC)wp, os_theme(TH_TEXT));
+        SetBkColor((HDC)wp, os_theme(TH_BG));
+        return (LRESULT)os_theme_brush(TH_BG);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        SetTextColor((HDC)wp, os_theme(TH_EDIT_TEXT));
+        SetBkColor((HDC)wp, os_theme(TH_EDIT_BG));
+        return (LRESULT)os_theme_brush(TH_EDIT_BG);
     case WM_COMMAND:
         switch (LOWORD(wp)) {
         case IDC_BP_SET: bp_do_set(hwnd); return 0;
@@ -332,7 +350,7 @@ void os_bpwin_dialog(HWND owner)
         wc.lpfnWndProc = bp_wnd_proc;
         wc.hInstance = GetModuleHandleW(NULL);
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.hbrBackground = NULL;
         wc.lpszClassName = k_bp_cls;
         RegisterClassW(&wc);
         reg = 1;
@@ -343,6 +361,7 @@ void os_bpwin_dialog(HWND owner)
                            (GetSystemMetrics(SM_CYSCREEN) - 360) / 2,
                            520, 360, owner, NULL, GetModuleHandleW(NULL), &st);
     if (!hwnd) return;
+    os_theme_window_tree(hwnd);
     EnableWindow(owner, FALSE);
     while (!st.done && IsWindow(hwnd) && GetMessageW(&msg, NULL, 0, 0) > 0) {
         if (!IsDialogMessageW(hwnd, &msg)) {

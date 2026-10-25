@@ -204,6 +204,7 @@ typedef struct OS_Sample {
     double   value;   /* 数值解释 */
     char     text[64];
     int      written; /* 1 = 由用户写入回读产生的样本 */
+    int      project_id; /* Workspace Project id（0=未标注/默认） */
 } OS_Sample;
 
 struct OS_Variable; /* elf.h 中定义 */

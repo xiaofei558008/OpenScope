@@ -161,6 +161,18 @@ static int tcp_send(void* ctx, const uint8_t* data, int len)
     return len;
 }
 
+static void tcp_discard(SOCKET s, int n, int timeout_ms)
+{
+    uint8_t tmp[64];
+    DWORD t0 = GetTickCount();
+    while (n > 0) {
+        int chunk = n > (int)sizeof(tmp) ? (int)sizeof(tmp) : n;
+        if (tcp_recv_exact(s, tmp, chunk, timeout_ms) != 0) return;
+        n -= chunk;
+        if ((int)(GetTickCount() - t0) > timeout_ms * 2) return;
+    }
+}
+
 static int tcp_recv(void* ctx, uint8_t* data, int cap, int timeout_ms)
 {
     TcpCtx* t = (TcpCtx*)ctx;
@@ -170,7 +182,12 @@ static int tcp_recv(void* ctx, uint8_t* data, int cap, int timeout_ms)
     if (timeout_ms <= 0) timeout_ms = 500;
     if (tcp_recv_exact(t->sock, hdr, 4, timeout_ms) != 0) return -1;
     len = (int)hdr[0] | ((int)hdr[1] << 8);
-    if (len <= 0 || len > cap) return -1;
+    if (len <= 0) return -1;
+    /* 超长帧必须排空，否则流错位，后续 CONNECT/UPLOAD 全部异常 */
+    if (len > cap) {
+        tcp_discard(t->sock, len, timeout_ms);
+        return -1;
+    }
     if (tcp_recv_exact(t->sock, data, len, timeout_ms) != 0) return -1;
     return len;
 }

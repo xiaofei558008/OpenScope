@@ -13,11 +13,14 @@
 #include "module_mgr.h"
 #include "layout.h"
 #include "theme.h"
+#include "toolicon.h"
 #include "version.h"
 #include "helpwin.h"
 #include "tilecalc.h"
 #include "xcpwin.h"
 #include "a2l_export.h"
+#include "a2l_import.h"
+#include "workspace.h"
 #include "xcpsym.h"
 #include <commctrl.h>
 #include <commdlg.h>
@@ -25,6 +28,27 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+/* Win10 未文档化菜单栏自绘（深色主题）——布局与常见 darkmode 补丁一致 */
+typedef struct { HMENU hmenu; HDC hdc; DWORD dwFlags; } UAHMENU;
+typedef struct {
+    BYTE rgsizeBar[2][2][2];
+    BYTE rgsizePopup[4][2];
+} UAHMENUITEMMETRICS;
+typedef struct {
+    DWORD rgcx[4];
+    DWORD fUpdateMaxWidths : 2;
+} UAHMENUPOPUPMETRICS;
+typedef struct {
+    int iPosition;
+    UAHMENUITEMMETRICS umim;
+    UAHMENUPOPUPMETRICS umpm;
+} UAHMENUITEM;
+typedef struct {
+    DRAWITEMSTRUCT dis;
+    UAHMENU um;
+    UAHMENUITEM umi;
+} UAHDRAWMENUITEM;
 
 #define IDC_BTN_OPEN     2001
 #define IDC_BTN_CONNECT  2002
@@ -198,12 +222,12 @@ static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
     { IDD_NET_DOWNELF, L"下载ELF" },
 };
 
-static const struct { int id; const wchar_t* text; } g_debug_btns[] = {
-    { IDC_BTN_CPU_RUN, L"Run" }, { IDC_BTN_CPU_STOP, L"Stop" },
-    { IDC_BTN_CPU_RHALT, L"R&H" }, { IDC_BTN_CPU_STEP, L"Step" },
-    { IDC_BTN_CPU_STEPIN, L"Step In" }, { IDC_BTN_CPU_STEPOUT, L"Step Out" },
-    { IDC_BTN_CPU_STEPOVER, L"Step Over" },
-    { IDC_BTN_BP, L"BP" },
+static const struct { int id; const wchar_t* tip; } g_debug_btns[] = {
+    { IDC_BTN_CPU_RUN, L"运行 (Go)" }, { IDC_BTN_CPU_STOP, L"停止 (Halt)" },
+    { IDC_BTN_CPU_RHALT, L"复位并停住 (Reset Halt)" }, { IDC_BTN_CPU_STEP, L"单步" },
+    { IDC_BTN_CPU_STEPIN, L"步入" }, { IDC_BTN_CPU_STEPOUT, L"步出" },
+    { IDC_BTN_CPU_STEPOVER, L"步过" },
+    { IDC_BTN_BP, L"断点" },
 };
 
 static OS_SrcMap g_srcmap;
@@ -344,6 +368,7 @@ static void log_select_all(void)
 static void log_context_menu(void)
 {
     HMENU m = CreatePopupMenu();
+    os_theme_menu_show(m);
     POINT pt;
     int has_sel = 0, i;
     int n = g_app.hLog ? ListView_GetItemCount(g_app.hLog) : 0;
@@ -354,6 +379,7 @@ static void log_context_menu(void)
     AppendMenuW(m, MF_STRING | (n > 0 ? 0 : MF_GRAYED), IDM_LOG_CLEAR, L"全部清除");
     GetCursorPos(&pt);
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    os_theme_menu_end();
     DestroyMenu(m);
 }
 
@@ -506,41 +532,113 @@ void os_mainwin_update_buttons(void)
         ENB(IDC_BTN_OPEN, 1);
         return;
     }
-    ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay);
-    ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay);
-    ENB(IDC_BTN_DISCON, conn);
-    ENB(IDC_BTN_CPU_RUN, conn && !replay);
-    ENB(IDC_BTN_CPU_STOP, conn && !replay);
-    ENB(IDC_BTN_CPU_RHALT, conn && !replay);
-    ENB(IDC_BTN_CPU_STEP, conn && !replay);
-    ENB(IDC_BTN_CPU_STEPIN, conn && !replay);
-    ENB(IDC_BTN_CPU_STEPOUT, conn && !replay);
-    ENB(IDC_BTN_CPU_STEPOVER, conn && !replay); ENB(IDC_BTN_BP, conn && !replay);
-    ENB(IDC_BTN_START, conn && g_app.watch_count > 0 && !running && !replay);
-    ENB(IDC_BTN_STOP, running);
-    ENB(IDC_BTN_LOGSTART, !replay); /* 可先录制再开始采集 */
-    ENB(IDC_BTN_FLASH, hasDriver && conn && !replay);
-    ENB(IDC_BTN_REPLAY, !running && !replay);
-    ENB(IDC_BTN_REPLAYSTOP, replay);
-    ENB(IDC_BTN_OPEN, 1);
+    {
+        OS_Project* ap = os_ws_active();
+        int probe_ok = (ap && ap->kind == OS_PROJ_PROBE && conn);
+        int any = os_ds_any_connected();
+        ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay &&
+            (!ap || ap->kind == OS_PROJ_PROBE));
+        ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay &&
+            (!ap || ap->kind == OS_PROJ_PROBE));
+        ENB(IDC_BTN_DISCON, conn || (ap && ap->kind == OS_PROJ_XCP && g_app.xcp_connected));
+        /* Flash/CPU 仅对探针 Project */
+        ENB(IDC_BTN_CPU_RUN, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_STOP, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_RHALT, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_STEP, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_STEPIN, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_STEPOUT, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_STEPOVER, probe_ok && !replay);
+        ENB(IDC_BTN_BP, probe_ok && !replay);
+        ENB(IDC_BTN_START, any && g_app.watch_count > 0 && !running && !replay);
+        ENB(IDC_BTN_STOP, running);
+        ENB(IDC_BTN_LOGSTART, !replay);
+        ENB(IDC_BTN_FLASH, probe_ok && !replay);
+        ENB(IDC_BTN_REPLAY, !running && !replay);
+        ENB(IDC_BTN_REPLAYSTOP, replay);
+        ENB(IDC_BTN_OPEN, 1);
+    }
 #undef ENB
+}
+
+/* 工具栏 → 活动 Project 连接配置 */
+static void proj_cfg_from_toolbar(OS_Project* pr)
+{
+    LRESULT ifi, emu, dci;
+    wchar_t sbuf[64];
+    char sb8[64], dev8[128];
+    if (!pr || pr->kind != OS_PROJ_PROBE) return;
+    ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
+    pr->iface = (ifi == 1) ? 1 : 0;
+    SendMessageW(main_ctrl(IDC_CFG_SPEED), WM_GETTEXT, 64, (LPARAM)sbuf);
+    os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
+    pr->speed_khz = atoi(sb8);
+    if (pr->speed_khz < 0) pr->speed_khz = 0;
+    emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
+    pr->probe_index = (emu == CB_ERR) ? -1 : (int)emu;
+    dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
+    if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
+        os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
+        _snprintf(pr->device, sizeof(pr->device), "%s", dev8);
+    }
+    pr->driver_index = os_modmgr_driver_index();
+}
+
+/* 活动 Project → 工具栏 */
+static void proj_cfg_to_toolbar(const OS_Project* pr)
+{
+    HWND hs, hi, he, hd, hdr;
+    if (!pr) return;
+    hdr = main_ctrl(IDC_CFG_DRIVER);
+    if (hdr && pr->kind == OS_PROJ_PROBE && pr->driver_index >= 0)
+        SendMessageW(hdr, CB_SETCURSEL, (WPARAM)pr->driver_index, 0);
+    hi = main_ctrl(IDC_CFG_IFACE);
+    if (hi) SendMessageW(hi, CB_SETCURSEL, (WPARAM)(pr->iface ? 1 : 0), 0);
+    hs = main_ctrl(IDC_CFG_SPEED);
+    if (hs && pr->speed_khz > 0) {
+        wchar_t w[32];
+        _snwprintf(w, 32, L"%d", pr->speed_khz);
+        SetWindowTextW(hs, w);
+    }
+    he = main_ctrl(IDC_CFG_EMU);
+    if (he && pr->probe_index >= 0)
+        SendMessageW(he, CB_SETCURSEL, (WPARAM)pr->probe_index, 0);
+    hd = main_ctrl(IDC_CFG_DEVICE);
+    if (hd && pr->device[0]) {
+        wchar_t wd[128];
+        int i, n;
+        os_utf8_to_wide_buf(pr->device, wd, 128);
+        n = (int)SendMessageW(hd, CB_GETCOUNT, 0, 0);
+        for (i = 0; i < n; i++) {
+            wchar_t cur[128];
+            SendMessageW(hd, CB_GETLBTEXT, i, (LPARAM)cur);
+            if (!_wcsicmp(cur, wd)) { SendMessageW(hd, CB_SETCURSEL, i, 0); break; }
+        }
+    }
 }
 
 static void refresh_status(void)
 {
     wchar_t w[512];
-    wchar_t dn[64], xn[16];
-    dn[0] = 0; xn[0] = 0;
+    wchar_t dn[64], xn[16], pn[80];
+    OS_Project* ap = os_ws_active();
+    int i, nconn = 0;
+    dn[0] = 0; xn[0] = 0; pn[0] = 0;
     if (g_app.connected && g_app.driver)
         os_utf8_to_wide_buf(g_app.driver->name, dn, 64);
     _snwprintf(xn, 16, g_app.xcp_connected ? L"XCP:ON" : L"XCP:off");
-    if (g_app.connected && g_app.driver) {
-        _snwprintf(w, 512, L"Probe:%s | %s | Net:independent", dn, xn);
-    } else {
-        _snwprintf(w, 512, L"Probe:off | %s | Net:independent", xn);
+    if (ap) os_utf8_to_wide_buf(ap->name, pn, 80);
+    for (i = 0; i < os_ws()->project_count; i++) {
+        OS_Module* m = NULL; void* ctx = NULL;
+        if (os_ws_resolve_mod(os_ws_project_at(i), &m, &ctx) == 0) nconn++;
     }
+    _snwprintf(w, 512, L"WS:%dproj/%don | Probe:%s | %s | Act:%s",
+               os_ws()->project_count, nconn,
+               dn[0] ? dn : L"off", xn, pn[0] ? pn : L"-");
     set_status(0, w);
-    if (g_app.elf_path[0])
+    if (ap && ap->elf_path[0])
+        set_status(1, ap->elf_path);
+    else if (g_app.elf_path[0])
         set_status(1, g_app.elf_path);
     else
         set_status(1, L"未加载 ELF");
@@ -962,6 +1060,7 @@ static void new_win_context_menu(void)
     POINT pt;
     HMENU m = CreatePopupMenu();
     int i;
+    os_theme_menu_show(m);
     GetCursorPos(&pt);
     AppendMenuW(m, MF_STRING, IDM_WIN_CHART, L"新建波形窗口");
     AppendMenuW(m, MF_STRING, IDM_WIN_NUM, L"新建数值窗口");
@@ -973,6 +1072,7 @@ static void new_win_context_menu(void)
         AppendMenuW(m, MF_STRING, IDM_WIN_MODULE_BASE + i, wname);
     }
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    os_theme_menu_end();
     DestroyMenu(m);
 }
 
@@ -1073,10 +1173,10 @@ static void layout(void)
             { IDD_NET_LISTEN, 0, 0 }, { IDD_NET_CONNECT, 0, 0 }, { IDD_NET_UPELF, 0, 0 }, { IDD_NET_DOWNELF, 0, 0 },
         };
         static const BarItem dbg_items[] = {
-            { IDC_BTN_CPU_RUN, 0, 0 }, { IDC_BTN_CPU_STOP, 0, 0 },
-            { IDC_BTN_CPU_RHALT, 0, 0 }, { IDC_BTN_CPU_STEP, 0, 0 },
-            { IDC_BTN_CPU_STEPIN, 0, 0 }, { IDC_BTN_CPU_STEPOUT, 0, 0 },
-            { IDC_BTN_CPU_STEPOVER, 0, 0 }, { IDC_BTN_BP, 0, 0 },
+            { IDC_BTN_CPU_RUN, 28, 0 }, { IDC_BTN_CPU_STOP, 28, 0 },
+            { IDC_BTN_CPU_RHALT, 28, 0 }, { IDC_BTN_CPU_STEP, 28, 0 },
+            { IDC_BTN_CPU_STEPIN, 28, 0 }, { IDC_BTN_CPU_STEPOUT, 28, 0 },
+            { IDC_BTN_CPU_STEPOVER, 28, 0 }, { IDC_BTN_BP, 28, 0 },
             /* XCP 并行通道放调试栏，避免主工具栏（网络控件已占满）被裁切 */
             { IDC_XCP_TRANSPORT, 72, 1 }, { IDC_XCP_PORT, 72, 0 }, { IDC_XCP_BAUD, 56, 0 },
             { IDC_XCP_SCAN, 0, 0 }, { IDC_XCP_CONNECT, 0, 0 }, { IDC_XCP_DISCONNECT, 0, 0 },
@@ -1474,26 +1574,39 @@ static int load_elf_path(const wchar_t* path)
 {
     char utf8[MAX_PATH];
     char err[256];
-    OS_ElfFile* elf;
+    OS_ElfFile* elf = NULL;
     wchar_t wmsg[2048];
     int i;
+    OS_Project* pr = os_ws_active();
     int was_running = (g_app.acq_state == OS_ACQ_RUNNING);
     /* 采集线程直接读 g_app.leaves。重载会整表重建，必须先停采集，否则地址/下标会被撕开。 */
     if (was_running) os_ds_stop();
-    os_wide_to_utf8_buf(path, utf8, MAX_PATH);
-    elf = os_elf_open(utf8, err, sizeof(err));
+    if (pr) {
+        /* 多 Project：合并进活动 Project，保留其它 MCU 符号 */
+        if (os_vartree_merge_elf(pr->id, path) < 0) {
+            if (was_running && os_ds_any_connected() && g_app.watch_count > 0) os_ds_start();
+            return -1;
+        }
+        elf = pr->elf ? pr->elf : g_app.elf;
+    } else {
+        os_wide_to_utf8_buf(path, utf8, MAX_PATH);
+        elf = os_elf_open(utf8, err, sizeof(err));
+        if (!elf) {
+            os_log(OS_LOG_WARN, "ELF 加载失败: %s", err);
+            if (was_running && os_ds_any_connected() && g_app.watch_count > 0) os_ds_start();
+            return -1;
+        }
+        if (g_app.elf) os_elf_close(g_app.elf);
+        g_app.elf = elf;
+        _snwprintf(g_app.elf_path, MAX_PATH, L"%s", path);
+        g_app.elf_mtime = os_file_mtime_ms(path);
+        os_vartree_build();
+        os_vartree_fill_tree(g_app.hTree);
+    }
     if (!elf) {
-        /* 不弹窗：只在下方日志窗口警告（用户删除/改名 ELF 后启动不再打扰） */
-        os_log(OS_LOG_WARN, "ELF 加载失败: %s", err);
-        if (was_running && g_app.connected && g_app.watch_count > 0) os_ds_start();
+        if (was_running && os_ds_any_connected() && g_app.watch_count > 0) os_ds_start();
         return -1;
     }
-    if (g_app.elf) os_elf_close(g_app.elf);
-    g_app.elf = elf;
-    _snwprintf(g_app.elf_path, MAX_PATH, L"%s", path);
-    g_app.elf_mtime = os_file_mtime_ms(path);
-    os_vartree_build();
-    os_vartree_fill_tree(g_app.hTree);
     os_xcpsym_invalidate(); /* XCP 符号表按新 ELF 重建 */
     os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
     refresh_src_tree();
@@ -1612,6 +1725,10 @@ static void cmd_connect(void)
     OS_DriverInfo info;
     OS_ConnectCfg cfg;
     LRESULT ifi, emu, dci;
+    OS_Project* apr = os_ws_active();
+    /* 对准活动 Project 的探针驱动（多 MCU 并行） */
+    if (apr && apr->kind == OS_PROJ_PROBE && apr->driver_index >= 0)
+        os_modmgr_select_driver(apr->driver_index);
     /* 需求14 UI整合：网络通道下"连接"按键复用为网络连接 */
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块");
@@ -1627,31 +1744,40 @@ static void cmd_connect(void)
         MessageBoxW(g_app.hMain, msg, cap, MB_OK | MB_ICONWARNING);
         return;
     }
-    /* 直接读取界面配置，不再弹配置对话框 */
+    /* 界面配置写入活动 Project，再填 ConnectCfg */
+    if (apr && apr->kind == OS_PROJ_PROBE) proj_cfg_from_toolbar(apr);
     memset(&cfg, 0, sizeof(cfg));
-    ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
-    cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
-    /* N8: 速度下拉可手工输入，直接解析输入框文本（"0 (自动)" 或非法输入 -> 0 自动） */
-    {
-        wchar_t sbuf[64];
-        char sb8[64];
-        HWND hs = main_ctrl(IDC_CFG_SPEED);
-        SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
-        os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
-        cfg.speed_khz = atoi(sb8);
-        if (cfg.speed_khz < 0) cfg.speed_khz = 0;
-        g_app.speed_khz = cfg.speed_khz; /* 采集线程块读合并成本模型按实际速度计算 */
-    }
-    emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
-    cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
-    /* 芯片核心：从界面下拉读取（F17 核心名列表，默认 Cortex-M4；纯内存读写无需具体型号） */
-    dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
-    if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
-        char dev8[128];
-        os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
-        _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
+    if (apr && apr->kind == OS_PROJ_PROBE) {
+        cfg.iface = apr->iface ? OS_IF_JTAG : OS_IF_SWD;
+        cfg.speed_khz = apr->speed_khz;
+        cfg.probe_index = apr->probe_index;
+        _snprintf(cfg.device, sizeof(cfg.device), "%s",
+                  apr->device[0] ? apr->device : "Cortex-M4");
+        g_app.speed_khz = cfg.speed_khz;
+        (void)ifi; (void)emu; (void)dci;
     } else {
-        _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
+        ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
+        cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
+        {
+            wchar_t sbuf[64];
+            char sb8[64];
+            HWND hs = main_ctrl(IDC_CFG_SPEED);
+            SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
+            os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
+            cfg.speed_khz = atoi(sb8);
+            if (cfg.speed_khz < 0) cfg.speed_khz = 0;
+            g_app.speed_khz = cfg.speed_khz;
+        }
+        emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
+        cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
+        dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
+        if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
+            char dev8[128];
+            os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
+            _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
+        } else {
+            _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
+        }
     }
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
     if (rc != OS_ERR_OK) {
@@ -1664,6 +1790,24 @@ static void cmd_connect(void)
     g_app.connected = c;
     memset(&info, 0, sizeof(info));
     g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
+    {
+        OS_Project* pr = os_ws_active();
+        int di = os_modmgr_driver_index();
+        if (pr && pr->kind == OS_PROJ_PROBE) {
+            pr->connected = c;
+            pr->driver_index = di;
+        } else {
+            int i;
+            for (i = 0; i < os_ws()->project_count; i++) {
+                pr = os_ws_project_at(i);
+                if (pr && pr->kind == OS_PROJ_PROBE && pr->driver_index == di) {
+                    pr->connected = c;
+                    os_ws_set_active(i);
+                    break;
+                }
+            }
+        }
+    }
     os_log(OS_LOG_INFO, "已连接: %s（%s, %s DLL %s, HW %d, FW %d）",
            info.emulator[0] ? info.emulator : "?", info.name, drv_name(), info.dll_version,
            info.hw_version, info.fw_version);
@@ -1750,15 +1894,41 @@ static void cmd_cpu_ctrl(int cmd, const wchar_t* ok_msg)
 
 static void cmd_disconnect(void)
 {
-    /* 需求14 UI整合：网络通道下"断开"按键复用为网络停止 */
-    /* 先停采集再拆会话。否则采集线程下一圈看到未连接就报“MCU 连接已断开”并退出，
-     * 和用户主动断开混在同一条错误日志里。 */
-    if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
-    if (g_app.driver && g_app.driver->command) {
-        g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+    /* 仅断开活动 Project 对应会话，其它 MCU 保持连接（多源并行） */
+    OS_Project* apr = os_ws_active();
+    OS_Module* mod = NULL;
+    void* ctx = NULL;
+    int still = 0, i;
+    if (apr && apr->kind == OS_PROJ_XCP) {
+        if (g_app.xcpmod && g_app.xcpmod->command)
+            g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+        g_app.xcp_connected = 0;
+        apr->connected = 0;
+        os_log(OS_LOG_INFO, "已断开 XCP（Project %s）", apr->name);
+    } else {
+        if (apr && apr->kind == OS_PROJ_PROBE && apr->driver_index >= 0)
+            os_modmgr_select_driver(apr->driver_index);
+        if (apr && os_ws_resolve_mod(apr, &mod, &ctx) == 0 && mod && mod->command) {
+            mod->command(ctx, OS_CMD_DISCONNECT, NULL, NULL);
+            apr->connected = 0;
+        } else if (g_app.driver && g_app.driver->command) {
+            g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+        }
+        if (apr) apr->connected = 0;
+        os_log(OS_LOG_INFO, "已断开连接（Project %s）", apr ? apr->name : "?");
     }
-    g_app.connected = 0;
-    os_log(OS_LOG_INFO, "已断开连接");
+    /* 若仍有其它源在连，不停采集；全部断了才停 */
+    for (i = 0; i < os_ws()->project_count; i++) {
+        OS_Module* m = NULL; void* cx = NULL;
+        if (os_ws_resolve_mod(os_ws_project_at(i), &m, &cx) == 0) { still = 1; break; }
+    }
+    if (!still && g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
+    {
+        int c = 0;
+        if (g_app.driver && g_app.driver->command)
+            g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+        g_app.connected = c;
+    }
     refresh_status();
     os_mainwin_update_buttons();
 }
@@ -2034,16 +2204,33 @@ static void cmd_xcp_connect(void)
     _snprintf(g_app.xcp_transport, sizeof(g_app.xcp_transport), "%s", cfg.device);
     _snprintf(g_app.xcp_port, sizeof(g_app.xcp_port), "%s", port8);
     g_app.xcp_baud = cfg.speed_khz;
-    os_log(OS_LOG_INFO, "XCP 连接成功（与探针/网络并行）");
+    {
+        int i;
+        for (i = 0; i < os_ws()->project_count; i++) {
+            OS_Project* pr = os_ws_project_at(i);
+            if (pr && pr->kind == OS_PROJ_XCP) {
+                pr->connected = c;
+                _snprintf(pr->xcp_transport, sizeof(pr->xcp_transport), "%s", cfg.device);
+                _snprintf(pr->xcp_port, sizeof(pr->xcp_port), "%s", port8);
+                pr->xcp_baud = cfg.speed_khz;
+            }
+        }
+    }
+    os_log(OS_LOG_INFO, "XCP 连接成功（Workspace 多源并行）");
     refresh_status();
     os_xcpwin_refresh();
 }
 
 static void cmd_xcp_disconnect(void)
 {
+    int i;
     if (!g_app.xcpmod || !g_app.xcpmod->command) return;
     g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
     g_app.xcp_connected = 0;
+    for (i = 0; i < os_ws()->project_count; i++) {
+        OS_Project* pr = os_ws_project_at(i);
+        if (pr && pr->kind == OS_PROJ_XCP) pr->connected = 0;
+    }
     os_log(OS_LOG_INFO, "XCP 已断开");
     refresh_status();
     os_xcpwin_refresh();
@@ -2051,6 +2238,7 @@ static void cmd_xcp_disconnect(void)
 
 static void cmd_select_driver(int idx)
 {
+    OS_Project* pr;
     if (os_modmgr_select_driver(idx) != OS_ERR_OK) return;
     g_app.net_mode = 0;
     net_mode_apply_controls();
@@ -2058,9 +2246,22 @@ static void cmd_select_driver(int idx)
     g_emu_count = -1;
     cfg_fill_emus();
     cfg_fill_speeds();
+    /* 切换活动 Project 到对应该驱动的探针 Project（可并行保留其它驱动连接） */
+    {
+        int i;
+        for (i = 0; i < os_ws()->project_count; i++) {
+            pr = os_ws_project_at(i);
+            if (pr && pr->kind == OS_PROJ_PROBE && pr->driver_index == idx) {
+                os_ws_set_active(i);
+                break;
+            }
+        }
+    }
+    pr = os_ws_active();
+    if (pr && pr->kind == OS_PROJ_PROBE) pr->driver_index = idx;
     refresh_status();
     os_mainwin_update_buttons();
-    os_log(OS_LOG_INFO, "切换仿真器: %s", drv_name());
+    os_log(OS_LOG_INFO, "切换仿真器: %s（活动 Project 已对齐）", drv_name());
 }
 
 /* 主界面连接配置初始化：仿真器/芯片核心/接口/速度下拉 + 扫描设备列表（模块加载后调用） */
@@ -2106,8 +2307,9 @@ static void cmd_start_acq(void)
         cmd_net_action(OS_CMD_NET_WATCH);
         return;
     }
-    if (!g_app.connected) {
-        MessageBoxW(g_app.hMain, L"请先连接 MCU", L"采集", MB_OK | MB_ICONINFORMATION);
+    if (!os_ds_any_connected()) {
+        MessageBoxW(g_app.hMain, L"请先连接 MCU / XCP（可多 Project 并行）", L"采集",
+                    MB_OK | MB_ICONINFORMATION);
         return;
     }
     if (os_ds_start() == 0) {
@@ -2365,6 +2567,28 @@ static void cmd_add_to_tab(int native_chart)
     os_win_add_to_tab(g_cur_tab, native_chart ? "chart" : "num", title);
 }
 
+static HMENU g_menu_proj; /* 文件 → 活动 Project */
+
+static void rebuild_project_menu(void)
+{
+    int i;
+    wchar_t wname[160], pn[80];
+    if (!g_menu_proj) return;
+    while (GetMenuItemCount(g_menu_proj) > 0)
+        DeleteMenu(g_menu_proj, 0, MF_BYPOSITION);
+    for (i = 0; i < os_ws()->project_count && i < OS_MAX_PROJECTS; i++) {
+        OS_Project* pr = os_ws_project_at(i);
+        if (!pr) continue;
+        os_utf8_to_wide_buf(pr->name, pn, 80);
+        _snwprintf(wname, 160, L"%s (%s)", pn,
+                   pr->kind == OS_PROJ_XCP ? L"XCP" : L"Probe");
+        AppendMenuW(g_menu_proj,
+                    MF_STRING | (i == os_ws()->active ? MF_CHECKED : 0),
+                    IDM_WS_PROJ_BASE + i, wname);
+    }
+    if (g_menu) os_theme_menu(g_menu);
+}
+
 void os_mainwin_rebuild_window_menu(void)
 {
     int i;
@@ -2389,6 +2613,7 @@ void os_mainwin_rebuild_window_menu(void)
             wt++;
         }
     }
+    rebuild_project_menu();
     DrawMenuBar(g_app.hMain);
 }
 
@@ -2398,6 +2623,7 @@ static void run_modal(HWND dlg, HWND owner)
 {
     MSG msg;
     ShowWindow(dlg, SW_SHOW);
+    os_theme_window_tree(dlg);
     UpdateWindow(dlg);
     if (owner) EnableWindow(owner, FALSE);
     while (GetMessage(&msg, NULL, 0, 0)) {
@@ -2466,6 +2692,7 @@ static void add_ids_to_native(int chart, const int* ids, int n);
 static void pick_show_add_menu(HWND dlg)
 {
     HMENU m = CreatePopupMenu();
+    os_theme_menu_show(m);
     POINT pt;
     int has_sel = 0, i2;
     HWND hList = GetDlgItem(dlg, IDD_PICK_LIST);
@@ -2477,6 +2704,7 @@ static void pick_show_add_menu(HWND dlg)
     AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), IDM_PICK_ADD_NUM, L"添加到数值窗口");
     GetCursorPos(&pt);
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, dlg, NULL);
+    os_theme_menu_end();
     DestroyMenu(m);
 }
 
@@ -3230,7 +3458,7 @@ static int tree_collect_leaves(HTREEITEM h, HTREEITEM* out, int max)
     return n;
 }
 
-/* Bug4: 右键命中未选中项 -> 清空多选，单选该项（保持与单选树一致的手感） */
+/* 右键：命中已在多选集合内则保留；否则单选该项（Explorer 习惯） */
 static void tree_context_select_hit(void)
 {
     TVHITTESTINFO ht;
@@ -3240,8 +3468,10 @@ static void tree_context_select_hit(void)
     ScreenToClient(g_app.hTree, &pt);
     ht.pt = pt;
     TreeView_HitTest(g_app.hTree, &ht);
-    if (ht.hItem && !(TreeView_GetItemState(g_app.hTree, ht.hItem, TVIS_SELECTED) & TVIS_SELECTED))
-        TreeView_SelectItem(g_app.hTree, ht.hItem);
+    if (!ht.hItem) return;
+    if (TreeView_GetItemState(g_app.hTree, ht.hItem, TVIS_SELECTED) & TVIS_SELECTED)
+        return; /* 已在选区：保留多选 */
+    TreeView_SelectItem(g_app.hTree, ht.hItem);
 }
 
 static void tree_context_menu(HWND hwnd, LPARAM lParam)
@@ -3267,16 +3497,18 @@ static void tree_context_menu(HWND hwnd, LPARAM lParam)
         sel_count = tree_selected_ids(tmp, 1);
     }
     m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING, IDM_TREE_ALL, L"全选观测");
-    AppendMenuW(m, MF_STRING, IDM_TREE_NONE, L"清除全部观测");
-    AppendMenuW(m, MF_STRING | (sel_count == 1 && lp > 0 ? 0 : MF_GRAYED), IDM_TREE_WRITE, L"写入值...");
-    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    os_theme_menu_show(m);
     AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_CHART, L"添加到波形窗口");
     AppendMenuW(m, MF_STRING | (sel_count <= 0 ? MF_GRAYED : 0), IDM_TREE_ADD_NUM, L"添加到数值窗口");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_TREE_ALL, L"全部加入观测");
+    AppendMenuW(m, MF_STRING, IDM_TREE_NONE, L"清除全部观测");
+    AppendMenuW(m, MF_STRING | (sel_count == 1 && lp > 0 ? 0 : MF_GRAYED), IDM_TREE_WRITE, L"写入值...");
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TREE_RELOAD, L"重新加载 ELF");
     GetCursorPos(&pt);
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    os_theme_menu_end();
     DestroyMenu(m);
 }
 
@@ -3287,15 +3519,40 @@ static HWND active_win_hwnd(void)
     return NULL;
 }
 
-/* Bug4: 将叶 id 列表批量添加到原生波形/数值窗口（chart=1 波形，0 数值）：
- * 优先当前激活窗口，否则已有同类型窗口，否则新建。树右键与搜索对话框共用。 */
+/* 无合适窗口时弹选择；返回 1=波形 0=数值 -1=取消 */
+static int ask_win_type_dialog(void)
+{
+    int choice = MessageBoxW(g_app.hMain,
+        L"当前没有打开的波形/数值窗口。\n\n"
+        L"是(Y) = 新建波形窗口并添加\n"
+        L"否(N) = 新建数值窗口并添加\n"
+        L"取消 = 放弃",
+        L"添加变量", MB_YESNOCANCEL | MB_ICONQUESTION);
+    if (choice == IDYES) return 1;
+    if (choice == IDNO) return 0;
+    return -1;
+}
+
+static int any_chart_or_num_win(void)
+{
+    int i;
+    for (i = 0; i < g_app.win_count; i++) {
+        OS_WinItem* wi = &g_app.wins[i];
+        if (wi->is_module || !wi->hwnd) continue;
+        if (os_chart_is(wi->hwnd) || os_num_is(wi->hwnd)) return 1;
+    }
+    return 0;
+}
+
+/* 将叶 id 批量加到波形/数值窗：优先活动窗 → 已有同类型 → 无窗则对话框 → 否则新建同类型 */
 static void add_ids_to_native(int chart, const int* ids, int n)
 {
     int i;
     HWND w;
     if (!ids || n <= 0) return;
     w = active_win_hwnd();
-    if (!w || g_app.wins[g_cur_tab].is_module ||
+    if (!w || g_cur_tab < 0 || g_cur_tab >= g_app.win_count ||
+        g_app.wins[g_cur_tab].is_module ||
         (chart ? !os_chart_is(w) : !os_num_is(w))) {
         w = NULL;
         for (i = 0; i < g_app.win_count; i++) {
@@ -3304,6 +3561,11 @@ static void add_ids_to_native(int chart, const int* ids, int n)
             if (chart ? os_chart_is(wi->hwnd) : os_num_is(wi->hwnd)) { w = wi->hwnd; break; }
         }
         if (!w) {
+            if (!any_chart_or_num_win()) {
+                int kind = ask_win_type_dialog();
+                if (kind < 0) return;
+                chart = kind;
+            }
             cmd_add_window(chart ? 1 : 0);
             if (g_app.win_count > 0) w = g_app.wins[g_app.win_count - 1].hwnd;
         }
@@ -3322,6 +3584,76 @@ static void tree_add_to_native(int chart)
     if ((n = tree_selected_ids(ids, 512)) <= 0) return;
     add_ids_to_native(chart, ids, n);
     os_log(OS_LOG_INFO, "树右键批量添加变量: %d 个", n);
+}
+
+/* ---------- 变量树拖拽到波形/数值窗口 ---------- */
+static int g_tree_drag_ids[512];
+static int g_tree_drag_n;
+static int g_tree_dragging;
+static WNDPROC g_tree_oldproc;
+
+static HWND find_drop_target(POINT pt_screen)
+{
+    HWND h = WindowFromPoint(pt_screen);
+    while (h) {
+        if (os_chart_is(h) || os_num_is(h)) return h;
+        h = GetParent(h);
+    }
+    return NULL;
+}
+
+static void tree_drop_at(POINT pt_screen)
+{
+    HWND target;
+    int i;
+    if (g_tree_drag_n <= 0) return;
+    target = find_drop_target(pt_screen);
+    if (target) {
+        int chart = os_chart_is(target);
+        for (i = 0; i < g_tree_drag_n; i++) {
+            if (chart) os_chart_add_var(target, g_tree_drag_ids[i]);
+            else os_num_add_var(target, g_tree_drag_ids[i]);
+        }
+        os_log(OS_LOG_INFO, "拖入%s窗口: %d 个变量", chart ? "波形" : "数值", g_tree_drag_n);
+        return;
+    }
+    /* 无命中：若已有波形/数值窗则优先波形，否则弹对话框 */
+    if (!any_chart_or_num_win()) {
+        int kind = ask_win_type_dialog();
+        if (kind < 0) return;
+        add_ids_to_native(kind, g_tree_drag_ids, g_tree_drag_n);
+    } else {
+        add_ids_to_native(1, g_tree_drag_ids, g_tree_drag_n);
+    }
+}
+
+static LRESULT CALLBACK tree_drag_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (g_tree_dragging) {
+        if (msg == WM_MOUSEMOVE) {
+            SetCursor(LoadCursor(NULL, IDC_HAND));
+            return 0;
+        }
+        if (msg == WM_LBUTTONUP || msg == WM_CAPTURECHANGED) {
+            if (msg == WM_LBUTTONUP) {
+                POINT pt;
+                GetCursorPos(&pt);
+                tree_drop_at(pt);
+                ReleaseCapture();
+            }
+            g_tree_dragging = 0;
+            g_tree_drag_n = 0;
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
+            return 0;
+        }
+        if (msg == WM_RBUTTONDOWN || msg == WM_KEYDOWN) {
+            g_tree_dragging = 0;
+            g_tree_drag_n = 0;
+            ReleaseCapture();
+            SetCursor(LoadCursor(NULL, IDC_ARROW));
+        }
+    }
+    return CallWindowProcW(g_tree_oldproc, hwnd, msg, wp, lp);
 }
 
 
@@ -3346,6 +3678,7 @@ static void tab_context_menu(void)
     SendMessageW(g_app.hTab, TCM_SETCURSEL, hit, 0);
     show_tab(hit);
     m = CreatePopupMenu();
+    os_theme_menu_show(m);
     AppendMenuW(m, MF_STRING, IDM_TAB_RENAME, L"重命名标签");
     AppendMenuW(m, MF_STRING, IDM_TAB_ADD_CHART, L"在当前标签添加波形窗口");
     AppendMenuW(m, MF_STRING, IDM_TAB_ADD_NUM, L"在当前标签添加数值窗口");
@@ -3357,6 +3690,7 @@ static void tab_context_menu(void)
     AppendMenuW(m, MF_SEPARATOR, 0, NULL);
     AppendMenuW(m, MF_STRING, IDM_TAB_CLOSE, L"关闭窗口");
     TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, g_app.hMain, NULL);
+    os_theme_menu_end();
     DestroyMenu(m);
 }
 
@@ -3611,9 +3945,39 @@ static void combo_draw_arrow(HDC hdc, RECT* rc)
     }
 }
 
+static void combo_darken_list(HWND h)
+{
+    COMBOBOXINFO cbi;
+    if (!os_theme_dark()) return;
+    memset(&cbi, 0, sizeof(cbi));
+    cbi.cbSize = sizeof(cbi);
+    if (GetComboBoxInfo(h, &cbi) && cbi.hwndList)
+        os_theme_hwnd_dark(cbi.hwndList);
+}
+
 static LRESULT CALLBACK combo_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
+    case CB_SHOWDROPDOWN:
+        if (wParam) {
+            LRESULT r;
+            int i = combo_index(h);
+            r = (i >= 0) ? CallWindowProcW(g_combo_old[i], h, msg, wParam, lParam)
+                         : DefWindowProcW(h, msg, wParam, lParam);
+            combo_darken_list(h);
+            return r;
+        }
+        break;
+    case WM_LBUTTONDOWN:
+    case WM_LBUTTONUP: {
+        LRESULT r;
+        int i = combo_index(h);
+        r = (i >= 0) ? CallWindowProcW(g_combo_old[i], h, msg, wParam, lParam)
+                     : DefWindowProcW(h, msg, wParam, lParam);
+        if (SendMessageW(h, CB_GETDROPPEDSTATE, 0, 0))
+            combo_darken_list(h);
+        return r;
+    }
     case WM_ERASEBKGND:
         return 1;
     case WM_PAINT: {
@@ -3965,6 +4329,14 @@ void os_mainwin_apply_theme(void)
         apply_dark_theme_controls(g_app.hMain);
         if (g_app.hRight && IsWindow(g_app.hRight))
             apply_dark_theme_controls(g_app.hRight);
+        {
+            HWND bar;
+            bar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
+            if (bar) apply_dark_theme_controls(bar);
+            bar = os_dockbar_hwnd(OS_DOCKBAR_DEBUG);
+            if (bar) apply_dark_theme_controls(bar);
+        }
+        os_dockbar_apply_theme();
     }
 }
 
@@ -3997,11 +4369,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             }
             parent = hDbgBar ? hDbgBar : hwnd;
             for (i = 0; i < (int)(sizeof(g_debug_btns) / sizeof(g_debug_btns[0])); i++) {
-                HWND b = CreateWindowW(L"BUTTON", g_debug_btns[i].text,
-                                      WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                      6 + i * 72, 5, 68, 24, parent, (HMENU)(INT_PTR)g_debug_btns[i].id,
-                                      g_app.hInst, NULL);
-                SendMessageW(b, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+                os_toolicon_create_btn(parent, g_debug_btns[i].id,
+                                       6 + i * 30, 3, 28, 26, g_debug_btns[i].tip);
             }
         }
         /* 连接配置控件（仿真器/MCU核心/接口/速度/设备/刷新，随工具栏一行布局） */
@@ -4097,15 +4466,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         g_app.hTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                       WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
-                                      TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_CHECKBOXES,
+                                      TVS_LINESATROOT | TVS_SHOWSELALWAYS,
                                       0, 34, 340, 400, hwnd, NULL, g_app.hInst, NULL);
         SendMessageW(g_app.hTree, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         TreeView_SetUnicodeFormat(g_app.hTree, TRUE);
-        /* Bug4: 树扩展样式开启多选（Ctrl 单击连续多选 / Shift 起止范围选）。
-         * 注意 TreeView_SetExtendedStyle 签名是 (hwnd, mask, style)，mask 指定要
-         * 修改的位，style 是目标值。旧代码 style=0 会把 TVS_EX_MULTISELECT 清为 0
-         * （禁用多选），应设为 TVS_EX_MULTISELECT 才真正开启。 */
+        /* 多选：Ctrl 单击追加 / Shift 范围选；勾选框已移除，观测靠拖入/右键加窗 */
         TreeView_SetExtendedStyle(g_app.hTree, TVS_EX_MULTISELECT, TVS_EX_MULTISELECT);
+        g_tree_oldproc = (WNDPROC)SetWindowLongPtrW(g_app.hTree, GWLP_WNDPROC,
+                                                    (LONG_PTR)tree_drag_proc);
         g_app.hLeftTab = CreateWindowW(WC_TABCONTROLW, L"",
                                        WS_CHILD | WS_VISIBLE | TCS_FIXEDWIDTH,
                                        0, 34, 340, LEFT_TAB_H, hwnd, NULL, g_app.hInst, NULL);
@@ -4184,8 +4552,16 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         mHelp = CreateMenu();
         g_menu_file = mFile;
         AppendMenuW(mFile, MF_STRING, IDC_BTN_OPEN, L"打开 ELF 文件...\tCtrl+O");
+        AppendMenuW(mFile, MF_STRING, IDM_A2L_IMPORT, L"加载 A2L...");
         AppendMenuW(mFile, MF_STRING, IDM_A2L_EXPORT, L"导出 A2L（CANape，含标定量）...");
         AppendMenuW(mFile, MF_STRING, IDM_A2L_EXPORT_MEAS, L"导出 A2L（全部为测量量）...");
+        AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
+        AppendMenuW(mFile, MF_STRING, IDM_WS_LOAD, L"打开 Workspace...");
+        AppendMenuW(mFile, MF_STRING, IDM_WS_SAVE, L"保存 Workspace...");
+        AppendMenuW(mFile, MF_STRING, IDM_WS_ADD_PROJ, L"添加 Project...");
+        g_menu_proj = CreatePopupMenu();
+        AppendMenuW(mFile, MF_POPUP, (UINT_PTR)g_menu_proj, L"活动 Project");
+        rebuild_project_menu();
         AppendMenuW(mFile, MF_STRING, IDM_SRCMAP, L"源码目录关联...");
         AppendMenuW(mFile, MF_STRING, IDM_SRC_QUICK, L"快速打开源码...\tCtrl+P");
         AppendMenuW(mFile, MF_STRING, IDM_LAYOUT_SAVE, L"保存布局为...");
@@ -4240,6 +4616,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mNet, L"网络(&N)");
         AppendMenuW(g_menu, MF_POPUP, (UINT_PTR)mHelp, L"帮助(&H)");
         SetMenu(hwnd, g_menu);
+        os_theme_menu(g_menu);
         os_mainwin_rebuild_window_menu();
         SetTimer(hwnd, 1, 2000, NULL);
         SetTimer(hwnd, 3, 200, NULL); /* N9(d): 变量栏自动隐藏轮询 */
@@ -4249,8 +4626,50 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         os_log(OS_LOG_INFO, "OpenScope 已启动");
         refresh_status();
         os_mainwin_update_buttons();
-        os_theme_apply(hwnd); /* F20: 主题（标题栏/树/日志/状态栏/控件色） */
+        os_theme_apply(hwnd); /* F20: 主题（标题栏/菜单/树/日志/状态栏/控件色） */
         return 0;
+    }
+    /* Win10+ 未文档化：自绘菜单栏背景，避免深色主题下菜单条发白 */
+    case 0x0091: /* WM_UAHDRAWMENU */ {
+        UAHMENU* p = (UAHMENU*)lParam;
+        if (p && p->hdc && os_theme_dark()) {
+            RECT rc = { 0 };
+            MENUBARINFO mbi;
+            memset(&mbi, 0, sizeof(mbi));
+            mbi.cbSize = sizeof(mbi);
+            if (GetMenuBarInfo(hwnd, OBJID_MENU, 0, &mbi)) {
+                RECT wr;
+                GetWindowRect(hwnd, &wr);
+                rc = mbi.rcBar;
+                OffsetRect(&rc, -wr.left, -wr.top);
+                FillRect(p->hdc, &rc, os_theme_brush(TH_PANEL));
+            }
+            return TRUE;
+        }
+        break;
+    }
+    case 0x0092: /* WM_UAHDRAWMENUITEM */ {
+        UAHDRAWMENUITEM* p = (UAHDRAWMENUITEM*)lParam;
+        if (p && os_theme_dark()) {
+            wchar_t text[256];
+            MENUITEMINFOW mii;
+            int selected = (p->dis.itemState & (ODS_HOTLIGHT | ODS_SELECTED | ODS_FOCUS));
+            memset(&mii, 0, sizeof(mii));
+            mii.cbSize = sizeof(mii);
+            mii.fMask = MIIM_STRING;
+            mii.dwTypeData = text;
+            mii.cch = 255;
+            text[0] = 0;
+            GetMenuItemInfoW(p->um.hmenu, (UINT)p->umi.iPosition, TRUE, &mii);
+            FillRect(p->um.hdc, &p->dis.rcItem,
+                     os_theme_brush(selected ? TH_TREE_SEL_BG : TH_PANEL));
+            SetBkMode(p->um.hdc, TRANSPARENT);
+            SetTextColor(p->um.hdc, os_theme(selected ? TH_TREE_SEL_TEXT : TH_TEXT));
+            DrawTextW(p->um.hdc, text, -1, &p->dis.rcItem,
+                      DT_CENTER | DT_SINGLELINE | DT_VCENTER);
+            return TRUE;
+        }
+        break;
     }
     case WM_SIZE:
         layout();
@@ -4266,6 +4685,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_INITMENU: /* F20: 菜单打开时同步深色模式勾选状态 */
         CheckMenuItem(g_menu_file, IDM_THEME_DARK,
                       MF_BYCOMMAND | (os_theme_dark() ? MF_CHECKED : MF_UNCHECKED));
+        if (os_theme_dark()) os_theme_menu_show(g_menu);
+        break;
+    case WM_INITMENUPOPUP:
+        if (os_theme_dark() && wParam)
+            os_theme_menu((HMENU)wParam);
+        break;
+    case WM_EXITMENULOOP:
+        if (os_theme_dark()) os_theme_menu_end();
         break;
     case WM_CTLCOLORBTN:
     case WM_CTLCOLORSTATIC:
@@ -4599,21 +5026,21 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 tree_context_menu(hwnd, lParam);
                 return 0;
             }
-            if (h->code == TVN_ITEMCHANGEDW) {
-                NMTVITEMCHANGE* p = (NMTVITEMCHANGE*)lParam;
-                /* 需求2：树填充期间屏蔽勾选联动（重建时节点 lParam 是旧叶表 id，
-                 * 回写会误置新叶表同名位置的观测标志）；仅响应勾选框位真实翻转，
-                 * 选择状态变化不处理（uStateNew 含 TVIS_SELECTED 时图像位为 0） */
-                if (!os_vartree_is_filling() && (p->uChanged & TVIF_STATE) &&
-                    ((p->uStateOld ^ p->uStateNew) & TVIS_STATEIMAGEMASK)) {
-                    LPARAM lp = p->lParam;
-                    if (lp > 0) {
-                        int id = (int)(lp - 1);
-                        int checked = ((p->uStateNew & TVIS_STATEIMAGEMASK) >> 12) == 2;
-                        os_vartree_set_watch(id, checked);
-                        refresh_status();
-                        os_mainwin_update_buttons();
-                    }
+            if (h->code == TVN_BEGINDRAGW || h->code == TVN_BEGINDRAGA) {
+                NMTREEVIEWW* tv = (NMTREEVIEWW*)lParam;
+                /* 拖拽前确保命中项在选区；支持 Shift/Ctrl 多选后整批拖入 */
+                if (tv && tv->itemNew.hItem &&
+                    !(TreeView_GetItemState(g_app.hTree, tv->itemNew.hItem, TVIS_SELECTED) & TVIS_SELECTED))
+                    TreeView_SelectItem(g_app.hTree, tv->itemNew.hItem);
+                g_tree_drag_n = tree_selected_ids(g_tree_drag_ids, 512);
+                if (g_tree_drag_n <= 0 && tv && tv->itemNew.lParam > 0) {
+                    g_tree_drag_ids[0] = (int)tv->itemNew.lParam - 1;
+                    g_tree_drag_n = 1;
+                }
+                if (g_tree_drag_n > 0) {
+                    g_tree_dragging = 1;
+                    SetCapture(g_app.hTree);
+                    SetCursor(LoadCursor(NULL, IDC_HAND));
                 }
                 return 0;
             }
@@ -4648,6 +5075,16 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_XCP_WIN:
             os_xcpwin_show(hwnd);
             break;
+        case IDM_A2L_IMPORT: {
+            int n = os_a2l_import_dialog(hwnd, os_ws_active_id());
+            if (n > 0) {
+                os_log(OS_LOG_INFO, "A2L 已加载 %d 个变量", n);
+                refresh_status();
+                os_mainwin_update_buttons();
+            } else if (n < 0)
+                os_msgbox(hwnd, L"A2L 加载失败", L"A2L", MB_OK | MB_ICONWARNING);
+            break;
+        }
         case IDM_A2L_EXPORT:
             if (os_a2l_export_dialog(hwnd, 1) == 0)
                 os_log(OS_LOG_INFO, "A2L 导出完成（含标定量）");
@@ -4656,6 +5093,35 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (os_a2l_export_dialog(hwnd, 0) == 0)
                 os_log(OS_LOG_INFO, "A2L 导出完成（全部测量量）");
             break;
+        case IDM_WS_SAVE:
+            if (os_ws_save_dialog(hwnd) == 0)
+                os_log(OS_LOG_INFO, "Workspace 已保存");
+            break;
+        case IDM_WS_LOAD:
+            if (os_ws_load_dialog(hwnd) == 0) {
+                OS_Project* pr = os_ws_active();
+                os_log(OS_LOG_INFO, "Workspace 已加载（%d 个 Project）", os_ws()->project_count);
+                rebuild_project_menu();
+                if (pr) {
+                    if (pr->kind == OS_PROJ_PROBE && pr->driver_index >= 0)
+                        os_modmgr_select_driver(pr->driver_index);
+                    proj_cfg_to_toolbar(pr);
+                }
+                if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+                refresh_status();
+                os_mainwin_update_buttons();
+            }
+            break;
+        case IDM_WS_ADD_PROJ: {
+            int idx = os_ws_add_project("MCU", OS_PROJ_PROBE, os_modmgr_driver_index());
+            if (idx >= 0) {
+                os_ws_set_active(idx);
+                os_log(OS_LOG_INFO, "已添加 Project #%d", idx);
+                rebuild_project_menu();
+                refresh_status();
+            }
+            break;
+        }
         case IDM_SRCMAP:
             os_srcmap_load_for_elf(&g_srcmap, g_app.elf_path);
             os_srcmap_dialog(hwnd, &g_srcmap);
@@ -4837,7 +5303,28 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         }
         default:
-            if (LOWORD(wParam) >= IDM_WIN_MODULE_BASE &&
+            if (LOWORD(wParam) >= IDM_WS_PROJ_BASE &&
+                LOWORD(wParam) < IDM_WS_PROJ_BASE + OS_MAX_PROJECTS) {
+                int pi = LOWORD(wParam) - IDM_WS_PROJ_BASE;
+                OS_Project* pr = os_ws_project_at(pi);
+                if (pr) {
+                    OS_Project* old = os_ws_active();
+                    if (old && old->kind == OS_PROJ_PROBE) proj_cfg_from_toolbar(old);
+                    os_ws_set_active(pi);
+                    if (pr->kind == OS_PROJ_PROBE && pr->driver_index >= 0)
+                        os_modmgr_select_driver(pr->driver_index);
+                    proj_cfg_to_toolbar(pr);
+                    if (pr->elf) {
+                        g_app.elf = pr->elf;
+                        _snwprintf(g_app.elf_path, MAX_PATH, L"%s", pr->elf_path);
+                    }
+                    rebuild_project_menu();
+                    if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+                    os_log(OS_LOG_INFO, "活动 Project: %s", pr->name);
+                    refresh_status();
+                    os_mainwin_update_buttons();
+                }
+            } else if (LOWORD(wParam) >= IDM_WIN_MODULE_BASE &&
                 LOWORD(wParam) < IDM_WIN_MODULE_BASE + g_modwin_menu_count) {
                 int idx = LOWORD(wParam) - IDM_WIN_MODULE_BASE;
                 ModWinMenuItem* it = &g_modwin_menu[idx];

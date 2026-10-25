@@ -74,6 +74,11 @@ typedef struct {
 #define IDM_XCP_WIN          2706          /* XCP 标定窗口 */
 #define IDM_A2L_EXPORT       2707          /* 导出 A2L（含标定量） */
 #define IDM_A2L_EXPORT_MEAS  2708          /* 导出 A2L（全部为测量量） */
+#define IDM_A2L_IMPORT       2709          /* 加载 A2L */
+#define IDM_WS_SAVE          2710          /* 保存 Workspace */
+#define IDM_WS_LOAD          2711          /* 打开 Workspace */
+#define IDM_WS_ADD_PROJ      2712          /* 添加 Project */
+#define IDM_WS_PROJ_BASE     2800          /* 2800+i 切换活动 Project */
 
 #define IDI_APP 1 /* 应用图标资源（version.rc） */
 #define IDR_HELP_MD 100 /* 需求12：readme.md 帮助文本资源（version.rc RCDATA 内嵌） */
@@ -105,6 +110,8 @@ typedef struct OS_Leaf {
     volatile LONG watched;
     OS_Sample   sample;
     int         is_synth; /* 需求14：远端同步进来的变量（非本机 ELF 解析） */
+    int         from_a2l; /* A2L 导入 */
+    int         project_id; /* 所属 Workspace Project */
 } OS_Leaf;
 
 /* 右侧窗口区的一个 tab。N11: 一个 tab 可容纳多个窗口（group[0]==hwnd）。 */

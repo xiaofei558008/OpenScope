@@ -20,6 +20,8 @@
 
 #define IDM_SRC_BP_ADD    5601
 #define IDM_SRC_BP_DEL    5602
+#define IDM_SRC_COPY      5603
+#define IDM_SRC_SELECTALL 5604
 
 typedef struct {
     int      line;     /* 1-based */
@@ -36,6 +38,9 @@ typedef struct OS_SrcWin {
     int top;           /* 首可见行 0-based */
     int caret_line;    /* 高亮行 0-based，-1=无 */
     int pc_line;       /* 当前 PC 行 0-based，-1=无 */
+    int sel_a;         /* 框选锚点行，-1=无选区 */
+    int sel_b;         /* 框选终点行 */
+    int selecting;     /* 鼠标拖选中 */
     SrcBp bps[OS_BP_MAX];
     int bp_count;
     HFONT font;
@@ -284,10 +289,55 @@ static void src_update_scroll(OS_SrcWin* s)
     SetScrollInfo(s->hwnd, SB_VERT, &si, TRUE);
 }
 
+static void src_sel_range(const OS_SrcWin* s, int* lo, int* hi)
+{
+    if (!s || s->sel_a < 0 || s->sel_b < 0) { *lo = *hi = -1; return; }
+    *lo = s->sel_a < s->sel_b ? s->sel_a : s->sel_b;
+    *hi = s->sel_a > s->sel_b ? s->sel_a : s->sel_b;
+}
+
+static void src_copy_selection(OS_SrcWin* s)
+{
+    int lo, hi, i;
+    size_t total = 0;
+    wchar_t* buf;
+    HGLOBAL hg;
+    if (!s) return;
+    src_sel_range(s, &lo, &hi);
+    if (lo < 0) {
+        if (s->caret_line >= 0 && s->caret_line < s->line_count) {
+            lo = hi = s->caret_line;
+        } else return;
+    }
+    if (lo < 0 || hi >= s->line_count) return;
+    for (i = lo; i <= hi; i++)
+        total += (s->lines[i] ? wcslen(s->lines[i]) : 0) + 2; /* \r\n */
+    buf = (wchar_t*)malloc((total + 1) * sizeof(wchar_t));
+    if (!buf) return;
+    buf[0] = 0;
+    for (i = lo; i <= hi; i++) {
+        if (s->lines[i]) wcscat(buf, s->lines[i]);
+        if (i < hi) wcscat(buf, L"\r\n");
+    }
+    if (!OpenClipboard(s->hwnd)) { free(buf); return; }
+    EmptyClipboard();
+    hg = GlobalAlloc(GMEM_MOVEABLE, (wcslen(buf) + 1) * sizeof(wchar_t));
+    if (hg) {
+        wchar_t* p = (wchar_t*)GlobalLock(hg);
+        if (p) {
+            wcscpy(p, buf);
+            GlobalUnlock(hg);
+            SetClipboardData(CF_UNICODETEXT, hg);
+        } else GlobalFree(hg);
+    }
+    CloseClipboard();
+    free(buf);
+}
+
 static void src_paint(OS_SrcWin* s, HDC hdc)
 {
     RECT rc, gr, tr;
-    int y, i, visible;
+    int y, i, visible, sel_lo, sel_hi;
     HBRUSH bg = os_theme_brush(TH_BG);
     COLORREF text = os_theme(TH_TEXT);
     COLORREF muted = os_theme(TH_DIMTEXT);
@@ -296,6 +346,7 @@ static void src_paint(OS_SrcWin* s, HDC hdc)
     SelectObject(hdc, s->font ? s->font : GetStockObject(ANSI_FIXED_FONT));
     SetBkMode(hdc, TRANSPARENT);
     visible = (rc.bottom - rc.top) / s->line_h + 1;
+    src_sel_range(s, &sel_lo, &sel_hi);
 
     /* gutter */
     gr = rc;
@@ -304,18 +355,23 @@ static void src_paint(OS_SrcWin* s, HDC hdc)
 
     for (i = 0; i < visible; i++) {
         int li = s->top + i;
+        int in_sel;
         wchar_t num[16];
         if (li < 0 || li >= s->line_count) break;
         y = i * s->line_h;
+        in_sel = (sel_lo >= 0 && li >= sel_lo && li <= sel_hi);
 
         if (li == s->pc_line) {
             RECT hr = { GUTTER_W, y, rc.right, y + s->line_h };
             HBRUSH hb = CreateSolidBrush(RGB(90, 70, 20));
             FillRect(hdc, &hr, hb);
             DeleteObject(hb);
+        } else if (in_sel) {
+            RECT hr = { GUTTER_W, y, rc.right, y + s->line_h };
+            FillRect(hdc, &hr, os_theme_brush(TH_TREE_SEL_BG));
         } else if (li == s->caret_line) {
             RECT hr = { GUTTER_W, y, rc.right, y + s->line_h };
-            HBRUSH hb = CreateSolidBrush(RGB(40, 60, 90));
+            HBRUSH hb = CreateSolidBrush(os_theme_dark() ? RGB(40, 60, 90) : RGB(220, 232, 246));
             FillRect(hdc, &hr, hb);
             DeleteObject(hb);
         }
@@ -334,7 +390,7 @@ static void src_paint(OS_SrcWin* s, HDC hdc)
         tr.left = 20; tr.top = y; tr.right = GUTTER_W - 4; tr.bottom = y + s->line_h;
         DrawTextW(hdc, num, -1, &tr, DT_RIGHT | DT_VCENTER | DT_SINGLELINE);
 
-        SetTextColor(hdc, text);
+        SetTextColor(hdc, in_sel ? os_theme(TH_TREE_SEL_TEXT) : text);
         tr.left = GUTTER_W + 6; tr.right = rc.right - 4;
         DrawTextW(hdc, s->lines[li] ? s->lines[li] : L"", -1, &tr,
                   DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
@@ -353,6 +409,8 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         s->hwnd = hwnd;
         s->caret_line = -1;
         s->pc_line = -1;
+        s->sel_a = s->sel_b = -1;
+        s->selecting = 0;
         s->line_h = LINE_H;
         s->font = CreateFontW(15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                               OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -429,7 +487,7 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         int li;
         POINT pt;
         HMENU m;
-        int has_bp;
+        int has_bp, sel_lo, sel_hi;
         if (!s) break;
         li = s->top + y / s->line_h;
         if (li < 0 || li >= s->line_count) return 0;
@@ -439,9 +497,14 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             SetFocus(hwnd);
             return 0;
         }
-        /* WM_RBUTTONUP：弹出菜单 */
         has_bp = src_has_bp(s, li + 1) >= 0;
+        src_sel_range(s, &sel_lo, &sel_hi);
         m = CreatePopupMenu();
+        os_theme_menu_show(m);
+        AppendMenuW(m, MF_STRING | (sel_lo < 0 && s->caret_line < 0 ? MF_GRAYED : 0),
+                    IDM_SRC_COPY, L"复制\tCtrl+C");
+        AppendMenuW(m, MF_STRING, IDM_SRC_SELECTALL, L"全选\tCtrl+A");
+        AppendMenuW(m, MF_SEPARATOR, 0, NULL);
         if (has_bp)
             AppendMenuW(m, MF_STRING, IDM_SRC_BP_DEL, L"取消断点");
         else
@@ -450,22 +513,122 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
             int cmd = TrackPopupMenu(m, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_RIGHTBUTTON,
                                      pt.x, pt.y, 0, hwnd, NULL);
+            os_theme_menu_end();
             DestroyMenu(m);
             if (cmd == IDM_SRC_BP_ADD || cmd == IDM_SRC_BP_DEL)
                 src_toggle_bp(s, li + 1);
+            else if (cmd == IDM_SRC_COPY)
+                src_copy_selection(s);
+            else if (cmd == IDM_SRC_SELECTALL && s->line_count > 0) {
+                s->sel_a = 0;
+                s->sel_b = s->line_count - 1;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
         }
         return 0;
     }
     case WM_LBUTTONDOWN: {
+        int x = (short)LOWORD(lp);
         int y = (short)HIWORD(lp);
         int li;
         if (!s) break;
         li = s->top + y / s->line_h;
-        if (li >= 0 && li < s->line_count) s->caret_line = li;
+        if (li < 0) li = 0;
+        if (li >= s->line_count) li = s->line_count - 1;
+        if (li >= 0 && li < s->line_count) {
+            s->caret_line = li;
+            if (x >= GUTTER_W) {
+                if (!(wp & MK_SHIFT) || s->sel_a < 0)
+                    s->sel_a = li;
+                s->sel_b = li;
+                s->selecting = 1;
+                SetCapture(hwnd);
+            } else {
+                s->sel_a = s->sel_b = -1;
+            }
+        }
         SetFocus(hwnd);
         InvalidateRect(hwnd, NULL, FALSE);
         return 0;
     }
+    case WM_MOUSEMOVE:
+        if (s && s->selecting && (wp & MK_LBUTTON)) {
+            int y = (short)HIWORD(lp);
+            int li = s->top + y / s->line_h;
+            if (li < 0) li = 0;
+            if (li >= s->line_count) li = s->line_count - 1;
+            if (li != s->sel_b) {
+                s->sel_b = li;
+                s->caret_line = li;
+                /* 拖出可视区时滚动 */
+                if (y < 0) { s->top--; src_update_scroll(s); }
+                else {
+                    RECT rc; GetClientRect(hwnd, &rc);
+                    if (y > rc.bottom) { s->top++; src_update_scroll(s); }
+                }
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+        break;
+    case WM_LBUTTONUP:
+        if (s && s->selecting) {
+            s->selecting = 0;
+            ReleaseCapture();
+            return 0;
+        }
+        break;
+    case WM_KEYDOWN:
+        if (!s) break;
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && wp == 'C') {
+            src_copy_selection(s);
+            return 0;
+        }
+        if ((GetKeyState(VK_CONTROL) & 0x8000) && wp == 'A') {
+            if (s->line_count > 0) {
+                s->sel_a = 0;
+                s->sel_b = s->line_count - 1;
+                InvalidateRect(hwnd, NULL, FALSE);
+            }
+            return 0;
+        }
+        if (wp == VK_ESCAPE) {
+            s->sel_a = s->sel_b = -1;
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        if (wp == VK_UP || wp == VK_DOWN || wp == VK_PRIOR || wp == VK_NEXT ||
+            wp == VK_HOME || wp == VK_END) {
+            int li = s->caret_line < 0 ? s->top : s->caret_line;
+            RECT rc; int page;
+            GetClientRect(hwnd, &rc);
+            page = (rc.bottom - rc.top) / s->line_h;
+            if (page < 1) page = 1;
+            if (wp == VK_UP) li--;
+            else if (wp == VK_DOWN) li++;
+            else if (wp == VK_PRIOR) li -= page;
+            else if (wp == VK_NEXT) li += page;
+            else if (wp == VK_HOME) li = 0;
+            else if (wp == VK_END) li = s->line_count - 1;
+            if (li < 0) li = 0;
+            if (li >= s->line_count) li = s->line_count > 0 ? s->line_count - 1 : 0;
+            s->caret_line = li;
+            if (GetKeyState(VK_SHIFT) & 0x8000) {
+                if (s->sel_a < 0) s->sel_a = li;
+                s->sel_b = li;
+            } else {
+                s->sel_a = s->sel_b = -1;
+            }
+            if (li < s->top) s->top = li;
+            if (li >= s->top + page) s->top = li - page + 1;
+            src_update_scroll(s);
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        break;
+    case WM_COPY:
+        if (s) src_copy_selection(s);
+        return 0;
     case WM_SETFOCUS:
         os_win_mark_active(hwnd);
         return 0;

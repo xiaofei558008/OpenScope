@@ -6,6 +6,8 @@
 /* 开始/停止采集轮询线程 */
 int os_ds_start(void);
 void os_ds_stop(void);
+/* 任一 Workspace Project / XCP / 全局探针已连接即可采集 */
+int os_ds_any_connected(void);
 
 /* 推送一批样本（轮询线程/回放线程调用）：入环形缓冲、更新最新值、写日志、通知 UI */
 void os_ds_push_batch(OS_Sample* samples, int n);

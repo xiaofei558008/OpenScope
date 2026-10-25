@@ -10,10 +10,12 @@ void xcp_master_init(XcpMaster* m, const XcpIo* io)
     m->max_dto = 8;
 }
 
+/* 成功返回响应长度 (>=1)；传输/帧错误 -1；从机 ERR -2。 */
 static int xfer(XcpMaster* m, const uint8_t* cmd, int n, uint8_t* rsp, int cap)
 {
     int rn;
     m->last_err = 0;
+    if (!m || !cmd || !rsp || n < 1 || cap < 1) return -1;
     if (!m->io.send || !m->io.recv) return -1;
     if (m->io.send(m->io.ctx, cmd, n) != n) return -1;
     rn = m->io.recv(m->io.ctx, rsp, cap, 1000);
@@ -23,22 +25,26 @@ static int xfer(XcpMaster* m, const uint8_t* cmd, int n, uint8_t* rsp, int cap)
         return -2;
     }
     if (rsp[0] != XCP_PID_RES) return -1;
-    return 0;
+    return rn;
 }
 
 static int xfer_ok(XcpMaster* m, const uint8_t* cmd, int n)
 {
     uint8_t rsp[XCP_MAX_CTO];
-    return xfer(m, cmd, n, rsp, (int)sizeof(rsp));
+    int rn = xfer(m, cmd, n, rsp, (int)sizeof(rsp));
+    return rn < 0 ? rn : 0;
 }
 
 int xcp_master_connect(XcpMaster* m)
 {
     uint8_t cmd[2] = { XCP_CMD_CONNECT, 0x00 };
     uint8_t rsp[XCP_MAX_CTO];
-    int rc = xfer(m, cmd, 2, rsp, (int)sizeof(rsp));
-    if (rc != 0) return rc;
-    if (rsp[0] != XCP_PID_RES) return -1;
+    int rn;
+    if (!m) return -1;
+    rn = xfer(m, cmd, 2, rsp, (int)sizeof(rsp));
+    if (rn < 0) return rn;
+    /* ASAM CONNECT 肯定应答至少 8 字节：PID..TRANSPORT_VER */
+    if (rn < 8) return -1;
     m->resource = rsp[1];
     m->max_cto = rsp[3] >= 8 ? rsp[3] : 8;
     m->max_dto = xcp_rd16(rsp + 4);
@@ -77,8 +83,8 @@ int xcp_master_upload(XcpMaster* m, uint32_t addr, void* dst, int n)
         cmd[3] = 0;
         xcp_wr32(cmd + 4, addr + (uint32_t)got);
         rc = xfer(m, cmd, 8, rsp, (int)sizeof(rsp));
-        if (rc != 0) return rc;
-        if (rsp[0] != XCP_PID_RES) return -1;
+        if (rc < 0) return rc;
+        if (rc < 1 + chunk) return -1;
         memcpy(out + got, rsp + 1, (size_t)chunk);
         got += chunk;
     }
@@ -172,7 +178,8 @@ int xcp_master_checksum(XcpMaster* m, uint32_t addr, uint32_t size, uint32_t* su
     cmd[1] = cmd[2] = cmd[3] = 0;
     xcp_wr32(cmd + 4, size);
     rc = xfer(m, cmd, 8, rsp, (int)sizeof(rsp));
-    if (rc != 0) return rc;
+    if (rc < 0) return rc;
+    if (rc < 8) return -1;
     if (rsp[1] != XCP_CHECKSUM_ADD_14) return -1;
     if (sum) *sum = xcp_rd32(rsp + 4);
     return 0;
@@ -186,9 +193,10 @@ int xcp_master_unlock_cal(XcpMaster* m)
     cmd[1] = 0;
     cmd[2] = XCP_RES_CAL_PAG;
     rc = xfer(m, cmd, 3, rsp, (int)sizeof(rsp));
-    if (rc != 0) return rc;
+    if (rc < 0) return rc;
+    if (rc < 2) return -1;
     if (rsp[1] == 0) return 0;
-    if (rsp[1] != 4) return -1;
+    if (rsp[1] != 4 || rc < 6) return -1;
     cmd[0] = XCP_CMD_UNLOCK;
     cmd[1] = 4;
     for (i = 0; i < 4; i++) cmd[2 + i] = (uint8_t)(rsp[2 + i] ^ 0xFF);

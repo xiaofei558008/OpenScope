@@ -12,6 +12,7 @@
 #include "module_api.h"
 #include "util.h"
 #include "xcpsym.h"
+#include "theme.h"
 
 #include <commdlg.h>
 #include <stdio.h>
@@ -199,6 +200,17 @@ static int xw_parse_u32(HWND hwnd, int idc, uint32_t* out)
     return 0;
 }
 
+static void xw_sync_connected(void)
+{
+    int c = 0;
+    if (g_app.xcpmod && g_app.xcpmod->command)
+        g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+    if (g_app.xcp_connected != c) {
+        g_app.xcp_connected = c;
+        os_mainwin_request_ui_sync();
+    }
+}
+
 static int xw_read_bytes(uint32_t addr, uint32_t size, uint8_t* buf)
 {
     OS_MemReq req;
@@ -210,19 +222,26 @@ static int xw_read_bytes(uint32_t addr, uint32_t size, uint8_t* buf)
     req.size = size;
     req.data = buf;
     rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_READ_MEM, &req, NULL);
-    return rc < 0 ? rc : (int)req.size;
+    if (rc < 0) {
+        xw_sync_connected();
+        return rc;
+    }
+    return (int)req.size;
 }
 
 static int xw_write_bytes(uint32_t addr, const uint8_t* buf, uint32_t size)
 {
     OS_MemReq req;
+    int rc;
     if (!g_app.xcpmod || !g_app.xcpmod->command || !g_app.xcp_connected)
         return OS_ERR_NOT_CONNECTED;
     memset(&req, 0, sizeof(req));
     req.address = addr;
     req.size = size;
     req.data = (void*)buf;
-    return g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
+    rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_WRITE_MEM, &req, NULL);
+    if (rc < 0) xw_sync_connected();
+    return rc;
 }
 
 static void xw_do_connect(HWND hwnd)
@@ -569,8 +588,25 @@ static LRESULT CALLBACK xcpwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         }
         xw_fill_symbols(hwnd);
         xw_set_status(hwnd, g_app.xcp_connected ? L"已连接" : L"未连接");
+        os_theme_window_tree(hwnd);
         return 0;
     }
+    case WM_ERASEBKGND: {
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect((HDC)wParam, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        SetTextColor((HDC)wParam, os_theme(TH_TEXT));
+        SetBkColor((HDC)wParam, os_theme(TH_BG));
+        return (LRESULT)os_theme_brush(TH_BG);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        SetTextColor((HDC)wParam, os_theme(TH_EDIT_TEXT));
+        SetBkColor((HDC)wParam, os_theme(TH_EDIT_BG));
+        return (LRESULT)os_theme_brush(TH_EDIT_BG);
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case IDC_XW_SCAN: xw_do_scan(hwnd); break;
@@ -585,7 +621,8 @@ static LRESULT CALLBACK xcpwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM l
         case IDC_XW_CLOSE: DestroyWindow(hwnd); break;
         case IDC_XW_PICK: {
             int id = 0;
-            if (os_dlg_pick_var(hwnd, &id) == 0) {
+            if (os_dlg_pick_var(hwnd, &id) == 0 &&
+                id >= 0 && id < g_app.leaf_count) {
                 OS_XcpSym s;
                 memset(&s, 0, sizeof(s));
                 _snprintf(s.name, sizeof(s.name), "%s", g_app.leaves[id].name);
@@ -636,6 +673,7 @@ void os_xcpwin_show(HWND owner)
     if (g_xcpwin && IsWindow(g_xcpwin)) {
         ShowWindow(g_xcpwin, SW_SHOW);
         SetForegroundWindow(g_xcpwin);
+        os_theme_window_tree(g_xcpwin);
         os_xcpsym_invalidate();
         xw_fill_symbols(g_xcpwin);
         return;
@@ -644,13 +682,14 @@ void os_xcpwin_show(HWND owner)
     wc.lpfnWndProc = xcpwin_proc;
     wc.hInstance = g_app.hInst;
     wc.lpszClassName = L"OpenScopeXcpWin";
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.hbrBackground = NULL;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     RegisterClassW(&wc);
     g_xcpwin = CreateWindowExW(WS_EX_TOOLWINDOW, L"OpenScopeXcpWin", L"XCP 标定 / 调试",
                                WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
                                CW_USEDEFAULT, CW_USEDEFAULT, 820, 530,
                                owner ? owner : g_app.hMain, NULL, g_app.hInst, NULL);
+    if (g_xcpwin) os_theme_window_tree(g_xcpwin);
 }
 
 void os_xcpwin_hide(void)
@@ -661,9 +700,7 @@ void os_xcpwin_hide(void)
 
 void os_xcpwin_refresh(void)
 {
-    if (g_xcpwin && IsWindow(g_xcpwin)) {
+    /* UI 同步仅刷新状态；符号表重建很重，改由加载 ELF/MAP/Refresh 按钮触发 */
+    if (g_xcpwin && IsWindow(g_xcpwin))
         xw_set_status(g_xcpwin, g_app.xcp_connected ? L"已连接" : L"未连接");
-        if (IsWindowVisible(g_xcpwin))
-            xw_fill_symbols(g_xcpwin);
-    }
 }

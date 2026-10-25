@@ -1,5 +1,6 @@
 #include "app.h"
 #include "datalog.h"
+#include "workspace.h"
 #include "datasrv.h"
 #include "vartree.h"
 #include <stdlib.h>
@@ -46,11 +47,13 @@ int os_datalog_start(const wchar_t* path)
     if (!g_app.log_csv) return -1;
     _snwprintf(g_app.log_path, MAX_PATH, L"%s", path);
     fputs("\xEF\xBB\xBF", g_app.log_csv); /* UTF-8 BOM */
-    fputs("timestamp_us,time_iso", g_app.log_csv);
+    fputs("timestamp_us,time_iso,project_id", g_app.log_csv);
     for (i = 0; i < g_app.leaf_count; i++) {
         if (g_app.leaves[i].watched) {
+            char label[320];
             fputc(',', g_app.log_csv);
-            csv_write_field(g_app.log_csv, g_app.leaves[i].name);
+            os_ws_leaf_label(&g_app.leaves[i], label, sizeof(label));
+            csv_write_field(g_app.log_csv, label[0] ? label : g_app.leaves[i].name);
         }
     }
     fputc('\n', g_app.log_csv);
@@ -82,7 +85,16 @@ void os_datalog_append(void)
         }
     }
     os_time_iso(ts, iso, sizeof(iso));
-    fprintf(g_app.log_csv, "%lld,%s", (long long)ts, iso);
+    {
+        int pid = 0;
+        for (i = 0; i < g_app.leaf_count; i++) {
+            if (g_app.leaves[i].watched && g_app.leaves[i].sample.size) {
+                pid = g_app.leaves[i].sample.project_id;
+                break;
+            }
+        }
+        fprintf(g_app.log_csv, "%lld,%s,%d", (long long)ts, iso, pid);
+    }
     for (i = 0; i < g_app.leaf_count; i++) {
         OS_Leaf* L = &g_app.leaves[i];
         if (!L->watched) continue;
@@ -322,11 +334,13 @@ static int spool_open_file(void)
     g_app.spool_f = _wfopen(g_app.spool_path, L"wb");
     if (!g_app.spool_f) return -1;
     fputs("\xEF\xBB\xBF", g_app.spool_f);
-    fputs("timestamp_us,time_iso", g_app.spool_f);
+    fputs("timestamp_us,time_iso,project_id", g_app.spool_f);
     for (i = 0; i < g_app.leaf_count; i++) {
         if (g_app.leaves[i].watched) {
+            char label[320];
             fputc(',', g_app.spool_f);
-            csv_write_field(g_app.spool_f, g_app.leaves[i].name);
+            os_ws_leaf_label(&g_app.leaves[i], label, sizeof(label));
+            csv_write_field(g_app.spool_f, label[0] ? label : g_app.leaves[i].name);
         }
     }
     fputc('\n', g_app.spool_f);
@@ -338,7 +352,7 @@ static void spool_write_sample(FILE* f, const OS_Sample* s)
     char iso[64];
     int i;
     os_time_iso(s->ts_us, iso, sizeof(iso));
-    fprintf(f, "%lld,%s", (long long)s->ts_us, iso);
+    fprintf(f, "%lld,%s,%d", (long long)s->ts_us, iso, s->project_id);
     for (i = 0; i < g_app.leaf_count; i++) {
         OS_Leaf* L = &g_app.leaves[i];
         if (!L->watched) continue;

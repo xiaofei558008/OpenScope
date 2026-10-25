@@ -44,5 +44,14 @@ void os_theme_apply(HWND hMain);
 void os_theme_load(void);
 /* 把 ListView 的列头（SysHeader32）子类化自绘为主题色（可重复调用，按句柄去重） */
 void os_theme_listview_header(HWND list);
+/* 菜单栏/弹出菜单刷主题底色（MIM_BACKGROUND）；主菜单与 CreatePopupMenu 后调用 */
+void os_theme_menu(HMENU menu);
+/* TrackPopupMenu 前：刷 HMENU + FlushMenuThemes，并短暂钩住 #32768 暗色；返回后调 os_theme_menu_end */
+void os_theme_menu_show(HMENU menu);
+void os_theme_menu_end(void);
+/* 递归给窗口树打系统暗色 + DarkMode_Explorer（浮窗/对话框也调用） */
+void os_theme_window_tree(HWND root);
+/* 给任意 HWND（含 combo 下拉 list）打 AllowDarkMode + DarkMode_Explorer */
+void os_theme_hwnd_dark(HWND hwnd);
 
 #endif

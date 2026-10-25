@@ -4,12 +4,20 @@
 #include "vartree.h"
 #include "theme.h"
 #include "chartview.h"
+#include "workspace.h"
 #include <string.h>
+
+/* 图例名：Project 前缀便于混窗对比 */
+static void legend_name(const OS_Leaf* L, char* out, int cap)
+{
+    os_ws_leaf_label(L, out, cap);
+}
 
 #define OS_MAGIC_CHART 0x43484152u /* 'CHAR' */
 
 typedef struct OS_Series {
     int leaf_id;
+    int project_id;     /* 所属 Project，重绑时 (name, project_id) */
     char name[256];     /* 添加时的变量全名：ELF 重载后按名重绑（需求2），防止叶下标漂移绑错变量 */
     COLORREF color;
     int64_t ts[OS_CHART_HIST];
@@ -203,6 +211,7 @@ void os_chart_add_var(HWND hwnd, int leaf_id)
     L = os_vartree_leaf(leaf_id);
     memset(&cw->series[cw->series_count], 0, sizeof(OS_Series));
     cw->series[cw->series_count].leaf_id = leaf_id;
+    cw->series[cw->series_count].project_id = L ? L->project_id : 0;
     if (L) _snprintf(cw->series[cw->series_count].name, 256, "%s", L->name);
     cw->series[cw->series_count].color = g_pal[cw->series_count % 8];
     /* 回放全量桶缓存已加载 → 新系列直接挂接并整体展示（全部显示） */
@@ -258,7 +267,8 @@ void os_chart_rebind(HWND hwnd)
     for (i = 0; i < cw->series_count; ) {
         int id;
         if (!cw->series[i].name[0]) { i++; continue; }
-        id = os_vartree_find_by_name(cw->series[i].name);
+        id = os_vartree_find_by_name_proj(cw->series[i].name, cw->series[i].project_id);
+        if (id < 0) id = os_vartree_find_by_name(cw->series[i].name);
         if (id >= 0) {
             const OS_Leaf* L = os_vartree_leaf(id);
             if (id != cw->series[i].leaf_id)
@@ -266,6 +276,7 @@ void os_chart_rebind(HWND hwnd)
                        cw->series[i].name, cw->series[i].leaf_id, id,
                        (unsigned long long)(L ? L->address : 0));
             cw->series[i].leaf_id = id;
+            if (L) cw->series[i].project_id = L->project_id;
             cw->series[i].head = 0;
             cw->series[i].count = 0;
             /* 重绑后旧桶缓存作废（加载新文件时重新挂接） */
@@ -956,7 +967,7 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
                 wchar_t wnm[340];
                 char nm[300];
                 RECT tr;
-                _snprintf(nm, 300, "%s", L->name);
+                legend_name(L, nm, 300);
                 os_utf8_to_wide_buf(nm, wnm, 340);
                 tr.left = ln.left + 4; tr.top = ln.top + 1;
                 tr.right = ln.left + 360; tr.bottom = ln.top + 15;
@@ -1131,9 +1142,10 @@ static void chart_draw(OS_ChartWin* cw, HDC hdc)
             DeleteObject(pen);
             SetTextColor(hdc, sr->color);
             if (L) {
-                char nm[300];
+                char nm[300], base[256];
                 wchar_t wnm[300], wv[80];
-                _snprintf(nm, 300, "%s = %s", L->name, L->sample.text);
+                legend_name(L, base, 256);
+                _snprintf(nm, 300, "%s = %s", base, L->sample.text);
                 os_utf8_to_wide_buf(nm, wnm, 300);
                 os_utf8_to_wide_buf(L->sample.text, wv, 80);
                 RECT r = { plot.left + 38, ly - 4, plot.left + 420, ly + 14 };
@@ -1460,6 +1472,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
                 has_sel = 1;
             }
         }
+        os_theme_menu_show(m);
         AppendMenuW(m, MF_STRING, MENU_CHART_ADD, L"添加变量...");
         AppendMenuW(m, MF_STRING | (has_sel ? 0 : MF_GRAYED), MENU_CHART_REMOVE, L"移除选中变量");
         AppendMenuW(m, MF_STRING | (cw && cw->paused ? MF_CHECKED : 0), MENU_CHART_PAUSE, L"暂停刷新");
@@ -1472,6 +1485,7 @@ static LRESULT CALLBACK chart_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         AppendMenuW(m, MF_STRING, MENU_CHART_CLOSE, L"关闭窗口");
         ClientToScreen(hwnd, &pt);
         TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, NULL);
+        os_theme_menu_end();
         DestroyMenu(m);
         return 0;
     }

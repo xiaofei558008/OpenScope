@@ -156,6 +156,7 @@ void os_help_show(HWND parent)
             SendMessageW(g_help, WM_SETICON, ICON_SMALL, (LPARAM)hi);
         }
         ShowWindow(g_help, SW_SHOW);
+        os_theme_window_tree(g_help);
         SetForegroundWindow(g_help);
     }
     os_log(OS_LOG_INFO, "帮助文档已打开 (F1)");

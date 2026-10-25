@@ -3,22 +3,25 @@
 
 #include <windows.h>
 
-/* 从 g_app.elf 重建叶子变量表（保留原观测选择），返回叶子数 */
+/* 从 g_app.elf 重建叶子变量表（保留原观测与 A2L 叶），返回叶子数 */
 int os_vartree_build(void);
 void os_vartree_clear(void);
+/* 仅合并指定 Project 的 ELF：替换该 project 的非 A2L/非 synth 叶，保留其它 Project */
+int os_vartree_merge_elf(int project_id, const wchar_t* path_w);
 
-/* 重建左侧 TreeView */
+/* 重建左侧 TreeView（按 Project 分组） */
 void os_vartree_fill_tree(HWND hTree);
-/* 树填充进行中（此期间 TVN_ITEMCHANGED 勾选联动应屏蔽，防止旧 lParam 误置观测） */
+/* 树填充进行中 */
 int os_vartree_is_filling(void);
 
 /* 模糊搜索叶子（子串、不区分大小写），返回匹配数 */
 int os_vartree_search(const char* needle, int max, int* out_ids);
 int os_vartree_find_by_name(const char* name);
+int os_vartree_find_by_name_proj(const char* name, int project_id);
 
 const OS_Leaf* os_vartree_leaf(int id);
 int os_vartree_set_watch(int id, int on);
-/* 程序化设置叶变量在左侧树中的勾选状态（配合 set_watch 联动显示） */
+/* 兼容旧调用：树无勾选框，空实现 */
 void os_vartree_set_check_ui(HWND hTree, int id, int on);
 
 /* 重载后未找到的原观测变量（最多 64 个） */
