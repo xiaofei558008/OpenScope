@@ -1312,6 +1312,9 @@ static int parse_one_die(DW_Unit* u, uint64_t off, int parent, DW_Abbrev* abbrev
         uint64_t child = 0;
         if (parse_dies(u, (uint64_t)(p - f->dbg_info), idx, abbrevs, nabbrevs, &child) != 0)
             return -1;
+        /* 子 DIE 解析期间 u->dies 可能被 realloc 搬迁，d 已悬空，必须重新取址
+         * （原先偶发崩溃：elf.load/elf.reload 时 parse_one_die 写已释放内存） */
+        d = &u->dies[idx];
         d->n_child = u->ndies - idx - 1;
         *next_off = child;
     } else {

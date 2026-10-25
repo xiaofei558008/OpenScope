@@ -14,6 +14,7 @@
 #include "srcwin.h"
 #include "a2l_export.h"
 #include "xcpsym.h"
+#include "workspace.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -402,6 +403,30 @@ static int method_drivers_list(char* out, int cap)
     return OS_ERR_OK;
 }
 
+/* 与 UI 连接（mainwin do_connect）一致：把当前驱动的连接状态同步到 Workspace Project。
+ * 多源采集（datasrv）按 leaf.project_id → Project.driver_index 解析模块，
+ * AI connect 若不同步，活动 Project 仍绑定旧驱动（如 jlink），采集会
+ * "采集跳过 project_id=N（未连接）" 而零样本。 */
+static void ai_sync_ws_connected(int c)
+{
+    OS_Project* pr = os_ws_active();
+    int di = os_modmgr_driver_index();
+    int i;
+    if (pr && pr->kind == OS_PROJ_PROBE) {
+        pr->connected = c;
+        if (c) pr->driver_index = di;
+        return;
+    }
+    for (i = 0; i < os_ws()->project_count; i++) {
+        pr = os_ws_project_at(i);
+        if (pr && pr->kind == OS_PROJ_PROBE && pr->driver_index == di) {
+            pr->connected = c;
+            if (c) os_ws_set_active(i);
+            break;
+        }
+    }
+}
+
 static int method_connect(const char* params, char* out, int cap)
 {
     OS_ConnectCfg cfg;
@@ -417,9 +442,21 @@ static int method_connect(const char* params, char* out, int cap)
     _snprintf(cfg.device, sizeof(cfg.device), "Cortex-M4");
     if (params) {
         int v;
-        if (json_get_int(params, "iface", &v) == 0) cfg.iface = v;
-        if (json_get_int(params, "speed_khz", &v) == 0) cfg.speed_khz = v;
-        if (json_get_int(params, "probe_index", &v) == 0) cfg.probe_index = v;
+        if (json_get_int(params, "iface", &v) == 0) {
+            if (v != OS_IF_SWD && v != OS_IF_JTAG)
+                return ai_fail(out, cap, OS_ERR_INVALID_ARG, "iface must be 0(SWD) or 1(JTAG)");
+            cfg.iface = v;
+        }
+        if (json_get_int(params, "speed_khz", &v) == 0) {
+            if (v < 0 || v > 100000)
+                return ai_fail(out, cap, OS_ERR_INVALID_ARG, "speed_khz out of range (0..100000)");
+            cfg.speed_khz = v;
+        }
+        if (json_get_int(params, "probe_index", &v) == 0) {
+            if (v < -1 || v > 63)
+                return ai_fail(out, cap, OS_ERR_INVALID_ARG, "probe_index out of range (-1..63)");
+            cfg.probe_index = v;
+        }
         if (json_get_int(params, "connect_under_reset", &v) == 0) cfg.connect_under_reset = v;
         if (json_get_int(params, "attach", &v) == 0) cfg.attach = v;
         if (json_get_str(params, "device", device, sizeof(device)) == 0 && device[0])
@@ -433,6 +470,7 @@ static int method_connect(const char* params, char* out, int cap)
         return ai_fail(out, cap, rc, "connect failed");
     g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
     g_app.connected = c;
+    ai_sync_ws_connected(c);
     memset(&info, 0, sizeof(info));
     g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
     os_mainwin_request_ui_sync();
@@ -451,6 +489,7 @@ static int method_disconnect(char* out, int cap)
     if (g_app.driver && g_app.driver->command)
         g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
     g_app.connected = 0;
+    ai_sync_ws_connected(0);
     os_mainwin_request_ui_sync();
     return ai_ok(out, cap, "\"connected\":0");
 }
@@ -563,7 +602,8 @@ static int method_vars_read(const char* params, char* out, int cap)
         return ai_fail(out, cap, OS_ERR_INVALID_ARG, "id or name required");
     s = os_fw_leaf_sample(id);
     json_escape(g_app.leaves[id].name, nm, sizeof(nm));
-    if (!s) {
+    /* 叶样本槽初始为全 0：ts_us==0 表示从未采到，不能报 has_sample=1 */
+    if (!s || s->ts_us == 0) {
         _snprintf(out, cap,
             "{\"ok\":true,\"id\":%d,\"name\":\"%s\",\"has_sample\":0,\"addr\":\"0x%llX\"}",
             id, nm, (unsigned long long)g_app.leaves[id].address);

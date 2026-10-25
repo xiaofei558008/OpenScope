@@ -233,10 +233,44 @@ def main() -> int:
                 lid = leaves[0].get("id", 0)
                 name = leaves[0].get("name", "")
                 step("vars.watch on", lambda: call("vars.watch", {"id": lid, "name": name, "on": 1}))
-                step("acq.start", lambda: call("acq.start"))
-                time.sleep(0.6)
-                step("acq.state", lambda: expect("acq_state" in call("acq.state"), "acq.state"))
-                step("vars.read", lambda: call("vars.read", {"id": lid, "name": name}))
+                laddr = int(str(leaves[0].get("addr", "0")), 0)
+                lsize = int(leaves[0].get("size", 4) or 4)
+                call("go")
+                step("acq.start", lambda: expect(call("acq.start").get("acq_state") == 1, "acq not running"))
+                time.sleep(1.0)
+                def _acq_samples():
+                    s1 = call("acq.state")
+                    time.sleep(0.5)
+                    s2 = call("acq.state")
+                    expect(s2.get("acq_state") == 1, f"采集线程已退出: {s2}")
+                    expect(s1.get("total_samples", 0) > 0, f"total_samples==0: {s1}")
+                    expect(s2.get("total_samples", 0) > s1.get("total_samples", 0),
+                           f"total_samples 未增长: {s1} -> {s2}")
+                    print(f"       total_samples {s1.get('total_samples')} -> {s2.get('total_samples')}")
+                step("acq.state total_samples>0 且增长", _acq_samples)
+                def _vars_read_real():
+                    import struct
+                    r = call("vars.read", {"id": lid})
+                    expect(r.get("has_sample") == 1 and int(r.get("ts_us", 0)) > 0, f"无真实样本: {r}")
+                    call("halt")
+                    time.sleep(0.4)   # 停核后采集仍在读，最新样本应等于内存值
+                    r = call("vars.read", {"id": lid})
+                    m = call("mem.read", {"address": hex(laddr), "size": lsize})
+                    raw = bytes.fromhex(m.get("data", ""))
+                    cands = set()
+                    if len(raw) in (1, 2, 4, 8):
+                        fmt = {1: "B", 2: "H", 4: "I", 8: "Q"}[len(raw)]
+                        u = struct.unpack("<" + fmt, raw)[0]
+                        cands.add(float(u))
+                        cands.add(float(struct.unpack("<" + fmt.lower(), raw)[0]))
+                        if len(raw) in (4, 8):
+                            cands.add(float(struct.unpack("<" + ("f" if len(raw) == 4 else "d"), raw)[0]))
+                    v = float(r.get("value", 0.0))
+                    expect(any(abs(v - c) <= max(1e-6, abs(c) * 1e-6) for c in cands if c == c),
+                           f"vars.read={v} 与 mem.read {raw.hex()} 不一致 (addr={hex(laddr)})")
+                    print(f"       {name} = {v}（mem {raw.hex()}）")
+                    call("go")
+                step("vars.read 真实值 == mem.read", _vars_read_real)
                 step("acq.stop", lambda: call("acq.stop"))
                 step("vars.watch off", lambda: call("vars.watch", {"id": lid, "name": name, "on": 0}))
             else:

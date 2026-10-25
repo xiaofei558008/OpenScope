@@ -433,3 +433,14 @@
 - 打包发布：`dist/OpenScope-Setup-1.0.0.exe` 安装包（版本号 1.0.0.0），安装/卸载/启动均已验证。
 - 依赖真实硬件的验收项（连接 MCU、实时采集曲线、写值回读）留待用户环境实测。
 - 硬件实测已覆盖：连接、RAM 读写、Flash 读取；实时采集曲线/写值交互仍可在应用 UI 中实测。
+
+## 修复批次（2026-10-25，ST-Link + NUCLEO-G431RB 真机评估后）
+
+- [x] P0 AI/多源采集零样本：AI `connect`/`disconnect` 未像 UI 那样把连接同步到 Workspace Project（活动 Project 仍绑定 jlink），datasrv 报"采集跳过 project_id=1（未连接）"。新增 `ai_sync_ws_connected()`（与 mainwin 连接逻辑一致）。真机：10 次 test_ai_full 全过，600s 连续采集 ~5500 样本/s 不中断，ang_cnt 与 mem.read 一致。
+- [x] P0 ST-Link 句柄泄漏：CubeProgrammer_API `getStLinkList` 每次泄漏约 12 个句柄。stlink.c 缓存探针列表（连接复用，失败强制重扫重试；OS_CMD_SCAN 2s 节流），已连接时重连先断开。200 次 connect/read/disconnect：句柄 255→2859 降为 260→463（剩余约 1/次在 connectStLink 内部）。
+- [x] ELF 解析偶发崩溃（0xc000041d，parse_one_die elf.c:1315）：递归解析子 DIE 时 `u->dies` 被 realloc 搬迁，父 DIE 指针悬空；递归后重新取址。
+- [x] aiapi：握手移到客户端线程 + 5s 超时（新增 netws 增量接口 os_ws_accept_socket/os_ws_server_upgrade/os_ws_recv_capped，network.dll 行为不变）；超 8 客户端返回 -32001 "too many clients"；超 256KB 请求返回 -32600 "request too large" 且连接保持；客户端计数在监听线程原子占位，消除竞态。
+- [x] ai_bridge：`vars.read` 无样本（ts_us==0）返回 has_sample=0；`connect` 校验 iface(0/1)/speed_khz(0..100000)/probe_index(-1..63)。
+- [x] test_ai_full：采集断言 total_samples>0 且增长；vars.read 停核后与 mem.read 比对真实值。
+- [x] 清理：删除 build_tests.bat 中 `->` 被 cmd 当重定向误生成的乱码文件；测试 .obj 经 `CL=/Fo` 统一输出到 tests\bin\obj（已在 .gitignore）。
+- 暂停：远程网络调试功能（network.dll）按用户要求暂不继续开发，后续单独开发。

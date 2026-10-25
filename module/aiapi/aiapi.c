@@ -19,6 +19,9 @@
 #define AI_RECV_CAP     (256 * 1024)
 #define AI_RESULT_CAP   (256 * 1024)
 #define AI_MAX_CLIENTS  8
+#define AI_MAX_PENDING  16             /* 超限后仍允许握手以回明确错误的额外连接数 */
+#define AI_HANDSHAKE_MS 5000           /* 握手超时：半开/慢速连接不再阻塞监听线程 */
+#define AI_DRAIN_MAX    (64u * 1024u * 1024u) /* 超大请求丢弃上限，超出直接断开 */
 
 static const OS_Framework* g_fw;
 static volatile LONG g_running;
@@ -389,13 +392,33 @@ static void handle_request(AiClient* cl, const char* req)
     else send_rpc_error(c, id, -32000, result[0] ? result : "call failed");
 }
 
+/* 线程参数：原始 socket + 是否超出客户端上限（g_clients 已在监听线程内原子计入） */
+typedef struct AiAccept { int sock; int over_limit; } AiAccept;
+
 static DWORD WINAPI client_thread(LPVOID p)
 {
     AiClient cl;
     uint8_t* buf;
-    InterlockedIncrement(&g_clients);
+    AiAccept acc = *(AiAccept*)p;
+    free(p);
     memset(&cl, 0, sizeof(cl));
-    cl.conn = (OS_WSConn*)p;
+    /* 握手在本线程内完成并带超时（原先在监听线程同步握手，一个半开连接即可卡死所有新连接） */
+    cl.conn = os_ws_server_upgrade(acc.sock, AI_HANDSHAKE_MS);
+    if (!cl.conn) {
+        InterlockedDecrement(&g_clients);
+        return 0;
+    }
+    if (acc.over_limit) {
+        char msg[256];
+        _snprintf(msg, sizeof(msg),
+            "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32001,"
+            "\"message\":\"too many clients (max %d)\"}}", AI_MAX_CLIENTS);
+        os_ws_send_text(cl.conn, msg);
+        os_ws_close(cl.conn);
+        InterlockedDecrement(&g_clients);
+        return 0;
+    }
+    conn_track_add(cl.conn);
     cl.min_level = OS_LOG_DEBUG;
     buf = (uint8_t*)malloc(AI_RECV_CAP);
     if (!buf) {
@@ -405,7 +428,15 @@ static DWORD WINAPI client_thread(LPVOID p)
         return 0;
     }
     while (InterlockedCompareExchange(&g_running, 1, 1) == 1) {
-        int op = 0, n = os_ws_recv(cl.conn, buf, AI_RECV_CAP - 1, &op);
+        int op = 0, n = os_ws_recv_capped(cl.conn, buf, AI_RECV_CAP - 1, &op, AI_DRAIN_MAX);
+        if (n == OS_WS_TOO_BIG) {
+            char msg[256];
+            _snprintf(msg, sizeof(msg),
+                "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32600,"
+                "\"message\":\"request too large (max %d bytes)\"}}", AI_RECV_CAP - 1);
+            os_ws_send_text(cl.conn, msg);
+            continue;
+        }
         if (n <= 0) break;
         if (op != OS_WS_OP_TEXT && op != OS_WS_OP_BIN) continue;
         buf[n] = 0;
@@ -426,23 +457,32 @@ static DWORD WINAPI listen_thread(LPVOID p)
     (void)p;
     if (g_fw) g_fw->log(OS_LOG_INFO, "aiapi: WebSocket JSON-RPC 监听 127.0.0.1:%d", g_port);
     while (InterlockedCompareExchange(&g_running, 1, 1) == 1) {
-        OS_WSConn* c = os_ws_accept(g_listen);
+        int s = os_ws_accept_socket(g_listen);
         HANDLE th;
-        if (!c) {
+        AiAccept* acc;
+        LONG n;
+        if (s < 0) {
             if (InterlockedCompareExchange(&g_running, 1, 1) != 1) break;
             Sleep(50);
             continue;
         }
-        if (InterlockedCompareExchange(&g_clients, 0, 0) >= AI_MAX_CLIENTS) {
-            os_ws_close(c);
+        /* 在监听线程内原子占位，消除"线程启动后才计数"的竞态 */
+        n = InterlockedIncrement(&g_clients);
+        if (n > AI_MAX_CLIENTS + AI_MAX_PENDING) {
+            InterlockedDecrement(&g_clients);
+            closesocket((SOCKET)s);
             continue;
         }
-        conn_track_add(c);
-        th = CreateThread(NULL, 0, client_thread, c, 0, NULL);
+        acc = (AiAccept*)malloc(sizeof(AiAccept));
+        if (!acc) { InterlockedDecrement(&g_clients); closesocket((SOCKET)s); continue; }
+        acc->sock = s;
+        acc->over_limit = (n > AI_MAX_CLIENTS);
+        th = CreateThread(NULL, 0, client_thread, acc, 0, NULL);
         if (th) CloseHandle(th);
         else {
-            conn_track_del(c);
-            os_ws_close(c);
+            free(acc);
+            InterlockedDecrement(&g_clients);
+            closesocket((SOCKET)s);
         }
     }
     return 0;

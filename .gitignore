@@ -34,3 +34,6 @@ tests/out/
 
 # npm cache (local only)
 .npm-cache/
+
+# agent 临时测试目录
+_agent_test/

@@ -1,5 +1,8 @@
 @echo off
 setlocal
+rem 测试程序的 .obj 统一输出到 tests\bin\obj（原先散落在仓库根目录）
+if not exist tests\bin\obj mkdir tests\bin\obj
+set "CL=/Fotests\bin\obj\\"
 call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
 if errorlevel 1 (
   echo [ERROR] vcvars64.bat failed
@@ -278,7 +281,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo Running network loopback (集成测试: 采集->编码->分块->重组->解码无损)...
+echo Running network loopback (集成测试: 采集-^>编码-^>分块-^>重组-^>解码无损)...
 tests\bin\network_loopback.exe
 if errorlevel 1 (
   echo [ERROR] network_loopback FAILED

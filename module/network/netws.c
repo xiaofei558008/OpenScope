@@ -336,3 +336,67 @@ int os_ws_recv(OS_WSConn* c, uint8_t* buf, int cap, int* opcode)
     if (opcode) *opcode = op;
     return (int)l;
 }
+
+/* ---- 以下为 aiapi 专用的增量接口（network.dll 不调用，行为不受影响）---- */
+
+/* 仅 accept，不握手；握手由调用方在工作线程中用 os_ws_server_upgrade 完成，
+ * 避免慢/恶意客户端阻塞监听线程。失败返回 -1。 */
+int os_ws_accept_socket(int lsock)
+{
+    SOCKET c = accept((SOCKET)lsock, NULL, NULL);
+    return c == INVALID_SOCKET ? -1 : (int)c;
+}
+
+/* 带超时的服务端握手；成功返回连接（超时复位为阻塞），失败关闭 socket 并返回 NULL */
+OS_WSConn* os_ws_server_upgrade(int sock, int timeout_ms)
+{
+    SOCKET c = (SOCKET)sock;
+    DWORD to = (DWORD)(timeout_ms > 0 ? timeout_ms : 0), zero = 0;
+    OS_WSConn* w;
+    if (c == INVALID_SOCKET) return NULL;
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof(to));
+    setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&to, sizeof(to));
+    if (ws_server_handshake(c) != 0) { closesocket(c); return NULL; }
+    setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
+    w = (OS_WSConn*)calloc(1, sizeof(OS_WSConn));
+    if (!w) { closesocket(c); return NULL; }
+    w->s = c; w->is_client = 0;
+    InitializeCriticalSection(&w->send_cs);
+    return w;
+}
+
+/* 同 os_ws_recv，但帧超过 cap 时丢弃其负载并返回 OS_WS_TOO_BIG（连接保持可用）；
+ * 超过 drain_max 字节的帧仍按协议错误返回 -1。 */
+int os_ws_recv_capped(OS_WSConn* c, uint8_t* buf, int cap, int* opcode, uint32_t drain_max)
+{
+    uint8_t hdr[10]; uint64_t l; int op, mask, i; uint8_t mkey[4] = {0,0,0,0};
+    if (recv_all(c->s, hdr, 2) != 0) return 0;
+    op = hdr[0] & 0x0F;
+    mask = (hdr[1] & 0x80) ? 1 : 0;
+    l = hdr[1] & 0x7F;
+    if (l == 126) { if (recv_all(c->s, hdr + 2, 2) != 0) return -1; l = ((uint64_t)hdr[2]<<8)|hdr[3]; }
+    else if (l == 127) { if (recv_all(c->s, hdr + 2, 8) != 0) return -1; l = 0; for (i=0;i<8;i++) l=(l<<8)|hdr[2+i]; }
+    if (mask) { if (recv_all(c->s, mkey, 4) != 0) return -1; }
+    if (l > (uint64_t)cap) {
+        uint64_t left = l;
+        if (l > (uint64_t)drain_max) return -1;
+        while (left > 0) {
+            int chunk = left > (uint64_t)cap ? cap : (int)left;
+            if (recv_all(c->s, buf, chunk) != 0) return -1;
+            left -= (uint64_t)chunk;
+        }
+        if (opcode) *opcode = op;
+        return OS_WS_TOO_BIG;
+    }
+    if (l && recv_all(c->s, buf, (int)l) != 0) return -1;
+    if (mask) for (i = 0; i < (int)l; i++) buf[i] ^= mkey[i & 3];
+    if (op == OS_WS_OP_PING) {
+        static const uint8_t pkey[4] = {0x12,0x34,0x56,0x78};
+        uint8_t f[128]; int h = os_ws_frame_encode(f, sizeof(f), 1, OS_WS_OP_PONG, buf, (uint32_t)l, c->is_client, pkey);
+        if (h > 0) send_all(c->s, f, h);
+        return os_ws_recv_capped(c, buf, cap, opcode, drain_max);
+    }
+    if (op == OS_WS_OP_CLOSE) return 0;
+    if (opcode) *opcode = op;
+    return (int)l;
+}

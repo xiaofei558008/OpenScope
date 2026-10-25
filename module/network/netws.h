@@ -34,5 +34,10 @@ int        os_ws_send_bin(OS_WSConn* c, const uint8_t* data, uint32_t len);
 int        os_ws_send_text(OS_WSConn* c, const char* s);
 /* 收一帧：payload 写入 buf，*opcode 输出，返回 payload 长度；对端关闭返回 0；错误 -1 */
 int        os_ws_recv(OS_WSConn* c, uint8_t* buf, int cap, int* opcode);
+/* aiapi 专用增量接口（network.dll 不使用） */
+#define OS_WS_TOO_BIG (-2)
+int        os_ws_accept_socket(int lsock);
+OS_WSConn* os_ws_server_upgrade(int sock, int timeout_ms);
+int        os_ws_recv_capped(OS_WSConn* c, uint8_t* buf, int cap, int* opcode, uint32_t drain_max);
 
 #endif

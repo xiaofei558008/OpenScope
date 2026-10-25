@@ -273,25 +273,40 @@ static int pick_freq(const OS_StLinkDcp* d, int iface, int speed_khz)
     return best > 0 ? best : minf;
 }
 
-static int stlink_scan_probes(OS_StLinkDcp** out_list, int* out_n)
+/* CubeProgrammer_API 的 getStLinkList 每次调用都会泄漏约 12 个内核句柄（USB 枚举，
+ * deleteInterfaceList 也无法回收；实测 50 次扫描 164→764 句柄）。因此缓存探针列表：
+ *   max_age_ms <  0 ：只要缓存非空就复用（连接路径；失败时由调用者强制重扫）
+ *   max_age_ms == 0 ：强制重新枚举
+ *   max_age_ms >  0 ：缓存未超时则复用（UI/AI 扫描节流）
+ * 返回的列表指向 g_ctx.probes 副本，调用者无需也不得 deleteInterfaceList。 */
+static ULONGLONG g_scan_tick;
+static int stlink_scan_probes(OS_StLinkDcp** out_list, int* out_n, int max_age_ms)
 {
     OS_StLinkDcp* list = NULL;
     int n, i;
     if (!g_ctx.api.h) return OS_ERR_FAIL;
+    if (max_age_ms != 0 && g_ctx.probe_count > 0 &&
+        (max_age_ms < 0 || GetTickCount64() - g_scan_tick < (ULONGLONG)max_age_ms)) {
+        *out_list = g_ctx.probes;
+        *out_n = g_ctx.probe_count;
+        return OS_ERR_OK;
+    }
     n = g_ctx.api.get_stlink_list(&list, 0);
     if (n < 0) n = 0;
     if (n > OS_STLINK_MAX_PROBES) n = OS_STLINK_MAX_PROBES;
     g_ctx.probe_count = n;
     for (i = 0; i < n; i++) g_ctx.probes[i] = list[i];
-    *out_list = list;
+    if (g_ctx.api.delete_interface_list) g_ctx.api.delete_interface_list();
+    g_scan_tick = GetTickCount64();
+    *out_list = g_ctx.probes;
     *out_n = n;
     return OS_ERR_OK;
 }
 
 /* conn_mode: HOTPLUG=采集；UNDER_RESET=烧录/擦除（目标运行时擦除会失败）
  * speed_cap_khz: >0 时限制上限（烧录建议 ≤8000，过高易擦除失败） */
-static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
-                            char* err, int errlen)
+static int mod_connect_mode_once(int conn_mode, int rst_mode, int speed_cap_khz,
+                                 char* err, int errlen, int scan_age_ms)
 {
     OS_StLinkDcp* list = NULL;
     OS_StLinkDcp dcp;
@@ -314,9 +329,13 @@ static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
                   want_khz, mode_name, g_ctx.cfg.probe_index,
                   g_ctx.cfg.serial[0] ? g_ctx.cfg.serial : "(空)");
     }
-    if (stlink_scan_probes(&list, &n) != OS_ERR_OK) return OS_ERR_FAIL;
+    /* 已连接时先断开旧会话再重连，避免 CubeProgrammer 内部会话叠加 */
+    if (g_ctx.connected) {
+        __try { g_ctx.api.disconnect(); } __except (EXCEPTION_EXECUTE_HANDLER) {}
+        g_ctx.connected = 0;
+    }
+    if (stlink_scan_probes(&list, &n, scan_age_ms) != OS_ERR_OK) return OS_ERR_FAIL;
     if (n <= 0) {
-        if (g_ctx.api.delete_interface_list) g_ctx.api.delete_interface_list();
         if (err) _snprintf(err, errlen, "未发现 ST-Link 设备");
         if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 连接失败: 未发现 ST-Link 设备");
         return OS_ERR_NO_DEVICE;
@@ -328,7 +347,6 @@ static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
         idx = g_ctx.cfg.probe_index;
     }
     dcp = list[idx];
-    if (g_ctx.api.delete_interface_list) g_ctx.api.delete_interface_list();
     dcp.dbgPort = (g_ctx.cfg.iface == OS_IF_JTAG) ? OS_STLINK_PORT_JTAG : OS_STLINK_PORT_SWD;
     dcp.connectionMode = conn_mode;
     dcp.resetMode = rst_mode;
@@ -365,6 +383,17 @@ static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
     if (g_fw && g_ctx.voltage_mv > 0)
         g_fw->log(OS_LOG_INFO, "ST-Link 目标电压: %d mV", g_ctx.voltage_mv);
     return OS_ERR_OK;
+}
+
+/* 先用缓存的探针列表连接；失败（探针被拔插/换口）再强制重新枚举重试一次 */
+static int mod_connect_mode(int conn_mode, int rst_mode, int speed_cap_khz,
+                            char* err, int errlen)
+{
+    int had_cache = g_ctx.probe_count > 0;
+    int rc = mod_connect_mode_once(conn_mode, rst_mode, speed_cap_khz, err, errlen, -1);
+    if (rc != OS_ERR_OK && had_cache)
+        rc = mod_connect_mode_once(conn_mode, rst_mode, speed_cap_khz, err, errlen, 0);
+    return rc;
 }
 
 static int mod_connect_ex(char* err, int errlen)
@@ -749,7 +778,9 @@ static int mod_scan(OS_ScanReq* req)
     int n, i;
     if (!req || !req->items || req->capacity <= 0) return OS_ERR_INVALID_ARG;
     if (!g_ctx.api.h) return OS_ERR_FAIL;
-    if (stlink_scan_probes(&list, &n) != OS_ERR_OK) return OS_ERR_FAIL;
+    /* 2s 节流：避免反复点"刷新"/AI 轮询 probe.scan 导致句柄泄漏 */
+    if (stlink_scan_probes(&list, &n, 2000) != OS_ERR_OK) return OS_ERR_FAIL;
+    if (n > req->capacity) n = req->capacity;
     for (i = 0; i < n; i++) {
         OS_DeviceInfo* it = &req->items[i];
         memset(it, 0, sizeof(*it));
@@ -762,7 +793,6 @@ static int mod_scan(OS_ScanReq* req)
         else
             _snprintf(it->name, sizeof(it->name), "ST-Link #%d", i);
     }
-    if (g_ctx.api.delete_interface_list) g_ctx.api.delete_interface_list();
     req->count = n;
     if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 扫描: 发现 %d 个设备", n);
     return OS_ERR_OK;
