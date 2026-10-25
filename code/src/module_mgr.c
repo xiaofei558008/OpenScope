@@ -1,6 +1,52 @@
 #include "app.h"
 #include "module_mgr.h"
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+/* 日志来源前缀：每个模块拿到一份独立的 OS_Framework 副本，其 log 指向按槽位区分的
+ * 跳板函数，统一输出 "<模块名>: <消息>"（如 "das: 已连接 ..."）。若消息已自带
+ * "<模块名>:" 前缀（remote/network/aiapi 历史写法）则不重复添加。 */
+static OS_Framework s_mod_fw[OS_MAX_MODULES];
+static char s_mod_src[OS_MAX_MODULES][32];
+
+static void modlog_v(int slot, int level, const char* fmt, va_list ap)
+{
+    char buf[1024];
+    const char* src = s_mod_src[slot];
+    size_t n = strlen(src);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    buf[sizeof(buf) - 1] = 0;
+    if (n == 0 || (strncmp(buf, src, n) == 0 && (buf[n] == ':' || buf[n] == ' ')))
+        os_log(level, "%s", buf);
+    else
+        os_log(level, "%s: %s", src, buf);
+}
+#define MODLOG_TRAMP(i) static void modlog_##i(int lv, const char* fmt, ...) \
+    { va_list ap; va_start(ap, fmt); modlog_v(i, lv, fmt, ap); va_end(ap); }
+MODLOG_TRAMP(0)  MODLOG_TRAMP(1)  MODLOG_TRAMP(2)  MODLOG_TRAMP(3)
+MODLOG_TRAMP(4)  MODLOG_TRAMP(5)  MODLOG_TRAMP(6)  MODLOG_TRAMP(7)
+MODLOG_TRAMP(8)  MODLOG_TRAMP(9)  MODLOG_TRAMP(10) MODLOG_TRAMP(11)
+MODLOG_TRAMP(12) MODLOG_TRAMP(13) MODLOG_TRAMP(14) MODLOG_TRAMP(15)
+MODLOG_TRAMP(16) MODLOG_TRAMP(17) MODLOG_TRAMP(18) MODLOG_TRAMP(19)
+MODLOG_TRAMP(20) MODLOG_TRAMP(21) MODLOG_TRAMP(22) MODLOG_TRAMP(23)
+MODLOG_TRAMP(24) MODLOG_TRAMP(25) MODLOG_TRAMP(26) MODLOG_TRAMP(27)
+MODLOG_TRAMP(28) MODLOG_TRAMP(29) MODLOG_TRAMP(30) MODLOG_TRAMP(31)
+typedef void (*modlog_fn)(int, const char*, ...);
+static const modlog_fn s_modlog[OS_MAX_MODULES] = {
+    modlog_0, modlog_1, modlog_2, modlog_3, modlog_4, modlog_5, modlog_6, modlog_7,
+    modlog_8, modlog_9, modlog_10, modlog_11, modlog_12, modlog_13, modlog_14, modlog_15,
+    modlog_16, modlog_17, modlog_18, modlog_19, modlog_20, modlog_21, modlog_22, modlog_23,
+    modlog_24, modlog_25, modlog_26, modlog_27, modlog_28, modlog_29, modlog_30, modlog_31 };
+
+static const OS_Framework* mod_fw_for_slot(int slot, const char* name)
+{
+    s_mod_fw[slot] = g_app.fw;
+    s_mod_fw[slot].log = s_modlog[slot];
+    _snprintf(s_mod_src[slot], sizeof(s_mod_src[slot]) - 1, "%s", name ? name : "");
+    s_mod_src[slot][sizeof(s_mod_src[slot]) - 1] = 0;
+    return &s_mod_fw[slot];
+}
 
 static void dll_dir(wchar_t* out, int outlen)
 {
@@ -61,16 +107,15 @@ int os_modmgr_load(void)
             FreeLibrary(hmod);
             continue;
         }
-        if (m->init && m->init(&g_app.fw, &ctx) != OS_ERR_OK) {
+        if (g_app.mod_count >= OS_MAX_MODULES) {
+            os_log(OS_LOG_WARN, "模块数量超限，%s 未加载", m->name);
+            FreeLibrary(hmod);
+            break;
+        }
+        if (m->init && m->init(mod_fw_for_slot(g_app.mod_count, m->name), &ctx) != OS_ERR_OK) {
             os_log(OS_LOG_ERROR, "模块 %s 初始化失败，已跳过", m->name);
             FreeLibrary(hmod);
             continue;
-        }
-        if (g_app.mod_count >= OS_MAX_MODULES) {
-            os_log(OS_LOG_WARN, "模块数量超限，%s 未加载", m->name);
-            if (m->deinit) m->deinit(ctx);
-            FreeLibrary(hmod);
-            break;
         }
         i = g_app.mod_count;
         memcpy(&g_app.mods[i], m, sizeof(OS_Module));
