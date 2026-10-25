@@ -21,4 +21,6 @@
 
 ## 一致性测试
     python tools\orp_mock\orp_conformance.py --url ws://127.0.0.1:18766 --code 123456 --sim
+    # 真机（remote.dll 默认 18770；开发期约定 mock 18766 / 真机 18770）：
+    python tools\orp_mock\orp_conformance.py --url ws://127.0.0.1:18770 --code 123456 --write-var g_mta --write-value 4660 --stream-vars "asin_data[3],acos_data[2]"
 remote.dll（M1）用同一脚本，去掉 `--sim`，并用 `--write-var/--stream-vars` 指定真实变量。

@@ -1,6 +1,6 @@
 # OpenScope 远程调试（网络外发）现状与方案设计
 
-> 版本 v0.6（2026-10-25，新增 control.changed 通知，见第 7 节修订记录），作者：程序员小程。M0（mock + 一致性测试）与 M1（remote.dll）已实现。
+> 版本 v0.7（2026-10-25，开发期端口约定：mock 18766 / 真机 18770，见第 7 节修订记录），作者：程序员小程。M0（mock + 一致性测试）与 M1（remote.dll）已实现。
 > 讨论对象：Tom、小微（微信小程序）、网页端负责人（待定）。
 
 ## 1. 现状
@@ -139,10 +139,11 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 | -32006 | — | SESSION_EXPIRED | 恢复会话失败（超过保留期）→ 重新订阅 |
 
 ### 3.7 单机 127.0.0.1 联调方法
-1. 启动 OpenScope（Agent）：开启远程服务监听 `127.0.0.1:18766`（开发期可关闭鉴权或使用固定测试 token）。
-2. **远端 OpenScope**：再开一个实例 `OpenScope.exe --remote-connect=ws://127.0.0.1:18766`（独立配置目录，避免抢 ST-Link）。
-3. **网页**：本地 `npx serve` / Vite 开 `http://127.0.0.1:5173`，页面连接 `ws://127.0.0.1:18766`（http 页可连 ws）。
-4. **小程序**：微信开发者工具 → 详情 → 本地设置 → 勾选"不校验合法域名、web-view、TLS 版本以及 HTTPS 证书"，`wx.connectSocket({url:'ws://127.0.0.1:18766'})`；真机预览需改用局域网 IP 并同样勾选（仅调试），正式版必须走 WSS 中转。
+**开发期端口约定（v0.7）**：mock 固定 `18766`，真机 OpenScope（remote.dll）固定 `18770`（remote.dll 默认端口即 18770，也可显式 `--remote-port=18770`），两者可同时运行互不抢占；网页/小程序按需切换 URL。勿在 18766 上启动 OpenScope 远程服务。
+1. 启动 OpenScope（Agent）：remote.dll 默认监听 `127.0.0.1:18770`（开发期可用固定测试配对码）；无板联调用 mock `ws://127.0.0.1:18766`。
+2. **远端 OpenScope**：再开一个实例 `OpenScope.exe --remote-connect=ws://127.0.0.1:18770`（独立配置目录，避免抢 ST-Link）。
+3. **网页**：本地 `npx serve` / Vite 开 `http://127.0.0.1:5173`，页面连接 `ws://127.0.0.1:18766`（mock）或 `ws://127.0.0.1:18770`（真机）（http 页可连 ws）。
+4. **小程序**：微信开发者工具 → 详情 → 本地设置 → 勾选"不校验合法域名、web-view、TLS 版本以及 HTTPS 证书"，`wx.connectSocket({url:'ws://127.0.0.1:18766'})`（mock；真机改 18770）；真机预览需改用局域网 IP 并同样勾选（仅调试），正式版必须走 WSS 中转。
 5. 中转联调：本机运行 relay（`ws://127.0.0.1:8080`），Agent 以出站方式连 relay，三端连 relay，验证同一套协议在中转模式下可用。
 6. 提供 `scripts/orp_cli.py` 与协议自动化测试（复用 test_ai_full 思路）和一个 mock agent（无板也能让小程序/网页联调）。
 
@@ -175,7 +176,7 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 ### 3.10 M1：remote.dll 实现与启用（v0.5）
 
 - 位置：`module/remote/remote.c`（编译为 `dll/remote.dll`，随 OpenScope 自动加载）；复用 aiapi 的 WebSocket 服务端（`module/network/netws.c`，新增 `os_ws_server_upgrade_proto` / `os_ws_recv_capped_head` / `os_ws_send_close`，只增不改），所有设备访问走主程序 `ai_call`（vars.list/mem.read/vars.write/vars.watch/acq.start），不改核心与旧 network.dll。
-- 默认监听 `ws://127.0.0.1:18766`，子协议 `orp.v1`；启动日志打印配对码与二维码内容 `orp://pair?d=<device_id>&c=<code>&r=<ws_url>`。
+- 默认监听 `ws://127.0.0.1:18770`（v0.7 起；开发期 mock 占 18766，见 3.7），子协议 `orp.v1`；启动日志打印配对码与二维码内容 `orp://pair?d=<device_id>&c=<code>&r=<ws_url>`。
 - 配置（命令行优先，也可用同名环境变量）：
   - `--remote-port=N` / `OPENSCOPE_REMOTE_PORT`
   - `--remote-host=0.0.0.0` / `OPENSCOPE_REMOTE_HOST`（仅 127.0.0.1 或 0.0.0.0；0.0.0.0 时强制配对，二维码使用局域网 IP）
@@ -186,7 +187,7 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 - `vars.read` 结果新增 `source`：`"mem"`（直接读目标内存，默认）或 `"acq"`（读失败时回退到采集最近样本）。
 - vars.list 的 `type` 来自主程序 vars.list 新增字段（`float/double/intN_t/uintN_t/bool/enum/ptr/char/other`，位域加 `:bf`），`writable` 为可按标量写入（≤8 字节的数值/枚举/指针）。
 - 推流：后台线程按 1 ms 轮询订阅变量最新采样（最多同时跟踪 16 个变量，每变量 65536 点环形缓冲），history.fetch 只覆盖曾被订阅过的变量。
-- 一致性测试（真机）：`python tools/orp_mock/orp_conformance.py --code 123456 --write-var g_mta --write-value 4660 --stream-vars "asin_data[3],acos_data[2]"`（`--write-value` 为 v0.5 新增参数，整型变量需给整数）。
+- 一致性测试（真机）：`python tools/orp_mock/orp_conformance.py --url ws://127.0.0.1:18770 --code 123456 --write-var g_mta --write-value 4660 --stream-vars "asin_data[3],acos_data[2]"`（`--write-value` 为 v0.5 新增参数，整型变量需给整数）。
 
 ## 4. 分阶段计划与分工
 
@@ -233,3 +234,4 @@ E2E 测试 `tests/net_drive.ps1` 的 A 端（探针侧）只尝试通过 UI 连�
 | v0.4 | 2026-10-25 | 程序员小程 | 按小微/小序反馈：定义 vars.write 返回 `{id,value,req_id,duplicate}`；明确 stream.subscribe 返回 vars 为数字 id、名称/类型在 stream.meta；心跳统一 10 s（3.3 同步，caps.heartbeat_s）；定义 control 结构 `{held_by_me,holder_client,since}`；控制权持有者断线 15 s 自动释放；control 结构改为 `{held_by_me, holder:{session_id,client}|null, since}`（取代 holder_client）；history.fetch 支持名称并在 result 声明 value_type/变量元信息；保证 stream.meta 先于数据帧；冻结 vars.list 字段与分页参数；请求过大回显 id；定义 close code 4000/4001/4002；删除 json_stream/stream.data；admin 提升远程一律拒绝（os_err -6）；elevate 改为探针端弹窗确认 + 测试用自动确认开关 |
 | v0.5 | 2026-10-25 | 程序员小程 | M1 remote.dll 落地：新增 3.10（启用方式/配置/测试开关）；vars.read 结果增加 `source`（mem/acq）；连接数超限明确以 1013 关闭；vars.list `type` 取值表与 `writable` 判定；一致性测试新增 `--write-value`，流/历史用例改用 `--stream-vars` 指定的变量（真机） |
 | v0.6 | 2026-10-25 | 程序员小程 | 采纳小序提议：3.9 新增服务端通知 `control.changed {held_by_me, holder, since, reason:"acquire"\|"release"\|"auto_release"\|"expired"}`，控制权任何变化推给所有在线会话；mock 与 remote.dll 实现；一致性测试新增 control_changed_broadcast、control_auto_release_after_disconnect |
+| v0.7 | 2026-10-25 | 程序员小程 | 开发期端口约定写入 3.7/3.10：mock 占 18766，真机 OpenScope 占 18770；remote.dll 默认端口改为 18770；主程序不再把 `--remote-*` 参数误当 ELF 路径 |

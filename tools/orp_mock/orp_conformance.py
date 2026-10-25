@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """ORP v1 协议一致性测试（mock 与 remote.dll 共用）。
 
-  python tools/orp_mock/orp_conformance.py --url ws://127.0.0.1:18766 --code 123456 [--sim]
+  python tools/orp_mock/orp_conformance.py --url ws://127.0.0.1:18766 --code 123456 [--sim]   # mock
+  python tools/orp_mock/orp_conformance.py --url ws://127.0.0.1:18770 --code 123456 ...       # 真机 remote.dll
 --sim: 额外校验 mock 的模拟波形（正弦）数值；真机测试不加。
 --write-var: 用于写值测试的变量名（默认 g_cfg.gain）
 依赖: pip install websocket-client

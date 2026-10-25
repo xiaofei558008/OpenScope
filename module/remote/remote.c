@@ -5,7 +5,7 @@
  * 复用 aiapi 的传输实现（netws.c：握手在客户端线程内并带超时、超大请求丢弃不断线、连接名额原子计数）。
  *
  * 配置（环境变量；主程序命令行 --remote-* 写入同名变量）：
- *   OPENSCOPE_REMOTE_PORT            监听端口，默认 18766（--remote-port=）
+ *   OPENSCOPE_REMOTE_PORT            监听端口，默认 18770（--remote-port=）
  *   OPENSCOPE_REMOTE_HOST            127.0.0.1（默认）或 0.0.0.0（--remote-host=）
  *   OPENSCOPE_REMOTE_DISABLE=1       不启动服务（--remote-off）
  *   OPENSCOPE_REMOTE_AUTO_ELEVATE=1  仅测试：auth.elevate 不弹窗自动批准（仅 127.0.0.1 生效）
@@ -28,7 +28,7 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "ws2_32.lib")
 
-#define R_DEFAULT_PORT   18766
+#define R_DEFAULT_PORT   18770
 #define R_RECV_CAP       (256 * 1024)
 #define R_RESULT_CAP     (256 * 1024)
 #define R_MAX_CLIENTS    8
@@ -1427,7 +1427,7 @@ static const OS_Module g_mod = {
     OS_CAP_AI,
     "remote",
     "1.0.0",
-    "远程调试服务端 ORP v1（WebSocket，默认 127.0.0.1:18766，配对码+token）",
+    "远程调试服务端 ORP v1（WebSocket，默认 127.0.0.1:18770，配对码+token）",
     NULL,
     r_init,
     r_deinit,
