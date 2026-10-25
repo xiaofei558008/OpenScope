@@ -1,6 +1,7 @@
 #include "app.h"
 #include "mainwin.h"
 #include "locals.h"
+#include "dock.h"
 #include "dockbar.h"
 #include "srcmap.h"
 #include "bpwin.h"
@@ -792,6 +793,8 @@ void os_win_mark_active(HWND w)
 }
 
 static void layout(void);
+static void dock_sync_wins(void);
+static int  g_dock_on = 0;   /* Terminator 式停靠管理器已接管窗口区 */
 static void add_win_item(HWND hwnd, int is_module, OS_Module* mod, void* ctx, const wchar_t* title);
 static void tab_set_title(int idx, const wchar_t* name);
 
@@ -844,6 +847,7 @@ static void layout_tab_pages(void)
     int min_count = 0, tiled = 0, last_tiled = -1;
     int usable_w, avail_h;
     double sumr;
+    if (g_dock_on) return;   /* 停靠管理器负责窗口区布局 */
     if (!g_app.hTab || !IsWindow(g_app.hTab)) return;
     if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) return;
     GetClientRect(g_app.hTab, &rc);
@@ -937,6 +941,12 @@ static void layout_tab_pages(void)
 static void show_tab(int idx)
 {
     int i, k;
+    if (g_dock_on) {
+        dock_sync_wins();
+        g_cur_tab = idx;
+        if (idx >= 0 && idx < g_app.win_count) dock_activate(g_app.wins[idx].hwnd);
+        return;
+    }
     for (i = 0; i < g_app.win_count; i++) {
         OS_WinItem* wi = &g_app.wins[i];
         for (k = 0; k < wi->group_count; k++) {
@@ -968,6 +978,62 @@ static void rebuild_tabs(void)
     g_cur_tab = cur;
     if (cur >= 0) SendMessageW(g_app.hTab, TCM_SETCURSEL, cur, 0);
     show_tab(cur);
+}
+
+/* 停靠：把窗口注册表（g_app.wins，含组内窗口）同步给停靠管理器 */
+static void dock_sync_wins(void)
+{
+    HWND hs[OS_MAX_WINS * OS_MAX_GROUP];
+    const wchar_t* ts[OS_MAX_WINS * OS_MAX_GROUP];
+    int i, k, n = 0;
+    if (!g_dock_on) return;
+    for (i = 0; i < g_app.win_count; i++) {
+        OS_WinItem* wi = &g_app.wins[i];
+        for (k = 0; k < wi->group_count; k++) {
+            if (!wi->group[k] || !IsWindow(wi->group[k])) continue;
+            hs[n] = wi->group[k];
+            ts[n] = k == 0 ? wi->title : wi->group_title[k];
+            n++;
+        }
+    }
+    dock_sync(hs, ts, n);
+}
+
+static void dock_cb_close(HWND w)
+{
+    PostMessage(g_app.hMain, WM_OS_WIN_CLOSED, (WPARAM)w, 0);
+}
+
+static void dock_cb_activated(HWND w)
+{
+    int i;
+    os_win_mark_active(w);
+    for (i = 0; i < g_app.win_count; i++) if (g_app.wins[i].hwnd == w) { g_cur_tab = i; break; }
+}
+
+/* 停靠管理命令（aiapi 测试/自动化用，主线程执行） */
+LRESULT os_mainwin_dock_cmd(OS_DockReq* r)
+{
+    if (!r) return -1;
+    switch (r->op) {
+    case 0: r->result = dock_describe_json(r->out, r->cap) > 0 ? 0 : -1; break;
+    case 1: dock_reset(); r->result = 0; break;
+    case 2: r->result = dock_move_panel(r->panel, r->target, r->zone); break;
+    case 3: r->result = dock_split_active(r->zone); break;
+    case 4: dock_activate(r->panel); r->result = 0; break;
+    case 5: {
+        wchar_t t[64];
+        HWND h;
+        _snwprintf(t, 64, L"%hs", r->type);
+        h = os_win_create_by_type(r->type, t);
+        r->panel = h;
+        r->result = h ? 0 : -1;
+        break;
+    }
+    case 6: os_layout_save_auto(); r->result = 0; break;
+    default: r->result = -1; break;
+    }
+    return r->result;
 }
 
 void os_mainwin_tile(void)
@@ -1251,6 +1317,7 @@ static void layout(void)
     MoveWindow(g_app.hRight, content.left + sw + 5, bh, right_w - 5, right_h, TRUE);
     if (g_app.hTab && IsWindow(g_app.hTab))
         MoveWindow(g_app.hTab, 0, 0, right_w - 5, right_h, TRUE);
+    if (g_dock_on) dock_move_host(0, 0, right_w - 5, right_h);
     if (g_app.log_hidden) {
         /* F22: 消息栏收起——隐藏消息栏与分隔条，显示底部细条 */
         if (g_app.hLogStrip && IsWindow(g_app.hLogStrip)) {
@@ -2506,6 +2573,7 @@ HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title)
 {
     HWND h;
     int i;
+    if (g_dock_on) tab = -1;   /* 停靠模式：每个窗口都是独立面板，由用户拖拽组合 */
     /* 创建窗口（父为 tab 页区域），模块/原生分别处理 */
     if (strcmp(type, "chart") == 0)
         h = os_chart_create(g_app.hTab, 0, 0, 200, 150, title);
@@ -2609,6 +2677,10 @@ void os_mainwin_rebuild_window_menu(void)
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_NUM, L"数值窗口");
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_SOURCE, L"源码窗口");
     AppendMenuW(g_menu_win, MF_STRING, IDM_WIN_LOCALS, L"局部变量");
+    AppendMenuW(g_menu_win, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(g_menu_win, MF_STRING, IDM_DOCK_SPLIT_V, L"左右拆分当前标签\tCtrl+Shift+E");
+    AppendMenuW(g_menu_win, MF_STRING, IDM_DOCK_SPLIT_H, L"上下拆分当前标签\tCtrl+Shift+O");
+    AppendMenuW(g_menu_win, MF_STRING, IDM_DOCK_RESET, L"重置窗口布局");
     g_modwin_menu_count = 0;
     for (i = 0; i < g_app.winmod_count; i++) {
         const OS_WindowType* wt = g_app.winmods[i]->window_types;
@@ -3749,6 +3821,7 @@ static void tab_set_title(int idx, const wchar_t* name)
     ti.mask = TCIF_TEXT;
     ti.pszText = g_app.wins[idx].title;
     SendMessageW(g_app.hTab, TCM_SETITEM, idx, (LPARAM)&ti);
+    if (g_dock_on) dock_set_title(g_app.wins[idx].hwnd, g_app.wins[idx].title);
     os_wide_to_utf8_buf(name, name8, sizeof(name8));
     os_log(OS_LOG_INFO, "标签已重命名: %s", name8);
 }
@@ -4298,6 +4371,7 @@ static LRESULT CALLBACK tab_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM l
 void os_mainwin_apply_theme(void)
 {
     int i, k;
+    if (g_dock_on) dock_apply_theme();
     if (g_app.hTree && IsWindow(g_app.hTree)) {
         SendMessageW(g_app.hTree, TVM_SETBKCOLOR, 0, os_theme(TH_TREE_BG));
         SendMessageW(g_app.hTree, TVM_SETTEXTCOLOR, 0, os_theme(TH_TREE_TEXT));
@@ -4520,6 +4594,22 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         /* F20: 子类化 tab 控件，背景/文字用主题色 */
         g_tab_oldproc = (WNDPROC)SetWindowLongPtrW(g_app.hTab, GWLP_WNDPROC,
                                                    (LONG_PTR)tab_theme_proc);
+        /* Terminator 式停靠管理器接管窗口区（tab 控件保留为隐藏的创建父窗口，
+         * 面板创建后由停靠管理器改父到停靠宿主）。OPENSCOPE_DOCK=0 回退旧 tab 平铺。 */
+        {
+            wchar_t ev[8] = L"";
+            GetEnvironmentVariableW(L"OPENSCOPE_DOCK", ev, 8);
+            if (ev[0] != L'0') {
+                DockCallbacks dcb;
+                memset(&dcb, 0, sizeof(dcb));
+                dcb.close_panel = dock_cb_close;
+                dcb.panel_activated = dock_cb_activated;
+                if (dock_init(g_app.hRight, &dcb)) {
+                    g_dock_on = 1;
+                    ShowWindow(g_app.hTab, SW_HIDE);
+                }
+            }
+        }
         g_app.hTreeStrip = CreateWindowW(L"OSTreeStrip", L"", WS_CHILD,
                                          0, 34, 8, 400, hwnd, NULL, g_app.hInst, NULL);
         g_app.hTreePin = CreateWindowW(L"OSTreePin", L"", WS_CHILD | WS_VISIBLE,
@@ -4897,6 +4987,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_OS_WIN_MINIMIZE: {
+        if (g_dock_on) return 0;   /* 停靠模式无“最小化条”：用拖拽合并为标签代替 */
         /* Bug6: 最小化/还原：wParam=HWND，缩进 tab 底部最小化条（点击条上按钮还原） */
         HWND w = (HWND)wParam;
         int i, k;
@@ -4916,6 +5007,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         return 0;
     }
+    case WM_OS_DOCK_CMD:
+        return os_mainwin_dock_cmd((OS_DockReq*)lParam);
     case WM_OS_WIN_FULLSCREEN: {
         /* Bug3: 单窗口全屏/退出全屏。全屏时临时改父为主窗口并铺满整个客户区，
            退出时改回 tab 页并重新平铺。 */
@@ -4924,14 +5017,16 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             HWND old = g_app.fs_win;
             g_app.fs_win = NULL;
             if (old && IsWindow(old)) {
-                SetParent(old, g_app.hTab);
+                SetParent(old, g_dock_on ? dock_host() : g_app.hTab);
                 ShowWindow(old, SW_SHOW);
             }
+            if (g_dock_on) dock_set_excluded(NULL);
             layout();
             os_log(OS_LOG_INFO, "窗口退出全屏");
         } else if (w && IsWindow(w)) {
             RECT rc;
             g_app.fs_win = w;
+            if (g_dock_on) dock_set_excluded(w);
             SetParent(w, g_app.hMain);
             GetClientRect(g_app.hMain, &rc);
             MoveWindow(w, 0, 0, rc.right, rc.bottom, TRUE);
@@ -5239,6 +5334,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDM_WIN_CHART: cmd_add_window(1); break;
         case IDM_WIN_NUM: cmd_add_window(0); break;
         case IDM_WIN_LOCALS: os_locals_open(); break;
+        case IDM_DOCK_RESET:
+            if (g_dock_on) { dock_reset(); os_log(OS_LOG_INFO, "窗口布局已重置"); }
+            break;
+        case IDM_DOCK_SPLIT_H:
+        case IDM_DOCK_SPLIT_V:
+            if (g_dock_on && dock_split_active(LOWORD(wParam) == IDM_DOCK_SPLIT_H) != 0)
+                os_log(OS_LOG_INFO, "拆分：当前窗格只有一个标签（先把窗口拖到同一窗格中间合并为标签）");
+            break;
         case IDM_WIN_SOURCE:
             if (g_srcidx.count <= 0) refresh_src_tree();
             if (g_srcidx.count <= 0) {
@@ -5638,6 +5741,13 @@ int os_mainwin_src_open_safe(const char* path_utf8, int goto_line)
     req.line = goto_line;
     if (path_utf8) _snprintf(req.path, sizeof(req.path), "%s", path_utf8);
     return src_ui_invoke(&req);
+}
+
+int os_mainwin_dock_safe(OS_DockReq* r)
+{
+    if (!r) return -1;
+    if (on_ui_thread() || !g_app.hMain) return (int)os_mainwin_dock_cmd(r);
+    return (int)SendMessageW(g_app.hMain, WM_OS_DOCK_CMD, 0, (LPARAM)r);
 }
 
 int os_mainwin_locals_open_safe(void)

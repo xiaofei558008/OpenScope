@@ -70,6 +70,7 @@ typedef struct {
 #define WM_OS_UI_SYNC        (WM_APP + 50) /* AI/工作线程 → 主线程：同步工具栏/状态栏/XCP 控件 */
 #define WM_OS_WATCH_SYNC     (WM_APP + 51) /* AI → 主线程：同步单个叶变量的观测勾选 (wParam=id, lParam=on) */
 #define WM_OS_ELF_OPEN       (WM_APP + 52) /* AI/工作线程 → 主线程：同步加载 ELF (lParam=heap wchar_t*，SendMessage 同步) */
+#define WM_OS_DOCK_CMD       (WM_APP + 54) /* AI → 主线程：停靠管理命令 (lParam=OS_DockReq*，SendMessage 同步) */
 #define WM_OS_XCP_SHOW       (WM_APP + 53) /* AI → 主线程：显示/隐藏 XCP 标定页 (wParam=1/0) */
 #define IDM_XCP_WIN          2706          /* XCP 标定窗口 */
 #define IDM_A2L_EXPORT       2707          /* 导出 A2L（含标定量） */
@@ -87,6 +88,9 @@ typedef struct {
 #define IDM_SRC_QUICK 2704 /* Ctrl+P 快速打开源码文件 */
 #define IDM_WIN_SOURCE 2705 /* 新建源码窗口 */
 #define IDM_WIN_LOCALS 2730 /* 局部变量窗口 */
+#define IDM_DOCK_RESET 2731 /* 停靠：重置布局 */
+#define IDM_DOCK_SPLIT_H 2732 /* 停靠：Ctrl+Shift+O 上下拆分当前 tab */
+#define IDM_DOCK_SPLIT_V 2733 /* 停靠：Ctrl+Shift+E 左右拆分当前 tab */
 
 typedef enum {
     OS_ACQ_STOPPED = 0,

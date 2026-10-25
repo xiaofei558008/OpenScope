@@ -66,6 +66,19 @@ if errorlevel 1 (
   exit /b 1
 )
 
+cl /nologo /W2 /utf-8 /I code\src tests\dock_tree_test.c code\src\dock_tree.c ^
+    /Fe:tests\bin\dock_tree_test.exe
+if errorlevel 1 (
+  echo [ERROR] dock_tree_test build failed
+  exit /b 1
+)
+echo Running dock tree test...
+tests\bin\dock_tree_test.exe
+if errorlevel 1 (
+  echo [ERROR] dock_tree_test FAILED
+  exit /b 1
+)
+
 echo Running elf smoke...
 tests\bin\elf_smoke.exe
 if errorlevel 1 (

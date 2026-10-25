@@ -27,7 +27,19 @@ int os_mainwin_active_tab(void);
 void os_mainwin_select_tab(int idx);
 void os_mainwin_refresh_layout(void);
 HWND os_win_create_by_type(const char* type, const wchar_t* title);
-int  os_mainwin_locals_open_safe(void); /* 任意线程：打开/聚焦局部变量窗口 */
+int  os_mainwin_locals_open_safe(void);
+/* 停靠管理命令：op 0=描述(JSON 到 out) 1=重置 2=移动(panel→target, zone；target=NULL 浮动) 3=拆分(zone=1 上下/0 左右) 4=激活 5=新建窗口(type) 6=保存布局 */
+typedef struct OS_DockReq {
+    int   op;
+    HWND  panel, target;
+    int   zone;
+    char* out;
+    int   cap;
+    char  type[32];      /* op 5：新建窗口类型 chart/num/locals/source… */
+    int   result;
+} OS_DockReq;
+LRESULT os_mainwin_dock_cmd(OS_DockReq* r);
+int  os_mainwin_dock_safe(OS_DockReq* r);   /* 任意线程 */ /* 任意线程：打开/聚焦局部变量窗口 */
 /* N11: 在 tab 内新建 type 窗口（tab<0=新建 tab，tab 有效=附加到该 tab 组） */
 HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title);
 /* N11/Bug3: 子窗口获得焦点时登记为“当前窗口” */

@@ -256,6 +256,12 @@ static const AI_Tool g_tools[] = {
     {"log.subscribe", "订阅实时日志推送（WebSocket 通知 method=log.event）", "{\"min_level\":0}"},
     {"log.unsubscribe", "取消本连接的日志订阅", "{}"},
     {"alerts.read", "读取弹窗/严重反馈（MessageBox、崩溃等；since 游标）", "{\"since\":0,\"limit\":32}"},
+    {"ui.dock.state", "停靠布局：分割树、各窗格 tab/分隔条屏幕坐标（GUI 自动化用）", "{}"},
+    {"ui.dock.reset", "重置窗口布局（全部回主窗口自动平铺）", "{}"},
+    {"ui.dock.move", "把面板移到目标面板旁（zone 1左 2右 3上 4下 5中=tab；target=0 浮动）", "{\"panel\":0,\"target\":0,\"zone\":2}"},
+    {"ui.dock.split", "拆分当前窗格的当前 tab（vertical=1 上下）", "{\"vertical\":0}"},
+    {"ui.win.create", "新建窗口（type=chart/num/locals/source）", "{\"type\":\"chart\"}"},
+    {"ui.layout.save", "立即保存布局到 layout.ini", "{}"},
     {"ui.silent", "查询/设置 AI 静默（不弹窗，确认框自动应答）", "{\"on\":1,\"yesno_default\":1}"},
     {"module.command", "透传 OS_CMD_* 到指定模块（高级）", "{\"module\":\"jlink\",\"cmd\":3}"},
 };
@@ -1413,6 +1419,29 @@ int os_ai_call(const char* method, const char* params_json,
             return ai_fail(result_json, result_cap, rc, "bp.clear failed");
         os_src_refresh_bps();
         return ai_ok(result_json, result_cap, NULL);
+    }
+    if (strncmp(method, "ui.dock.", 8) == 0 || strcmp(method, "ui.win.create") == 0 || strcmp(method, "ui.layout.save") == 0) {
+        OS_DockReq r;
+        uint64_t v = 0;
+        int z = 0;
+        static char buf[32768];
+        memset(&r, 0, sizeof(r));
+        if (!strcmp(method, "ui.dock.state")) { r.op = 0; r.out = buf; r.cap = sizeof(buf); }
+        else if (!strcmp(method, "ui.dock.reset")) r.op = 1;
+        else if (!strcmp(method, "ui.dock.move")) {
+            r.op = 2;
+            if (json_get_u64(params, "panel", &v) == 0) r.panel = (HWND)(UINT_PTR)v;
+            v = 0; if (json_get_u64(params, "target", &v) == 0) r.target = (HWND)(UINT_PTR)v;
+            json_get_int(params, "zone", &z); r.zone = z;
+        } else if (!strcmp(method, "ui.dock.split")) { r.op = 3; json_get_int(params, "vertical", &z); r.zone = z; }
+        else if (!strcmp(method, "ui.win.create")) { r.op = 5; json_get_str(params, "type", r.type, sizeof(r.type)); }
+        else if (!strcmp(method, "ui.layout.save")) r.op = 6;
+        else return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "unknown dock method");
+        if (os_mainwin_dock_safe(&r) != 0) return ai_fail(result_json, result_cap, OS_ERR_FAIL, "dock command failed");
+        if (r.op == 0) _snprintf(result_json, result_cap, "%s", buf);
+        else if (r.op == 5) _snprintf(result_json, result_cap, "{\"ok\":true,\"hwnd\":%llu}", (unsigned long long)(UINT_PTR)r.panel);
+        else return ai_ok(result_json, result_cap, NULL);
+        return OS_ERR_OK;
     }
     if (strcmp(method, "debug.locals") == 0) {
         OS_LocSnap snap;

@@ -10,6 +10,7 @@
 #include "numwin.h"
 #include "vartree.h"
 #include "mainwin.h"
+#include "dock.h"
 #include "theme.h"
 
 #include <io.h>
@@ -100,8 +101,25 @@ static void write_utf8_line(FILE* f, const char* fmt, ...)
     fputc('\n', f);
 }
 
+/* [dock] 节：写出窗口序号映射 */
+typedef struct { FILE* f; HWND* written; int nw; } DockSaveCtx;
+static void dock_emit(const char* key, const char* val, void* u)
+{
+    DockSaveCtx* c = (DockSaveCtx*)u;
+    write_utf8_line(c->f, "%s=%s", key, val);
+}
+static int dock_index_of(HWND h, void* u)
+{
+    DockSaveCtx* c = (DockSaveCtx*)u;
+    int i;
+    for (i = 0; i < c->nw; i++) if (c->written[i] == h) return i;
+    return -1;
+}
+
 int os_layout_save_to(const wchar_t* path)
 {
+    HWND written[OS_MAX_WINS];
+    int nwritten = 0;
     FILE* f;
     RECT r;
     int i, active;
@@ -141,6 +159,7 @@ int os_layout_save_to(const wchar_t* path)
         if (!wi->hwnd) continue;
         if (!win_type_of(wi->hwnd, type, sizeof(type), &mod, &ctx)) continue;
         os_wide_to_utf8_buf(wi->title, title8, sizeof(title8));
+        written[nwritten++] = wi->hwnd;
         write_utf8_line(f, "[win]");
         write_utf8_line(f, "type=%s", type);
         write_utf8_line(f, "title=%s", title8);
@@ -159,6 +178,14 @@ int os_layout_save_to(const wchar_t* path)
                 write_utf8_line(f, "vars+=%s", vars[k]);
         }
     }
+    if (dock_host()) {
+        /* Terminator 式停靠布局（v1）：分割树 + 浮动窗；面板以上面 [win] 的序号引用。
+         * 旧版本读到本节会忽略（未知键）。 */
+        DockSaveCtx dc;
+        dc.f = f; dc.written = written; dc.nw = nwritten;
+        write_utf8_line(f, "[dock]");
+        dock_save(dock_emit, dock_index_of, &dc);
+    }
     fclose(f);
     os_log(OS_LOG_INFO, "布局已保存: %ls (%d 个窗口)", path, g_app.win_count);
     return 0;
@@ -172,6 +199,11 @@ static void default_path(wchar_t* out, int cap, int for_save)
     wchar_t dir[MAX_PATH];
     wchar_t* slash;
     DWORD n = GetModuleFileNameW(NULL, exe, MAX_PATH);
+    /* 测试/多实例隔离：OPENSCOPE_LAYOUT=完整路径 时不碰用户的 %LOCALAPPDATA%\OpenScope\layout.ini */
+    if (GetEnvironmentVariableW(L"OPENSCOPE_LAYOUT", out, (DWORD)cap) > 0 && out[0]) {
+        (void)for_save;
+        return;
+    }
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH) > 0) {
         _snwprintf(out, cap, L"%s\\OpenScope", dir);
         CreateDirectoryW(out, NULL);
@@ -236,7 +268,7 @@ static void trim_crlf(char* s)
 int os_layout_load_from(const wchar_t* path)
 {
     FILE* f;
-    char line[1024];
+    char line[4608];
     LayoutData* ld;
     int i, ok = 0;
     /* LayoutData 含 64×64 变量名缓冲区，约 1.3MB，必须堆分配避免主线程栈溢出 */
@@ -250,12 +282,21 @@ int os_layout_load_from(const wchar_t* path)
     if (!path) return -1;
     f = _wfopen(path, L"rb");
     if (!f) { free(ld); return -1; }
+    dock_load_begin();
     {
         LayoutWin* cur = NULL;
+        int in_dock = 0;
         while (fgets(line, sizeof(line), f)) {
-            char key[64], val[900];
+            char key[64], val[4400];
             trim_crlf(line);
+            if (strcmp(line, "[dock]") == 0) { cur = NULL; in_dock = 1; continue; }
+            if (in_dock && line[0] != '[') {
+                parse_key(line, key, sizeof(key), val, sizeof(val));
+                dock_load_line(key, val);
+                continue;
+            }
             if (strcmp(line, "[win]") == 0) {
+                in_dock = 0;
                 if (ld->nwins < OS_MAX_WINS) cur = &ld->wins[ld->nwins++];
                 else cur = NULL;
                 continue;
@@ -329,6 +370,9 @@ int os_layout_load_from(const wchar_t* path)
         InvalidateRect(g_app.hTreePin, NULL, TRUE);
 
     /* 创建窗口并挂变量 */
+    {
+    HWND by_index[OS_MAX_WINS];
+    memset(by_index, 0, sizeof(by_index));
     for (i = 0; i < ld->nwins; i++) {
         LayoutWin* w = &ld->wins[i];
         wchar_t wtitle[512];
@@ -338,9 +382,14 @@ int os_layout_load_from(const wchar_t* path)
         os_utf8_to_wide_buf(w->title[0] ? w->title : w->type, wtitle, 512);
         h = os_win_create_by_type(w->type, wtitle);
         if (!h) continue;
+        by_index[i] = h;
         for (k = 0; k < w->nvars; k++) {
             if (w->vars[k][0]) os_layout_apply_var(h, w->vars[k]);
         }
+    }
+    /* 停靠布局：有 [dock] 节则按树恢复；旧文件（只有 [win]）保持自动平铺放置 */
+    if (dock_host() && dock_load_apply(by_index, ld->nwins) == 0)
+        os_log(OS_LOG_INFO, "停靠布局已恢复");
     }
     if (ld->active >= 0 && ld->active < g_app.win_count)
         os_mainwin_select_tab(ld->active);
