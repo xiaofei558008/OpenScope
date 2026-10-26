@@ -548,6 +548,13 @@ static void apply_cpu_status(const OS_CpuState* stp, int rc)
     char label[32];
     if (!g_app.hStatus) return;
     if (!g_app.connected || !g_app.driver || g_app.net_mode) return;  /* 结果到达前已断开/切网络 */
+    if (rc == OS_ERR_AGAIN) {
+        /* Bug4（驱动侧）：驱动忙/重连中——保留上次已知状态（不清 PC 高亮、不动局部变量），
+         * 状态栏提示，300ms 后自动重试；不弹框 */
+        SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: 忙/重连中…");
+        SetTimer(g_app.hMain, 6, 300, NULL);
+        return;
+    }
     if (rc != OS_ERR_OK) {
         SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
         return;
@@ -5110,6 +5117,10 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if (wParam == 1) check_elf_mtime();
         else if (wParam == 2) os_replay_tick();
         else if (wParam == 3) { tree_auto_tick(); os_tab_edit_focus_check(); }
+        else if (wParam == 6) {   /* Bug4：CPU 状态忙 → 一次性重试 */
+            KillTimer(hwnd, 6);
+            if (g_app.connected && !g_app.net_mode) refresh_cpu_status();
+        }
         else if (wParam == 4) {
             /* 只有打开了局部变量窗口才查询 CPU 状态；变量只在停住且 PC 变化时读一次 */
             if (os_locals_window_count() > 0 && g_app.connected && !g_app.net_mode)
@@ -5147,6 +5158,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         return 0;
     }
     case WM_OS_ACQ_STATE:
+        os_ds_poll_busy();   /* Bug4：采集线程退出时 Post 本消息 → 及时回收残留句柄 */
         refresh_status();
         os_mainwin_update_buttons();
         return 0;
@@ -5705,10 +5717,13 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         KillTimer(hwnd, 2);
         KillTimer(hwnd, 3);
         KillTimer(hwnd, 4);
+        KillTimer(hwnd, 6);
         cps_shutdown();
         g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */
         g_tab_edit_idx = -1;
         os_ds_stop();
+        if (!os_ds_join(5000))   /* Bug4：卸载驱动模块前确保采集线程不在驱动代码里 */
+            os_log(OS_LOG_WARN, "退出：采集线程 5s 未退出");
         g_app.recording = 0;
         os_datalog_stop();
         os_spool_clear();

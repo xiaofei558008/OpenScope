@@ -34,7 +34,8 @@ enum {
     OS_LOCS_NO_ELF,
     OS_LOCS_NO_FUNC,
     OS_LOCS_REG_FAIL,
-    OS_LOCS_UNSUPPORTED
+    OS_LOCS_UNSUPPORTED,
+    OS_LOCS_BUSY            /* Bug4：驱动忙/重连中（OS_ERR_AGAIN），稍后自动重试 */
 };
 
 typedef struct OS_LocSnap {

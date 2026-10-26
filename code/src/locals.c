@@ -22,6 +22,8 @@
 /* 引擎                                                                */
 /* ------------------------------------------------------------------ */
 
+static int s_read_busy;   /* Bug4：本次快照中有读返回 OS_ERR_AGAIN（仅 UI 线程） */
+
 static int drv_read(void* user, uint64_t addr, void* buf, uint32_t size)
 {
     OS_MemReq r;
@@ -31,7 +33,11 @@ static int drv_read(void* user, uint64_t addr, void* buf, uint32_t size)
     r.address = addr;
     r.size = size;
     r.data = buf;
-    return g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &r, NULL) < 0 ? -1 : 0;
+    {
+        int rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_READ_MEM, &r, NULL);
+        if (rc == OS_ERR_AGAIN) s_read_busy = 1;   /* Bug4 */
+        return rc < 0 ? -1 : 0;
+    }
 }
 
 static OS_LocRow* row_add(OS_LocSnap* s)
@@ -195,7 +201,9 @@ int os_locals_snapshot(OS_LocSnap* s, int (*is_exp)(const char*, void*), void* u
     memset(s, 0, sizeof(*s));
     if (!g_app.driver || !g_app.connected) { s->status = OS_LOCS_NOT_CONNECTED; snprintf(s->msg, sizeof(s->msg), "仿真器未连接"); return s->status; }
     if (!g_app.elf) { s->status = OS_LOCS_NO_ELF; snprintf(s->msg, sizeof(s->msg), "未加载带调试信息的 ELF"); return s->status; }
+    s_read_busy = 0;
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_REG_READ, NULL, &s->regs);
+    if (rc == OS_ERR_AGAIN) { s->status = OS_LOCS_BUSY; snprintf(s->msg, sizeof(s->msg), "驱动忙/重连中，稍后自动刷新…"); return s->status; }
     if (rc == OS_ERR_BUSY) { s->status = OS_LOCS_RUNNING; snprintf(s->msg, sizeof(s->msg), "CPU 运行中（停住后显示）"); return s->status; }
     if (rc != OS_ERR_OK) {
         s->status = (rc == OS_ERR_UNSUPPORTED || rc == OS_ERR_FAIL) ? OS_LOCS_UNSUPPORTED : OS_LOCS_REG_FAIL;
@@ -453,10 +461,35 @@ static void lw_fill(LocWin* w)
     InvalidateRect(w->hwnd, NULL, TRUE);
 }
 
+static void lw_apply_colors(LocWin* w);
+#define LOC_TIMER_RETRY 0x5B03   /* Bug4：驱动忙时的重试定时器 */
+
 static void lw_refresh(LocWin* w)
 {
-    os_locals_free(&w->snap);
-    os_locals_snapshot(&w->snap, lw_is_exp, w, 0);
+    /* Bug4：先拍到临时快照；驱动忙则保留上次结果（置灰）并定时重试，不清空、不报错 */
+    OS_LocSnap* t = (OS_LocSnap*)calloc(1, sizeof(OS_LocSnap));
+    if (t) {
+        os_locals_snapshot(t, lw_is_exp, w, 0);
+        if (t->status == OS_LOCS_BUSY || s_read_busy) {
+            s_read_busy = 0;
+            SetTimer(w->hwnd, LOC_TIMER_RETRY, 300, NULL);
+            if (w->have_snap) {
+                os_locals_free(t); free(t);
+                w->stale = 1;
+                lw_apply_colors(w);
+                InvalidateRect(w->list, NULL, TRUE);
+                return;
+            }
+            t->status = OS_LOCS_BUSY;
+            snprintf(t->msg, sizeof(t->msg), "驱动忙/重连中，稍后自动刷新…");
+        }
+        os_locals_free(&w->snap);
+        w->snap = *t;   /* 浅拷贝转移所有权 */
+        free(t);
+    } else {
+        os_locals_free(&w->snap);
+        os_locals_snapshot(&w->snap, lw_is_exp, w, 0);
+    }
     w->have_snap = 1;
     w->stale = (w->snap.status == OS_LOCS_RUNNING);
     w->last_pc = w->snap.pc;
@@ -482,6 +515,13 @@ static LRESULT CALLBACK loc_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     LocWin* w = (LocWin*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     switch (msg) {
+    case WM_TIMER:
+        if (wp == LOC_TIMER_RETRY) {   /* Bug4 */
+            KillTimer(hwnd, LOC_TIMER_RETRY);
+            if (w && g_app.connected && g_app.driver) lw_refresh(w);
+            return 0;
+        }
+        break;
     case WM_CREATE: {
         LVCOLUMNW col;
         w = (LocWin*)calloc(1, sizeof(LocWin));

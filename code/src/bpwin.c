@@ -91,6 +91,8 @@ static int bp_parse_addr(HWND hwnd, uint32_t* out)
     return 0;
 }
 
+#define BP_TIMER_RETRY 0x5B02   /* Bug4：BP_LIST 忙时的重试定时器 */
+
 static void bp_refresh_list(HWND hwnd)
 {
     HWND lb = GetDlgItem(hwnd, IDC_BP_LIST);
@@ -100,8 +102,8 @@ static void bp_refresh_list(HWND hwnd)
     wchar_t line[160];
     char note[64];
     if (!lb) return;
-    SendMessageW(lb, LB_RESETCONTENT, 0, 0);
     if (!g_app.driver || !g_app.connected || !g_app.driver->command) {
+        SendMessageW(lb, LB_RESETCONTENT, 0, 0);
         bp_set_status(hwnd, L"未连接驱动");
         return;
     }
@@ -110,6 +112,13 @@ static void bp_refresh_list(HWND hwnd)
     list.items = items;
     list.capacity = OS_BP_MAX;
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_LIST, NULL, &list);
+    if (rc == OS_ERR_AGAIN) {
+        /* Bug4：驱动忙/重连中——保留现有列表，500ms 后自动刷新 */
+        bp_set_status(hwnd, L"驱动忙/重连中，稍后自动刷新…");
+        SetTimer(hwnd, BP_TIMER_RETRY, 500, NULL);
+        return;
+    }
+    SendMessageW(lb, LB_RESETCONTENT, 0, 0);
     if (rc != OS_ERR_OK) {
         bp_set_status(hwnd, L"BP_LIST 失败（驱动可能不支持）");
         return;
@@ -154,7 +163,8 @@ static void bp_do_set(HWND hwnd)
     _snprintf(req.note, sizeof(req.note), "%s", note);
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
     if (rc != OS_ERR_OK) {
-        bp_set_status(hwnd, rc == OS_ERR_BUSY ? L"设置失败：硬件断点槽已满" :
+        bp_set_status(hwnd, rc == OS_ERR_AGAIN ? L"驱动忙/重连中，未设置，请稍后重试" :
+                            rc == OS_ERR_BUSY ? L"设置失败：硬件断点槽已满" :
                             rc == OS_ERR_UNSUPPORTED ? L"设置失败：当前驱动不支持硬件断点" :
                             rc == OS_ERR_NOT_CONNECTED ? L"设置失败：仿真器未连接" :
                             L"设置失败：驱动返回错误（见日志）");
@@ -189,7 +199,7 @@ static void bp_do_clear_sel(HWND hwnd)
     req.address = addr;
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_CLEAR, &req, NULL);
     if (rc != OS_ERR_OK) {
-        bp_set_status(hwnd, L"清除失败");
+        bp_set_status(hwnd, rc == OS_ERR_AGAIN ? L"驱动忙/重连中，未清除，请稍后重试" : L"清除失败");
         return;
     }
     bp_note_del(addr);
@@ -209,7 +219,7 @@ static void bp_do_clear_all(HWND hwnd)
     req.clear_all = 1;
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_CLEAR, &req, NULL);
     if (rc != OS_ERR_OK) {
-        bp_set_status(hwnd, L"全部清除失败");
+        bp_set_status(hwnd, rc == OS_ERR_AGAIN ? L"驱动忙/重连中，未清除，请稍后重试" : L"全部清除失败");
         return;
     }
     g_bp_note_n = 0;
@@ -228,6 +238,9 @@ static LRESULT CALLBACK bp_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     BpDlg* st;
     switch (msg) {
+    case WM_TIMER:
+        if (wp == BP_TIMER_RETRY) { KillTimer(hwnd, BP_TIMER_RETRY); bp_refresh_list(hwnd); return 0; }  /* Bug4 */
+        break;
     case WM_CREATE: {
         CREATESTRUCTW* cs = (CREATESTRUCTW*)lp;
         HWND c;

@@ -215,15 +215,18 @@ static ULONGLONG g_bpc_tick;
 static const void* g_bpc_drv;
 static void src_bp_cache_invalidate(void) { g_bpc_count = -1; }
 
+#define SRC_TIMER_BP_RETRY 0x5B01   /* Bug4：BP_LIST 忙时的重试定时器 */
+
 static void src_sync_bps_from_driver(OS_SrcWin* s)
 {
     OS_BpInfo* items = g_bpc_items;
     OS_BpList list;
     char path8[MAX_PATH];
-    int i;
-    s->bp_count = 0;
-    if (!g_app.driver || !g_app.connected || !g_app.driver->command || !g_app.elf)
+    int i, rc;
+    if (!g_app.driver || !g_app.connected || !g_app.driver->command || !g_app.elf) {
+        s->bp_count = 0;
         return;
+    }
     memset(&list, 0, sizeof(list));
     if (g_bpc_count >= 0 && g_bpc_drv == (const void*)g_app.driver && GetTickCount64() - g_bpc_tick < 300) {
         list.count = g_bpc_count;
@@ -232,13 +235,19 @@ static void src_sync_bps_from_driver(OS_SrcWin* s)
         list.items = g_bpc_items;
         list.capacity = OS_BP_MAX;
         g_bpc_count = -1;
-        if (g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_LIST, NULL, &list) != OS_ERR_OK)
+        rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_LIST, NULL, &list);
+        if (rc == OS_ERR_AGAIN) {
+            /* Bug4（驱动侧）：驱动忙/重连中——保留本窗口上次的断点标记，500ms 后重试 */
+            SetTimer(s->hwnd, SRC_TIMER_BP_RETRY, 500, NULL);
             return;
+        }
+        if (rc != OS_ERR_OK) { s->bp_count = 0; return; }
         if (list.count > OS_BP_MAX) list.count = OS_BP_MAX;
         g_bpc_count = list.count;
         g_bpc_tick = GetTickCount64();
         g_bpc_drv = (const void*)g_app.driver;
     }
+    s->bp_count = 0;
     os_wide_to_utf8_buf(s->path, path8, sizeof(path8));
     for (i = 0; i < list.count && s->bp_count < OS_BP_MAX; i++) {
         char file[512];
@@ -278,6 +287,10 @@ static void src_toggle_bp(OS_SrcWin* s, int line1)
         req.address = s->bps[ix].addr;
         rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_CLEAR, &req, NULL);
         src_bp_cache_invalidate();
+        if (rc == OS_ERR_AGAIN) {   /* Bug4：驱动忙/重连中，不弹框 */
+            os_log(OS_LOG_WARN, "源码断点: 驱动忙/重连中，%s:%d 未清除，请稍后重试", path8, line1);
+            return;
+        }
         if (rc == OS_ERR_OK) {
             int j;
             for (j = ix; j < s->bp_count - 1; j++) s->bps[j] = s->bps[j + 1];
@@ -336,6 +349,10 @@ static void src_toggle_bp(OS_SrcWin* s, int line1)
     _snprintf(req.note, sizeof(req.note), "%s:%d", path8, line1);
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
     src_bp_cache_invalidate();
+    if (rc == OS_ERR_AGAIN) {   /* Bug4：驱动忙/重连中——记日志，不弹框 */
+        os_log(OS_LOG_WARN, "源码断点: 驱动忙/重连中，%s:%d 未设置，请稍后重试", path8, line1);
+        return;
+    }
     if (rc != OS_ERR_OK) {
         const wchar_t* why;
         wchar_t msg[384];
@@ -496,6 +513,14 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     OS_SrcWin* s = src_from(hwnd);
     switch (msg) {
+    case WM_TIMER:
+        if (wp == SRC_TIMER_BP_RETRY) {   /* Bug4 */
+            OS_SrcWin* st = src_from(hwnd);
+            KillTimer(hwnd, SRC_TIMER_BP_RETRY);
+            if (st) { src_sync_bps_from_driver(st); InvalidateRect(hwnd, NULL, FALSE); }
+            return 0;
+        }
+        break;
     case WM_CREATE: {
         CREATESTRUCTW* cs = (CREATESTRUCTW*)lp;
         s = (OS_SrcWin*)calloc(1, sizeof(OS_SrcWin));
