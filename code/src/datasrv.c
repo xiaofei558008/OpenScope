@@ -94,6 +94,9 @@ int os_ds_any_connected(void)
     return acq_is_connected();
 }
 
+#define OS_ACQ_AGAIN_RETRY 3
+static unsigned g_acq_again_skips;   /* 采集线程独占使用：驱动忙而跳过的块数（诊断用） */
+
 static int acq_read_mem_mod(OS_Module* mod, void* ctx, OS_MemReq* req)
 {
     if (!mod || !mod->command || !req) return OS_ERR_NOT_CONNECTED;
@@ -158,6 +161,16 @@ static void read_run(WatchLeaf* wl, int first, int count, uint8_t* buf,
     req.size = run_sz;
     req.data = buf;
     r = acq_read_mem_mod(mod, ctx, &req);
+    {   /* 风险3：OS_ERR_AGAIN = 驱动忙（UI 命令正持会话锁 >50ms，或后台重连中），不是读失败。
+         * 采集线程就地重试（最多 OS_ACQ_AGAIN_RETRY 次）；仍忙则本轮跳过该块：不计失败、不打错误日志、
+         * 不刷新 last_ok（停摆计时照常工作）。 */
+        int tries = 0;
+        while (r == OS_ERR_AGAIN && tries++ < OS_ACQ_AGAIN_RETRY && !g_app.stop_poll) {
+            Sleep(tries == 1 ? 0 : 2);
+            r = acq_read_mem_mod(mod, ctx, &req);
+        }
+        if (r == OS_ERR_AGAIN) { g_acq_again_skips++; return; }
+    }
     if (r != (int)run_sz) {
         if ((*fail_count)++ < 3)
             os_log(OS_LOG_ERROR, "块读 @0x%llX 失败 (ret=%d, %d 变量, proj=%d)",

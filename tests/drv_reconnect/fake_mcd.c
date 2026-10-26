@@ -9,6 +9,7 @@ volatile LONG g_fake_open_delay_ms, g_fake_tx_delay_ms, g_fake_fail_tx;
 volatile LONG g_fake_inside, g_fake_max_inside;
 volatile LONG g_fake_open_srv, g_fake_close_srv, g_fake_open_core, g_fake_close_core;
 volatile LONG g_fake_stale_use, g_fake_trig_create;
+volatile LONG g_fake_free_lib, g_fake_exit;
 
 #define CORE_SLOTS 64
 static mcd_core_st   s_cores[CORE_SLOTS];
@@ -26,7 +27,7 @@ static void nap(volatile LONG* ms) { LONG v = InterlockedCompareExchange(ms, 0, 
 static int core_ix(const mcd_core_st* c) { return c ? (int)(c - s_cores) : -1; }
 
 static mcd_return_et f_initialize(const mcd_api_version_st* v, mcd_impl_version_info_st* i) { (void)v; memset(i, 0, sizeof(*i)); return MCD_RET_ACT_NONE; }
-static void f_exit(void) {}
+static void f_exit(void) { InterlockedIncrement(&g_fake_exit); }
 static mcd_return_et f_qry_servers(const mcd_char_t* h, mcd_bool_t r, uint32_t s, uint32_t* n, mcd_server_info_st* si)
 { (void)h; (void)r; (void)s; enter(); if (*n) { memset(si, 0, sizeof(*si)); strcpy(si->server, "UDAS"); *n = 1; } leave(); return MCD_RET_ACT_NONE; }
 static mcd_return_et f_open_server(const mcd_char_t* k, const mcd_char_t* c, mcd_server_st** s)
@@ -46,7 +47,10 @@ static void check_alive(const mcd_core_st* c) { int i = core_ix(c); if (i < 0 ||
 static mcd_return_et f_execute_txlist(const mcd_core_st* c, mcd_txlist_st* tl)
 {
     uint32_t k; mcd_return_et r = MCD_RET_ACT_NONE;
-    enter(); check_alive(c); nap(&g_fake_tx_delay_ms);
+    uint32_t bytes = 0;
+    for (k = 0; k < tl->num_tx; k++) bytes += tl->tx[k].num_bytes;
+    enter(); check_alive(c);
+    if (bytes > 256) nap(&g_fake_tx_delay_ms);   /* 只让采集的大块读变慢；UI 自己拿到锁后的小读照常快 */
     if (InterlockedCompareExchange(&g_fake_fail_tx, 0, 0)) { tl->num_tx_ok = 0; r = MCD_RET_ACT_HANDLE_ERROR; }
     else { for (k = 0; k < tl->num_tx; k++) { memset(tl->tx[k].data, 0xAB, tl->tx[k].num_bytes); tl->tx[k].num_bytes_ok = tl->tx[k].num_bytes; } tl->num_tx_ok = tl->num_tx; }
     leave(); return r;
@@ -78,4 +82,4 @@ static int s_lib;
 HMODULE fake_LoadLibraryExA(const char* p, HANDLE f, DWORD fl) { (void)p; (void)f; (void)fl; return (HMODULE)&s_lib; }
 FARPROC fake_GetProcAddress(HMODULE h, const char* n)
 { size_t i; (void)h; for (i = 0; i < sizeof(k_tab) / sizeof(k_tab[0]); i++) if (!strcmp(k_tab[i].n, n)) return (FARPROC)k_tab[i].f; return NULL; }
-BOOL fake_FreeLibrary(HMODULE h) { (void)h; return TRUE; }
+BOOL fake_FreeLibrary(HMODULE h) { if (h == (HMODULE)&s_lib) InterlockedIncrement(&g_fake_free_lib); return TRUE; }

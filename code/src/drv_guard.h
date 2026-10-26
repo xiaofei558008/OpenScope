@@ -11,6 +11,10 @@
  *     reconnecting 检查，避免自锁。
  *  4. Windows 下后台线程持有本 DLL 的引用（GetModuleHandleEx 钉住），退出时
  *     FreeLibraryAndExitThread，宿主 FreeLibrary 驱动 DLL 时不会把正在跑的代码卸掉。
+ *  5. 独占开始时先 drv_drain()：等独占前已进锁的调用离开，之后独占者独享厂商 DLL。
+ *  6. 限时等锁以 QPC 截止时刻为准（drv_try_cs_until），不受 Windows 15.6ms 计时粒度影响。
+ *  7. 卸载交接：deinit 时仍有线程卡在厂商 DLL → drv_guard_shutdown_or_orphan 登记收尾函数，
+ *     由最后离开独占区的线程执行；mod_init 先 drv_guard_wait_orphan。
  */
 #ifndef OS_DRV_GUARD_H
 #define OS_DRV_GUARD_H
@@ -57,6 +61,10 @@ typedef struct OS_DrvGuard {
     CRITICAL_SECTION thr_cs;         /* 保护 thr（发起者写、下一个发起者/关闭者读） */
     HANDLE thr;
     int (*reconnect_fn)(void);       /* 后台执行；调用时不持 cs */
+    /* 卸载交接（风险1）：deinit 时重连/连接仍卡在厂商 DLL 里 → 不阻塞宿主、也不立即释放；
+     * 由最后一个离开独占区的线程执行 cleanup_fn（关会话、卸厂商 DLL、删锁），见 drv_guard_shutdown_or_orphan */
+    volatile LONG orphaned, cleanup_claimed, cleanup_done;
+    void (*cleanup_fn)(void);
 #ifdef _WIN32
     HMODULE pin;
 #endif
@@ -178,18 +186,40 @@ DRV_FN int drv_lock_worker(OS_DrvGuard* g)
 
 DRV_FN void drv_unlock(OS_DrvGuard* g) { LeaveCriticalSection(g->cs); }
 
+/* 独占开始后调用：等已经在锁内的调用（独占开始前进入的读/UI 命令）全部离开，最多 wait_ms。
+ * 之后再没有线程能进锁（都会看到 reconnecting=1 → AGAIN），独占者可以不持锁调用厂商 DLL。 */
+#ifndef OS_DRV_DRAIN_MS
+#define OS_DRV_DRAIN_MS 2000
+#endif
+DRV_FN void drv_drain(OS_DrvGuard* g, DWORD wait_ms)
+{
+    if (drv_try_cs_until(NULL, g->cs, drv_deadline(wait_ms), 0)) LeaveCriticalSection(g->cs);
+}
+
 /* 同步独占（用户点 CONNECT）：成功返回 OS_ERR_OK，已有重连在跑则 OS_ERR_AGAIN。 */
 DRV_FN int drv_begin_exclusive(OS_DrvGuard* g)
 {
     if (InterlockedCompareExchange(&g->reconnecting, 1, 0) != 0) return OS_ERR_AGAIN;
     InterlockedExchange(&g->owner_tid, (LONG)GetCurrentThreadId());
+    drv_drain(g, OS_DRV_DRAIN_MS);
     return OS_ERR_OK;
+}
+
+/* 卸载交接：恰好一个线程（deinit 或最后离开独占区者）执行 cleanup_fn */
+DRV_FN void drv_orphan_try_cleanup(OS_DrvGuard* g)
+{
+    if (!InterlockedCompareExchange(&g->orphaned, 0, 0)) return;
+    if (InterlockedCompareExchange(&g->reconnecting, 0, 0)) return;
+    if (InterlockedCompareExchange(&g->cleanup_claimed, 1, 0) != 0) return;
+    if (g->cleanup_fn) g->cleanup_fn();
+    InterlockedExchange(&g->cleanup_done, 1);
 }
 
 DRV_FN void drv_end_exclusive(OS_DrvGuard* g)
 {
     InterlockedExchange(&g->owner_tid, 0);
     InterlockedExchange(&g->reconnecting, 0);
+    drv_orphan_try_cleanup(g);   /* deinit 已交接：本线程是最后一个用户 → 收尾 */
 }
 
 DRV_FN DWORD WINAPI drv_reconnect_thread(LPVOID p)
@@ -199,6 +229,7 @@ DRV_FN DWORD WINAPI drv_reconnect_thread(LPVOID p)
     HMODULE pin = g->pin;
 #endif
     InterlockedExchange(&g->owner_tid, (LONG)GetCurrentThreadId());
+    drv_drain(g, OS_DRV_DRAIN_MS);
     if (g->reconnect_fn) g->reconnect_fn();
     drv_end_exclusive(g);
 #ifdef _WIN32
@@ -238,6 +269,19 @@ DRV_FN int drv_kick_reconnect(OS_DrvGuard* g)
     return OS_ERR_AGAIN;
 }
 
+/* mod_init 开头调用：上一次 deinit 交接出去的收尾若还没完成（线程仍卡在厂商 DLL），最多等 wait_ms。
+ * 返回 1 = 可以重新初始化；0 = 仍在收尾（调用方应返回 OS_ERR_AGAIN，不得覆盖锁/会话）。 */
+DRV_FN int drv_guard_wait_orphan(OS_DrvGuard* g, DWORD wait_ms)
+{
+    LONGLONG dl = drv_deadline(wait_ms);
+    if (!InterlockedCompareExchange(&g->orphaned, 0, 0)) return 1;
+    while (!InterlockedCompareExchange(&g->cleanup_done, 0, 0)) {
+        if (drv_qpc() >= dl) return 0;
+        Sleep(10);
+    }
+    return 1;
+}
+
 /* 卸载前调用：等后台重连结束（最多 wait_ms）。返回 1 表示线程已结束，0 表示仍在跑。 */
 DRV_FN int drv_guard_shutdown(OS_DrvGuard* g, DWORD wait_ms)
 {
@@ -255,6 +299,25 @@ DRV_FN int drv_guard_shutdown(OS_DrvGuard* g, DWORD wait_ms)
         }
     }
     return done;
+}
+
+/* 卸载（风险1 改进）：最多等 wait_ms，等后台重连线程结束、且没有任何线程处于独占区（包括宿主
+ * 工作线程里正在执行的同步 CONNECT）。
+ *  返回 1：已空闲，调用方照常同步清理；
+ *  返回 0：仍有线程卡在厂商 DLL 里。此时登记 cleanup_fn 并交接：卡住的线程一旦返回、离开独占区，
+ *          由它执行 cleanup_fn（关会话、卸厂商 DLL、删锁）——不再“永久泄漏”，宿主也不被阻塞。
+ *          调用方此时不得再碰锁/会话/厂商 DLL。后台线程钉住了本模块 DLL（GetModuleHandleEx），
+ *          宿主的 FreeLibrary 不会把正在执行的代码卸掉；宿主侧的连接线程同样须钉住驱动 DLL。 */
+DRV_FN int drv_guard_shutdown_or_orphan(OS_DrvGuard* g, DWORD wait_ms, void (*cleanup_fn)(void))
+{
+    LONGLONG dl = drv_deadline(wait_ms);
+    int thr_done = drv_guard_shutdown(g, wait_ms);
+    while (thr_done && InterlockedCompareExchange(&g->reconnecting, 0, 0) && drv_qpc() < dl) Sleep(10);
+    if (thr_done && !InterlockedCompareExchange(&g->reconnecting, 0, 0)) return 1;
+    g->cleanup_fn = cleanup_fn;
+    InterlockedExchange(&g->orphaned, 1);
+    drv_orphan_try_cleanup(g);    /* 竞态：线程恰在此刻结束 → 由本线程收尾 */
+    return 0;
 }
 
 #endif /* OS_DRV_GUARD_H */

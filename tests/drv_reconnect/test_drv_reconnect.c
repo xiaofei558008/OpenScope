@@ -6,6 +6,10 @@
  *    采集线程也不被卡住；N 秒后自动恢复，断点重新布置。
  *  D 重连中用户断开：DISCONNECT ≤ MAX_MS 返回；重连线程收尾，不泄漏会话。
  *  E 卸载：deinit 有界返回。
+ *  F 连接中取消：CONNECT 在工作线程里（宿主异步连接），open_server 卡 1.5s；期间 DISCONNECT ≤ MAX_MS 返回，
+ *    CONNECT 在下一个取消点返回 OS_ERR_CANCELED，IS_CONNECTED=0，会话不泄漏。
+ *  G 卸载交接（风险1）：CONNECT 卡在 open_server 6s 时 deinit → 5s 有界返回（不阻塞宿主）；
+ *    卡住的线程返回后自行收尾（关会话、exit_、FreeLibrary），之后可以重新 init。
  * 全程：MCD 调用并发度必须 = 1（MCD 全局锁），不得使用已关闭的 core（stale_use=0）。
  * 环境变量：TEST_STUCK_MS（默认 3000）、TEST_MAX_MS（默认 60）。
  * 时延上限：默认 60ms（50ms 锁等待 + 10ms 余量），所有平台相同。驱动用 QPC 截止 + SwitchToThread/
@@ -85,7 +89,7 @@ static long precision_selftest(void)
 
 static int cmd(int c, void* in, void* out) { return M->command(NULL, c, in, out); }
 
-typedef struct { int ok, again, other, n; long max_ms; } Stat;
+typedef struct { int ok, again, other, n, max_k; long max_ms; } Stat;
 static void ui_round(Stat* st)
 {
     OS_CpuState cs; OS_BpInfo items[OS_BP_MAX]; OS_BpList bl; OS_RegSet rs; OS_BpReq br; OS_MemReq mr;
@@ -103,7 +107,7 @@ static void ui_round(Stat* st)
         default: rc[k] = cmd(OS_CMD_READ_MEM, &mr, NULL); if (rc[k] > 0) rc[k] = OS_ERR_OK; break;
         }
         dt = now_ms() - t0;
-        if ((long)dt > st->max_ms) st->max_ms = (long)dt;
+        if ((long)dt > st->max_ms) { st->max_ms = (long)dt; st->max_k = k; }
         st->n++;
         if (rc[k] == OS_ERR_OK) st->ok++; else if (rc[k] == OS_ERR_AGAIN) st->again++; else st->other++;
     }
@@ -123,6 +127,16 @@ static DWORD WINAPI acq_thread(LPVOID p)
         if (dt > InterlockedCompareExchange(&g_acq_max_ms, 0, 0)) InterlockedExchange(&g_acq_max_ms, dt);
         if (rc < 0) Sleep(5);
     }
+    return 0;
+}
+
+static volatile LONG g_conn_rc = 12345;
+static DWORD WINAPI connect_thread(LPVOID p)
+{
+    OS_ConnectCfg cfg;
+    (void)p;
+    memset(&cfg, 0, sizeof(cfg));
+    InterlockedExchange(&g_conn_rc, cmd(OS_CMD_CONNECT, &cfg, NULL));
     return 0;
 }
 
@@ -177,7 +191,7 @@ int main(void)
     run_ui_for(1500, &st);
     InterlockedExchange(&g_stop_acq, 1); WaitForSingleObject(th, INFINITE); CloseHandle(th);
     FAKE_SET(g_fake_tx_delay_ms, 0);
-    printf("    ui: n=%d ok=%d again=%d other=%d max=%ldms (上限 %ldms)\n", st.n, st.ok, st.again, st.other, st.max_ms, g_max_ms);
+    printf("    ui: n=%d ok=%d again=%d other=%d max=%ldms（命令#%d） (上限 %ldms)\n", st.n, st.ok, st.again, st.other, st.max_ms, st.max_k, g_max_ms);
     CHECK(st.max_ms <= g_max_ms, "UI latency %ld > %ld under slow I/O", st.max_ms, g_max_ms);
     CHECK(st.again > 0, "expected some AGAIN while acq holds lock");
     CHECK(st.other == 0, "no hard errors (other=%d)", st.other);
@@ -228,6 +242,52 @@ int main(void)
     t0 = now_ms();
     M->deinit(ctx);
     printf("    deinit 耗时 %llums\n", (unsigned long long)(now_ms() - t0));
+
+    printf("[F] 连接中取消（宿主工作线程里 CONNECT，open_server 卡 1500ms）\n");
+    CHECK(M->init(&fw, &ctx) == OS_ERR_OK, "re-init");
+    FAKE_SET(g_fake_open_delay_ms, 1500);
+    InterlockedExchange(&g_conn_rc, 12345);
+    th = CreateThread(NULL, 0, connect_thread, NULL, 0, NULL);
+    Sleep(100);
+    run_ui_for(200, &st);
+    CHECK(st.max_ms <= g_max_ms && st.ok == 0, "UI during connect: max=%ld ok=%d", st.max_ms, st.ok);
+    t0 = now_ms();
+    rc = cmd(OS_CMD_DISCONNECT, NULL, NULL);
+    printf("    连接中 disconnect rc=%d 耗时 %llums\n", rc, (unsigned long long)(now_ms() - t0));
+    CHECK(rc == OS_ERR_OK && (long)(now_ms() - t0) <= g_max_ms, "disconnect during connect must not wait");
+    WaitForSingleObject(th, INFINITE); CloseHandle(th);
+    printf("    connect rc=%ld（期望 %d = CANCELED）\n", (long)FAKE_GET(g_conn_rc), OS_ERR_CANCELED);
+    CHECK(FAKE_GET(g_conn_rc) == OS_ERR_CANCELED, "connect should be canceled");
+    cmd(OS_CMD_IS_CONNECTED, NULL, &c);
+    CHECK(c == 0, "connected after cancel");
+    CHECK(FAKE_GET(g_fake_open_srv) == FAKE_GET(g_fake_close_srv) && FAKE_GET(g_fake_open_core) == FAKE_GET(g_fake_close_core),
+          "session leak after cancel");
+    FAKE_SET(g_fake_open_delay_ms, 0);
+    rc = cmd(OS_CMD_CONNECT, &cfg, NULL); CHECK(rc == OS_ERR_OK, "connect after cancel rc=%d", rc);
+    cmd(OS_CMD_DISCONNECT, NULL, NULL);
+
+    printf("[G] 卸载交接：CONNECT 卡在 open_server 6000ms 时 deinit\n");
+    {
+        LONG fl0 = FAKE_GET(g_fake_free_lib);
+        FAKE_SET(g_fake_open_delay_ms, 6000);
+        th = CreateThread(NULL, 0, connect_thread, NULL, 0, NULL);
+        Sleep(100);
+        t0 = now_ms();
+        M->deinit(ctx);
+        printf("    deinit 耗时 %llums（有界，不等卡住的线程）\n", (unsigned long long)(now_ms() - t0));
+        CHECK((long)(now_ms() - t0) <= 5500, "deinit not bounded");
+        CHECK(FAKE_GET(g_fake_free_lib) == fl0, "FreeLibrary while a thread is inside the DLL");
+        WaitForSingleObject(th, INFINITE); CloseHandle(th);
+        printf("    卡住的线程返回：connect rc=%ld，FreeLibrary %ld 次（期望 1，由该线程收尾）\n",
+               (long)FAKE_GET(g_conn_rc), (long)(FAKE_GET(g_fake_free_lib) - fl0));
+        CHECK(FAKE_GET(g_fake_free_lib) - fl0 == 1, "deferred cleanup did not run");
+        CHECK(FAKE_GET(g_fake_open_srv) == FAKE_GET(g_fake_close_srv) && FAKE_GET(g_fake_open_core) == FAKE_GET(g_fake_close_core),
+              "session leak after deferred cleanup");
+        FAKE_SET(g_fake_open_delay_ms, 0);
+        CHECK(M->init(&fw, &ctx) == OS_ERR_OK, "re-init after deferred cleanup");
+        rc = cmd(OS_CMD_CONNECT, &cfg, NULL); CHECK(rc == OS_ERR_OK, "connect after re-init rc=%d", rc);
+        M->deinit(ctx);
+    }
 
     printf("MCD 最大并发=%ld（须为 1） stale_core_use=%ld\n", (long)FAKE_GET(g_fake_max_inside), (long)FAKE_GET(g_fake_stale_use));
     CHECK(FAKE_GET(g_fake_max_inside) == 1, "MCD calls not serialized");

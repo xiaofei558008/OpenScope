@@ -214,15 +214,21 @@ static int das_sess_open(const OS_ConnectCfg* cfg_in, DasSess* x)
         das_mcd_enter(); g_ctx.api.open_server("", cfg, &x->server); das_mcd_leave();
     }
     if (!x->server) { das_sess_err(x, "open_server"); return OS_ERR_NO_DEVICE; }
+    /* 每步 MCD 调用之间检查取消（用户断开 / 卸载）：卡住的只可能是单个厂商调用，不是整个序列 */
+#define DAS_CANCEL_POINT() do { if (!DAS_LOAD(g_ctx.want_connected)) { das_fmt(x->err, sizeof(x->err), "已取消"); das_sess_close(x); return OS_ERR_CANCELED; } } while (0)
+    DAS_CANCEL_POINT();
     memset(&sys, 0, sizeof(sys)); n = 1;
     das_mcd_enter(); r = g_ctx.api.qry_systems(0, &n, &sys); das_mcd_leave();
     if (r != MCD_RET_ACT_NONE || n == 0) { das_sess_err(x, "qry_systems"); goto fail; }
+    DAS_CANCEL_POINT();
     memset(dev, 0, sizeof(dev)); n = 4;
     das_mcd_enter(); r = g_ctx.api.qry_devices(&sys, 0, &n, dev); das_mcd_leave();
     if (r != MCD_RET_ACT_NONE || n == 0) { das_sess_err(x, "qry_devices(目标未上电/未连接?)"); goto fail; }
+    DAS_CANCEL_POINT();
     memset(cores, 0, sizeof(cores)); n = 8;
     das_mcd_enter(); r = g_ctx.api.qry_cores(&dev[0], 0, &n, cores); das_mcd_leave();
     if (r != MCD_RET_ACT_NONE || n == 0) { das_sess_err(x, "qry_cores"); goto fail; }
+    DAS_CANCEL_POINT();
     x->core_index = das_parse_core_index(cfg_in->device);
     if ((uint32_t)x->core_index >= n) x->core_index = 0;
     das_mcd_enter(); r = g_ctx.api.open_core(&cores[x->core_index], &x->core); das_mcd_leave();
@@ -236,6 +242,7 @@ static int das_sess_open(const OS_ConnectCfg* cfg_in, DasSess* x)
 fail:
     das_sess_close(x);
     return OS_ERR_NO_DEVICE;
+#undef DAS_CANCEL_POINT
 }
 
 /* 持锁（das_lock）调用：换入新会话；旧句柄由调用方事先摘下 */
@@ -862,6 +869,13 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
 static int mod_init(const OS_Framework* fw, void** out_ctx)
 {
     (void)out_ctx;
+    /* 上次卸载交接出去的收尾（线程卡在 mcdxdas.dll）还没完成：不得重建锁/会话 */
+    if (!drv_guard_wait_orphan(&g_guard, 3000)) {
+        if (fw && fw->log) fw->log(OS_LOG_ERROR, "das 模块: 上次卸载的后台收尾仍未结束（mcdxdas.dll 调用卡住），请稍后再加载");
+        return OS_ERR_AGAIN;
+    }
+    memset(&g_ctx, 0, sizeof(g_ctx));
+    memset(g_bp, 0, sizeof(g_bp));
     g_fw = fw;
     InitializeCriticalSection(&g_ctx.cs);
     InitializeCriticalSection(&g_mcd_cs);
@@ -874,15 +888,10 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     return OS_ERR_OK;
 }
 
-static void mod_deinit(void* ctx)
+/* 最终清理：断开、退出 MCD、卸 mcdxdas.dll、删锁。必须是最后一个使用者调用
+ * （deinit 同步调用；或卸载交接后，由最后离开独占区的线程调用）。 */
+static void das_final_cleanup(void)
 {
-    (void)ctx;
-    DAS_STORE(g_ctx.want_connected, 0);
-    if (!drv_guard_shutdown(&g_guard, 5000)) {
-        /* 后台重连卡在 mcdxdas.dll 里：不能 FreeLibrary/删锁（线程仍在用），宁可泄漏 */
-        LOG(OS_LOG_WARN, "das 模块: 后台重连 5s 未结束，跳过 MCD 卸载");
-        return;
-    }
     mod_disconnect();
     if (g_ctx.bound) {
         if (g_ctx.mcd_inited) g_ctx.api.exit_();
@@ -891,6 +900,21 @@ static void mod_deinit(void* ctx)
     g_ctx.bound = g_ctx.mcd_inited = 0;
     DeleteCriticalSection(&g_mcd_cs);
     DeleteCriticalSection(&g_ctx.cs);
+    g_fw = NULL;   /* 交接路径下宿主可能已在退出：收尾后不再写日志 */
+}
+
+static void mod_deinit(void* ctx)
+{
+    const OS_Framework* fw = g_fw;   /* 交接后 g_fw 归收尾线程所有，这里只用副本 */
+    (void)ctx;
+    DAS_STORE(g_ctx.want_connected, 0);   /* 正在进行的连接/重连在下一个取消点放弃 */
+    if (!drv_guard_shutdown_or_orphan(&g_guard, 5000, das_final_cleanup)) {
+        /* 风险1：线程卡在 mcdxdas.dll 的单个调用里。不阻塞宿主；收尾已交接给该线程，
+         * 它一返回就关会话、卸 DLL、删锁（不再永久泄漏）。 */
+        if (fw && fw->log) fw->log(OS_LOG_WARN, "das 模块: 连接/重连 5s 未结束，卸载收尾已交给后台线程");
+        return;
+    }
+    das_final_cleanup();
 }
 
 static const OS_Module g_module = {

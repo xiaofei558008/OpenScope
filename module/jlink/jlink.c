@@ -23,7 +23,7 @@ typedef struct JLinkCtx {
     OS_JLinkApi api;
     CRITICAL_SECTION cs;      /* 串行化读写（AD-11） */
     OS_ConnectCfg cfg;        /* 配置对话框保存的连接参数 */
-    int connected;
+    volatile LONG connected;  /* 风险2/TSan：一律经 JL_CONN()/JL_SET_CONN() 原子访问 */
     int dll_used;             /* Bug16: 是否已使用过 DLL（首连后置1，后续连接先整库重载防脏会话） */
     ULONGLONG last_reconnect_ms; /* 自动重连节流时间戳 */
     ULONGLONG last_reconnect_log_ms; /* 重连成功日志节流时间戳（Bug10: 5s 一次） */
@@ -43,6 +43,9 @@ static JLinkCtx g_ctx;
 /* Bug4：后台重连守卫。重连（DLL 重载 + Open + Connect，可达数秒）只在后台线程、且不持 g_ctx.cs 执行；
  * UI 命令限时拿锁，重连中 / 50ms 拿不到锁 → OS_ERR_AGAIN。 */
 static OS_DrvGuard g_guard;
+#define JL_CONN()       (InterlockedCompareExchange(&g_ctx.connected, 0, 0) != 0)
+#define JL_SET_CONN(v)  InterlockedExchange(&g_ctx.connected, (LONG)(v))
+#define JL_WANT()       (InterlockedCompareExchange(&g_want, 0, 0) != 0)
 static volatile LONG g_want;   /* 用户 CONNECT 成功后 1，用户 DISCONNECT 后 0；为 0 时不自动重连 */
 static int jlink_reconnect_worker(void);
 static const OS_Framework* g_fw;
@@ -174,7 +177,7 @@ static int jlink_reload(void)
         if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 连接: J-Link 读取疑似卡死，跳过 DLL 重载");
         return OS_ERR_FAIL;
     }
-    g_ctx.connected = 0;
+    JL_SET_CONN(0);
     os_jlink_unbind(&g_ctx.api);
     rc = os_jlink_bind(&g_ctx.api, err, sizeof(err));
     LeaveCriticalSection(&g_ctx.cs);
@@ -244,6 +247,7 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
      * 后 DLL 内部 AV 崩溃（JLink_x64.dll+0x18C36E，连接即闪退，与变量个数无关）。
      * 移到 open 前可正确选中仿真器（rc=0），同时避免 DLL 弹出"Device Selection"设备选择框。
      * 重载 DLL 会丢掉这次选择，所以每次 open 前都要再选一次。 */
+    if (!JL_WANT()) return OS_ERR_CANCELED;   /* 取消点：用户已断开 / 卸载 */
     jlink_select_probe(a, cfg);
     rc = a->open(NULL);
     if (rc != 0) {
@@ -262,6 +266,7 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
             return OS_ERR_FAIL;
         }
     }
+    if (!JL_WANT()) { a->close(); return OS_ERR_CANCELED; }
     /* 需求21：open 成功后抑制 DLL 的信息弹窗（如固件更新提示等），并重设设备名兜底 */
     _snprintf(cmd, sizeof(cmd), "SuppressInfoDialogs = 1");
     memset(res, 0, sizeof(res));
@@ -297,6 +302,7 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
     } else {
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: 速度=自动（J-Link DLL 自适应）");
     }
+    if (!JL_WANT()) { a->close(); return OS_ERR_CANCELED; }
     rc = a->is_connected();
     if (!rc) rc = a->connect();
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 连接: Connect rc=%d %s%s",
@@ -311,7 +317,7 @@ static int jlink_do_connect(const OS_ConnectCfg* cfg, char* errbuf, int errlen)
         a->go();
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link Attach: Connect 后检测到 Halt，已 Go 恢复运行");
     }
-    g_ctx.connected = 1;
+    JL_SET_CONN(1);
     return OS_ERR_OK;
 }
 
@@ -324,7 +330,7 @@ static void jlink_refresh_info(void)
     _snprintf(d->version, sizeof(d->version), "%s", "1.17.3");
     if (a->get_dll_version) _snprintf(d->dll_version, sizeof(d->dll_version), "%d", a->get_dll_version());
     if (a->get_hw_version) d->hw_version = a->get_hw_version();
-    if (a->get_fw_string && g_ctx.connected) {
+    if (a->get_fw_string && JL_CONN()) {
         char fwbuf[128];
         memset(fwbuf, 0, sizeof(fwbuf));
         a->get_fw_string(fwbuf, sizeof(fwbuf));
@@ -333,7 +339,7 @@ static void jlink_refresh_info(void)
     } else {
         _snprintf(d->emulator, sizeof(d->emulator), "%s", "未连接");
     }
-    d->connected = g_ctx.connected;
+    d->connected = JL_CONN() ? 1 : 0;
 }
 
 /* ---------------- 模块命令 ---------------- */
@@ -379,9 +385,9 @@ static int mod_connect_ex(char* err, int errlen)
 {
     char ebuf[256];
     int rc;
-    if (g_ctx.connected) return OS_ERR_OK; /* 已在对话框内连接 */
+    if (JL_CONN()) return OS_ERR_OK; /* 已在对话框内连接 */
     rc = jlink_do_connect(&g_ctx.cfg, ebuf, sizeof(ebuf));
-    if (rc != OS_ERR_OK && g_ctx.cfg.probe_index >= 0) {
+    if (rc != OS_ERR_OK && rc != OS_ERR_CANCELED && g_ctx.cfg.probe_index >= 0) {
         /* EMU_SelectByIndex 在部分旧固件上返回 -1，去掉显式选择后自动重试一次 */
         OS_ConnectCfg saved = g_ctx.cfg;
         g_ctx.cfg.probe_index = -1;
@@ -394,7 +400,7 @@ static int mod_connect_ex(char* err, int errlen)
         jlink_refresh_info();
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已连接: %s", g_ctx.info.emulator);
     } else {
-        g_ctx.connected = 0;
+        JL_SET_CONN(0);
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 连接失败: %s", ebuf);
         if (err && errlen > 0) _snprintf(err, errlen, "%s", ebuf);
     }
@@ -405,7 +411,7 @@ static int jlink_close_session(void)
 {
     OS_JLinkApi* a = &g_ctx.api;
     int i;
-    if (a->h && g_ctx.connected) {
+    if (a->h && JL_CONN()) {
         /* Bug16：close 与 in-flight 读互斥——采集中点击断开时，采集线程可能正卡在
          * JLINKARM_ReadMem 内；并发 close 会损坏 DLL 会话（Open 返回垃圾值/内部 AV）。
          * 用 TryEnter 不阻塞 UI：若读正在执行（锁被占）则跳过 close，交给下一次连接前的
@@ -417,12 +423,12 @@ static int jlink_close_session(void)
                         a->clr_bp_ex(g_bp[i].handle);
                 }
             }
-            if (a->h && g_ctx.connected) a->close();
+            if (a->h && JL_CONN()) a->close();
             LeaveCriticalSection(&g_ctx.cs);
         }
     }
     memset(g_bp, 0, sizeof(g_bp));
-    g_ctx.connected = 0;
+    JL_SET_CONN(0);
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已断开");
     return OS_ERR_OK;
@@ -433,8 +439,9 @@ static int mod_disconnect(void)
 {
     InterlockedExchange(&g_want, 0);
     if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) && !drv_is_owner(&g_guard)) {
-        g_ctx.connected = 0;
-        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已断开（后台重连收尾中）");
+        /* 连接/重连线程正在 DLL 里：不碰 connected（否则它收尾时会跳过 close 造成会话泄漏），
+         * 它在下一个取消点看到 g_want=0 自行关闭；IS_CONNECTED 已按 g_want 报告 0 */
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已断开（连接/重连线程收尾中）");
         return OS_ERR_OK;
     }
     return jlink_close_session();
@@ -449,39 +456,46 @@ static int jlink_bp_find(uint32_t addr)
     return -1;
 }
 
+/* 风险2：断点表与 DLL 调用全部在会话锁内（限时，忙 → OS_ERR_AGAIN） */
 static int jlink_bp_set(const OS_BpReq* req)
 {
     uint32_t addr;
     int i, slot = -1, handle;
     if (!req) return OS_ERR_INVALID_ARG;
-    if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    addr = req->address & ~1u;
+    if (!addr) return OS_ERR_INVALID_ARG;
+    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
+    if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; }
     if (!g_ctx.api.set_bp_ex) {
+        drv_unlock(&g_guard);
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 断点: SetBPEx 不可用");
         return OS_ERR_FAIL;
     }
-    addr = req->address & ~1u;
-    if (!addr) return OS_ERR_INVALID_ARG;
     i = jlink_bp_find(addr);
     if (i >= 0) {
         g_bp[i].temp = 0;
+        drv_unlock(&g_guard);
         return OS_ERR_OK;
     }
     for (i = 0; i < JLINK_BP_MAX; i++)
         if (!g_bp[i].addr) { slot = i; break; }
     if (slot < 0) {
+        drv_unlock(&g_guard);
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 断点: 表已满（最多 %d）", JLINK_BP_MAX);
         return OS_ERR_BUSY;
     }
-    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     handle = g_ctx.api.set_bp_ex(addr, 0xFFFFFFFFu);
-    LeaveCriticalSection(&g_ctx.cs);
+    if (handle >= 0) {
+        g_bp[slot].addr = addr;
+        g_bp[slot].handle = handle;
+        g_bp[slot].temp = 0;
+    }
+    drv_unlock(&g_guard);
     if (handle < 0) {
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 断点: SetBPEx(0x%08X) 失败", addr);
         return OS_ERR_FAIL;
     }
-    g_bp[slot].addr = addr;
-    g_bp[slot].handle = handle;
-    g_bp[slot].temp = 0;
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 断点: 设置 0x%08X handle=%d", addr, handle);
     return OS_ERR_OK;
 }
@@ -490,9 +504,10 @@ static int jlink_bp_clear(const OS_BpReq* req)
 {
     int i;
     if (!req) return OS_ERR_INVALID_ARG;
-    if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
+    if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; }
     if (req->clear_all) {
-        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
         for (i = 0; i < JLINK_BP_MAX; i++) {
             if (!g_bp[i].addr) continue;
             if (g_ctx.api.clr_bp_ex && g_bp[i].handle >= 0)
@@ -501,19 +516,18 @@ static int jlink_bp_clear(const OS_BpReq* req)
             g_bp[i].handle = -1;
             g_bp[i].temp = 0;
         }
-        LeaveCriticalSection(&g_ctx.cs);
+        drv_unlock(&g_guard);
         if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 断点: 已全部清除");
         return OS_ERR_OK;
     }
     i = jlink_bp_find(req->address);
-    if (i < 0) return OS_ERR_FAIL;
-    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
+    if (i < 0) { drv_unlock(&g_guard); return OS_ERR_FAIL; }
     if (g_ctx.api.clr_bp_ex && g_bp[i].handle >= 0)
         g_ctx.api.clr_bp_ex(g_bp[i].handle);
-    LeaveCriticalSection(&g_ctx.cs);
     g_bp[i].addr = 0;
     g_bp[i].handle = -1;
     g_bp[i].temp = 0;
+    drv_unlock(&g_guard);
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 断点: 清除 0x%08X", req->address & ~1u);
     return OS_ERR_OK;
 }
@@ -522,6 +536,8 @@ static int jlink_bp_list(OS_BpList* list)
 {
     int i;
     if (!list || !list->items || list->capacity <= 0) return OS_ERR_INVALID_ARG;
+    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;
     list->count = 0;
     for (i = 0; i < JLINK_BP_MAX && list->count < list->capacity; i++) {
         if (!g_bp[i].addr || g_bp[i].temp) continue;
@@ -530,6 +546,7 @@ static int jlink_bp_list(OS_BpList* list)
         list->items[list->count].enabled = 1;
         list->count++;
     }
+    drv_unlock(&g_guard);
     return OS_ERR_OK;
 }
 
@@ -544,18 +561,18 @@ static int jlink_reconnect_worker(void)
 {
     int attempt;
     ULONGLONG now = (ULONGLONG)GetTickCount64();
-    if (!g_want) return OS_ERR_CANCELED;
+    if (!JL_WANT()) return OS_ERR_CANCELED;
     if (g_fw && now - g_ctx.last_reconnect_log_ms >= OS_JLINK_RECONNECT_LOG_MS) {
         g_ctx.last_reconnect_log_ms = now;
         g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，后台自动重连");
     }
-    if (g_ctx.connected)
+    if (JL_CONN())
         jlink_close_session();
     /* Bug16：高速掉线后 DLL/USB 会话短暂损坏，open 可能返回垃圾值（-488389840）。
      * 连接路径会整库重载；这里再给 USB 层几次恢复机会（间隔 400ms）。 */
-    for (attempt = 0; attempt < 3 && g_want; attempt++) {
+    for (attempt = 0; attempt < 3 && JL_WANT(); attempt++) {
         if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
-            if (!g_want) { jlink_close_session(); return OS_ERR_CANCELED; }  /* 期间用户断开 */
+            if (!JL_WANT()) { jlink_close_session(); return OS_ERR_CANCELED; }  /* 期间用户断开 */
             return OS_ERR_OK;
         }
         if (attempt < 2) Sleep(400);
@@ -566,7 +583,7 @@ static int jlink_reconnect_worker(void)
 /* 请求后台重连；立即返回 OS_ERR_AGAIN（进行中）或 OS_ERR_NOT_CONNECTED */
 static int jlink_kick(void)
 {
-    if (!g_want) return OS_ERR_NOT_CONNECTED;
+    if (!JL_WANT()) return OS_ERR_NOT_CONNECTED;
     return drv_kick_reconnect(&g_guard);
 }
 
@@ -580,13 +597,13 @@ static int mod_read(OS_MemReq* req)
     OS_JLinkApi* a = &g_ctx.api;
     int r, attempt;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
-    if (!a->h) return OS_ERR_NOT_CONNECTED;
-    /* Bug4：不在调用线程（可能是 UI）里重连；未连接 → 请求后台重连并立即返回 */
-    if (!g_ctx.connected) return jlink_kick();
+    /* Bug4：不在调用线程（可能是 UI）里重连；未连接 → 请求后台重连并立即返回。
+     * a->h 只在锁内看（重连线程整库重载时会改写它） */
+    if (!JL_CONN()) return jlink_kick();
     r = 1;
     for (attempt = 0; attempt < 3; attempt++) {
         if (jlink_io_lock(req->size) != OS_ERR_OK) return OS_ERR_AGAIN;
-        if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return jlink_kick(); }
+        if (!JL_CONN() || !a->h) { LeaveCriticalSection(&g_ctx.cs); return jlink_kick(); }
         if (a->h && a->read_mem)
             r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
         else
@@ -598,8 +615,11 @@ static int mod_read(OS_MemReq* req)
     }
     /* 探针仍报告已连接时，失败多半是这个地址本身读不了，拆掉会话只会更糟。
      * 只有 IsConnected==0（或查询函数缺失）才重连。 */
-    if (a->is_connected && a->is_connected())
-        return OS_ERR_TIMEOUT;
+    if (jlink_io_lock(4) == OS_ERR_OK) {
+        int still = a->h && a->is_connected && a->is_connected();
+        LeaveCriticalSection(&g_ctx.cs);
+        if (still) return OS_ERR_TIMEOUT;
+    }
     return jlink_kick() == OS_ERR_AGAIN ? OS_ERR_AGAIN : OS_ERR_TIMEOUT;
 }
 
@@ -608,8 +628,9 @@ static int mod_write(OS_MemReq* req)
     OS_JLinkApi* a = &g_ctx.api;
     int r;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
-    if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
     if (jlink_io_lock(req->size) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
+    if (!a->h || !JL_CONN()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     r = a->write_mem((uint32_t)req->address, req->size, (const uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
     /* JLINKARM_WriteMem 返回值因 DLL 版本而异：有的返回 0=成功，有的返回写入
@@ -667,8 +688,9 @@ static int mod_flash_erase(const OS_FlashReq* req)
 {
     OS_JLinkApi* a = &g_ctx.api;
     int rc;
-    if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
     if (drv_lock_worker(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：重连中不烧录 */
+    if (!a->h || !JL_CONN()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     jlink_install_flash_progress();
     if (req && req->device[0]) jlink_set_flash_device(req->device);
     if (a->halt) a->halt();
@@ -700,11 +722,12 @@ static int mod_flash_download(const OS_FlashReq* req)
     uint32_t addr;
     int rc;
     if (!req || !req->path[0]) return OS_ERR_INVALID_ARG;
-    if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
     if (wide_to_acp(req->path, path8, (int)sizeof(path8)) != 0)
         return OS_ERR_FAIL;
     addr = req->address ? req->address : 0x08000000u;
     if (drv_lock_worker(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：重连中不烧录 */
+    if (!a->h || !JL_CONN()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     jlink_install_flash_progress();
     if (req->device[0]) jlink_set_flash_device(req->device);
     if (a->halt) a->halt();
@@ -744,25 +767,122 @@ static int mod_flash_download(const OS_FlashReq* req)
     return OS_ERR_OK;
 }
 
+/* 风险2：运行控制 / 单步 / 步出 / 信息刷新 / 扫描一律在会话锁内（限时，忙或后台重连中 → OS_ERR_AGAIN），
+ * 不再与采集读、或后台整库重载（FreeLibrary+LoadLibrary）并发调用 JLink DLL。
+ * 进入后再检查一次 api.h / connected：两者只在持锁或独占期间改写。 */
+#define JL_UI_ENTER() do { \
+        if (!JL_CONN()) return OS_ERR_NOT_CONNECTED; \
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN; \
+        if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; } \
+    } while (0)
+
+static int jlink_run_ctl(int cmd)
+{
+    OS_JLinkApi* a = &g_ctx.api;
+    int rc = OS_ERR_FAIL, no_step = 0;
+    JL_UI_ENTER();
+    switch (cmd) {
+    case OS_CMD_HALT:  rc = a->halt();  break;   /* 与旧实现一致：原样返回 DLL 返回值 */
+    case OS_CMD_GO:    rc = a->go();    break;
+    case OS_CMD_RESET: rc = a->reset(); break;   /* 复位并停住（Reset & Halt） */
+    case OS_CMD_RESET_RUN:
+        if (a->reset_no_halt) rc = (a->reset_no_halt() < 0) ? OS_ERR_FAIL : OS_ERR_OK;
+        else {
+            /* 兜底：Reset（停住）再 Go */
+            rc = (a->reset() < 0) ? OS_ERR_FAIL : OS_ERR_OK;
+            if (rc == OS_ERR_OK && a->go) a->go();
+        }
+        break;
+    case OS_CMD_STEP: case OS_CMD_STEP_IN: case OS_CMD_STEP_OVER:
+        /* STEP_OVER 迭代1：无完整函数边界时等同 Step；后续用 DWARF/BL 识别 */
+        if (!a->step) { no_step = 1; rc = OS_ERR_FAIL; break; }
+        rc = (a->step() < 0) ? OS_ERR_FAIL : OS_ERR_OK;
+        break;
+    default: break;
+    }
+    drv_unlock(&g_guard);
+    if (no_step && cmd != OS_CMD_STEP_OVER && g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 不支持 Step");
+    return rc;
+}
+
+/* 读 LR，临时断点后 Go，停住后清除（不占用永久 BP 表项）。
+ * 轮询停核期间不再整段持锁（原先最长 2s 持锁，采集与其它 UI 命令全被挡住）：每次轮询短暂拿锁。 */
+static int jlink_step_out(void)
+{
+    OS_JLinkApi* a = &g_ctx.api;
+    uint32_t lr;
+    int bp = -1, i, slot = -1, halted = 0;
+    JL_UI_ENTER();
+    if (!a->read_reg || !a->go) { drv_unlock(&g_guard); return OS_ERR_FAIL; }
+    lr = a->read_reg(14) & ~1u;
+    if (a->set_bp_ex)
+        bp = a->set_bp_ex(lr, 0xFFFFFFFFu); /* type=any/default */
+    if (bp >= 0) {
+        for (i = 0; i < JLINK_BP_MAX; i++)
+            if (!g_bp[i].addr) { slot = i; break; }
+        if (slot >= 0) {
+            g_bp[slot].addr = lr;
+            g_bp[slot].handle = bp;
+            g_bp[slot].temp = 1;
+        }
+    } else if (g_fw)
+        g_fw->log(OS_LOG_WARN, "J-Link StepOut: SetBPEx 不可用，仅 Go（请手动 Stop）");
+    a->go();
+    drv_unlock(&g_guard);
+    for (i = 0; i < 200 && !halted; i++) { /* ≤2s */
+        Sleep(10);
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) {
+            if (drv_is_reconnecting(&g_guard)) break;   /* 掉线重连中：放弃等待 */
+            continue;
+        }
+        if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); break; }
+        halted = a->is_halted && a->is_halted();
+        drv_unlock(&g_guard);
+    }
+    if (drv_lock_timed(&g_guard, 500) == OS_ERR_OK) {
+        if (g_ctx.api.h && JL_CONN() && bp >= 0 && a->clr_bp_ex) a->clr_bp_ex(bp);
+        if (slot >= 0 && g_bp[slot].addr == lr && g_bp[slot].temp) {
+            g_bp[slot].addr = 0;
+            g_bp[slot].handle = -1;
+            g_bp[slot].temp = 0;
+        }
+        drv_unlock(&g_guard);
+    } else if (g_fw) {
+        /* 临时断点仍登记为 temp（不进 LIST）；下次 BP 全清 / 断开 / 重连时清除 */
+        g_fw->log(OS_LOG_WARN, "J-Link StepOut: 驱动忙，临时断点稍后清除");
+    }
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link StepOut: LR=0x%08X", lr);
+    return OS_ERR_OK;
+}
+
 static int mod_command(void* ctx, int cmd, void* in, void* out)
 {
     (void)ctx;
     switch (cmd) {
-    case OS_CMD_SCAN:
-        return mod_scan((OS_ScanReq*)in);
+    case OS_CMD_SCAN: {
+        int rc;
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* 风险2：不与重载/读并发 */
+        rc = mod_scan((OS_ScanReq*)in);
+        drv_unlock(&g_guard);
+        return rc;
+    }
     case OS_CMD_CONNECT: {
         int rc;
-        if (drv_begin_exclusive(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;  /* 后台重连中 */
+        if (drv_begin_exclusive(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;  /* 后台重连/另一连接进行中 */
         if (in) memcpy(&g_ctx.cfg, in, sizeof(g_ctx.cfg));
+        /* 先置 g_want=1：连接期间（宿主工作线程里）用户 DISCONNECT 把它清 0 = 取消，各取消点检查 */
+        InterlockedExchange(&g_want, 1);
         rc = mod_connect_ex(NULL, 0);
-        InterlockedExchange(&g_want, rc == OS_ERR_OK ? 1 : 0);
+        if (rc == OS_ERR_OK && !JL_WANT()) { jlink_close_session(); rc = OS_ERR_CANCELED; }
+        if (rc != OS_ERR_OK) InterlockedExchange(&g_want, 0);
         drv_end_exclusive(&g_guard);
         return rc;
     }
     case OS_CMD_DISCONNECT:
         return mod_disconnect();
     case OS_CMD_IS_CONNECTED:
-        if (out) *(int*)out = g_ctx.connected ? 1 : 0;
+        /* 用户已断开（g_want=0）但连接线程尚未收尾时也报告 0 */
+        if (out) *(int*)out = (JL_CONN() && JL_WANT()) ? 1 : 0;
         return OS_ERR_OK;
     case OS_CMD_READ_MEM:
         return mod_read((OS_MemReq*)in);
@@ -770,87 +890,22 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         return mod_write((OS_MemReq*)in);
     case OS_CMD_GET_INFO:
         if (out) {
+            if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* 风险2：refresh_info 调 DLL */
             jlink_refresh_info();
             memcpy(out, &g_ctx.info, sizeof(g_ctx.info));
+            drv_unlock(&g_guard);
         }
         return OS_ERR_OK;
     case OS_CMD_HALT:
-        if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.halt();
-        return OS_ERR_NOT_CONNECTED;
     case OS_CMD_GO:
-        if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.go();
-        return OS_ERR_NOT_CONNECTED;
     case OS_CMD_RESET:
-        /* 复位并停住（Reset & Halt） */
-        if (g_ctx.api.h && g_ctx.connected) return g_ctx.api.reset();
-        return OS_ERR_NOT_CONNECTED;
-    case OS_CMD_RESET_RUN: {
-        int rc;
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (g_ctx.api.reset_no_halt) {
-            rc = g_ctx.api.reset_no_halt();
-            return (rc < 0) ? OS_ERR_FAIL : OS_ERR_OK;
-        }
-        /* 兜底：Reset（停住）再 Go */
-        rc = g_ctx.api.reset();
-        if (rc < 0) return OS_ERR_FAIL;
-        if (g_ctx.api.go) g_ctx.api.go();
-        return OS_ERR_OK;
-    }
+    case OS_CMD_RESET_RUN:
     case OS_CMD_STEP:
     case OS_CMD_STEP_IN: /* 指令级步入 ≈ Step */
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (!g_ctx.api.step) {
-            if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 不支持 Step");
-            return OS_ERR_FAIL;
-        }
-        {
-            int rc = g_ctx.api.step();
-            return (rc < 0) ? OS_ERR_FAIL : OS_ERR_OK;
-        }
     case OS_CMD_STEP_OVER:
-        /* 迭代1：无完整函数边界时等同 Step；后续用 DWARF/BL 识别 */
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (!g_ctx.api.step) return OS_ERR_FAIL;
-        {
-            int rc = g_ctx.api.step();
-            return (rc < 0) ? OS_ERR_FAIL : OS_ERR_OK;
-        }
-    case OS_CMD_STEP_OUT: {
-        /* 读 LR，临时断点后 Go，停住后清除（不占用永久 BP 表项） */
-        uint32_t lr;
-        int bp = -1, i, slot = -1;
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (!g_ctx.api.read_reg || !g_ctx.api.go) return OS_ERR_FAIL;
-        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
-        lr = g_ctx.api.read_reg(14) & ~1u;
-        if (g_ctx.api.set_bp_ex)
-            bp = g_ctx.api.set_bp_ex(lr, 0xFFFFFFFFu); /* type=any/default */
-        if (bp >= 0) {
-            for (i = 0; i < JLINK_BP_MAX; i++)
-                if (!g_bp[i].addr) { slot = i; break; }
-            if (slot >= 0) {
-                g_bp[slot].addr = lr;
-                g_bp[slot].handle = bp;
-                g_bp[slot].temp = 1;
-            }
-        } else if (g_fw)
-            g_fw->log(OS_LOG_WARN, "J-Link StepOut: SetBPEx 不可用，仅 Go（请手动 Stop）");
-        g_ctx.api.go();
-        for (i = 0; i < 200; i++) { /* ≤2s */
-            Sleep(10);
-            if (g_ctx.api.is_halted && g_ctx.api.is_halted()) break;
-        }
-        if (bp >= 0 && g_ctx.api.clr_bp_ex) g_ctx.api.clr_bp_ex(bp);
-        if (slot >= 0) {
-            g_bp[slot].addr = 0;
-            g_bp[slot].handle = -1;
-            g_bp[slot].temp = 0;
-        }
-        LeaveCriticalSection(&g_ctx.cs);
-        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link StepOut: LR=0x%08X", lr);
-        return OS_ERR_OK;
-    }
+        return jlink_run_ctl(cmd);
+    case OS_CMD_STEP_OUT:
+        return jlink_step_out();
     case OS_CMD_REG_READ: {
         /* 停核时读 R0..R15 + xPSR（J-Link Cortex-M 寄存器下标 0..15，16=XPSR） */
         OS_RegSet* rs = (OS_RegSet*)out;
@@ -859,16 +914,15 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         if (!rs) return OS_ERR_INVALID_ARG;
         memset(rs, 0, sizeof(*rs));
         rs->arch = OS_ARCH_ARM_CM;
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        if (!g_ctx.api.read_reg || !g_ctx.api.is_halted) return OS_ERR_UNSUPPORTED;
-        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
-        if (!g_ctx.api.is_halted()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_BUSY; }
+        JL_UI_ENTER();
+        if (!g_ctx.api.read_reg || !g_ctx.api.is_halted) { drv_unlock(&g_guard); return OS_ERR_UNSUPPORTED; }
+        if (!g_ctx.api.is_halted()) { drv_unlock(&g_guard); return OS_ERR_BUSY; }
         for (i = 0; i < 17; i++) {
             rs->value[i] = g_ctx.api.read_reg(i);
             rs->valid[i] = 1;
             _snprintf(rs->name[i], sizeof(rs->name[i]) - 1, "%s", nm[i]);
         }
-        LeaveCriticalSection(&g_ctx.cs);
+        drv_unlock(&g_guard);
         rs->count = 17;
         return OS_ERR_OK;
     }
@@ -877,7 +931,6 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_BP_CLEAR:
         return jlink_bp_clear((const OS_BpReq*)in);
     case OS_CMD_BP_LIST:
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         return jlink_bp_list((OS_BpList*)out);
     case OS_CMD_GET_CPU_STATE: {
         OS_CpuState* st = (OS_CpuState*)out;
@@ -889,11 +942,12 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         st->under_reset = -1;
         st->voltage_mv = -1;
         _snprintf(st->state, sizeof(st->state), "—");
-        if (!g_ctx.api.h || !g_ctx.connected) {
+        if (!JL_CONN()) {
             if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0)) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }
             return OS_ERR_NOT_CONNECTED;
         }
         if (drv_lock_ui(&g_guard) != OS_ERR_OK) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }  /* Bug4 */
+        if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; }
         if (g_ctx.api.is_halted) st->halted = g_ctx.api.is_halted() ? 1 : 0;
         if (g_ctx.api.get_hw_status) {
             memset(&hw, 0, sizeof(hw));
@@ -908,7 +962,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
             st->pc = g_ctx.api.read_reg(15);
             st->pc_valid = 1;
         }
-        LeaveCriticalSection(&g_ctx.cs);
+        drv_unlock(&g_guard);
         if (st->under_reset == 1)
             _snprintf(st->state, sizeof(st->state), "RESET");
         else if (st->halted == 1)
@@ -937,7 +991,16 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
 {
     char err[256] = "";
     (void)out_ctx;
+    /* 上次卸载交接出去的收尾（线程卡在 JLink DLL）还没完成：不得重建锁/会话 */
+    if (!drv_guard_wait_orphan(&g_guard, 3000)) {
+        if (fw && fw->log) fw->log(OS_LOG_ERROR, "jlink 模块: 上次卸载的后台收尾仍未结束，请稍后再加载");
+        return OS_ERR_AGAIN;
+    }
     g_fw = fw;
+    memset(g_bp, 0, sizeof(g_bp));
+    JL_SET_CONN(0);
+    InterlockedExchange(&g_want, 0);
+    g_ctx.dll_used = 0;
     InitializeCriticalSection(&g_ctx.cs);
     drv_guard_init(&g_guard, &g_ctx.cs, jlink_reconnect_worker, OS_JLINK_RECONNECT_MIN_MS);
     memset(&g_ctx.cfg, 0, sizeof(g_ctx.cfg));
@@ -953,17 +1016,26 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     return OS_ERR_OK;
 }
 
-static void mod_deinit(void* ctx)
+/* 最终清理（最后一个使用者调用：deinit 同步，或卸载交接后由最后离开独占区的线程） */
+static void jlink_final_cleanup(void)
 {
-    (void)ctx;
-    InterlockedExchange(&g_want, 0);
-    if (!drv_guard_shutdown(&g_guard, 5000)) {
-        if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link: 后台重连 5s 未结束，跳过 DLL 卸载");
-        return;   /* 线程仍在 JLink DLL 里：不能 unbind/删锁 */
-    }
     jlink_close_session();
     os_jlink_unbind(&g_ctx.api);
     DeleteCriticalSection(&g_ctx.cs);
+    g_fw = NULL;
+}
+
+static void mod_deinit(void* ctx)
+{
+    const OS_Framework* fw = g_fw;   /* 交接后 g_fw 归收尾线程所有，这里只用副本 */
+    (void)ctx;
+    InterlockedExchange(&g_want, 0);   /* 正在进行的连接/重连在下一个取消点放弃 */
+    if (!drv_guard_shutdown_or_orphan(&g_guard, 5000, jlink_final_cleanup)) {
+        /* 风险1：线程卡在 JLink DLL 的单个调用里。不阻塞宿主；收尾已交接给该线程 */
+        if (fw) fw->log(OS_LOG_WARN, "J-Link: 连接/重连 5s 未结束，卸载收尾已交给后台线程");
+        return;
+    }
+    jlink_final_cleanup();
 }
 
 static const OS_Module g_module = {
