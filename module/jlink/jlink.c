@@ -456,6 +456,12 @@ static int jlink_bp_find(uint32_t addr)
     return -1;
 }
 
+/* 未连接时的返回码：后台重连/连接进行中 → OS_ERR_AGAIN（UI 显示“忙/重连中”），否则 NOT_CONNECTED */
+static int jlink_not_conn_rc(void)
+{
+    return InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) ? OS_ERR_AGAIN : OS_ERR_NOT_CONNECTED;
+}
+
 /* 风险2：断点表与 DLL 调用全部在会话锁内（限时，忙 → OS_ERR_AGAIN） */
 static int jlink_bp_set(const OS_BpReq* req)
 {
@@ -464,7 +470,7 @@ static int jlink_bp_set(const OS_BpReq* req)
     if (!req) return OS_ERR_INVALID_ARG;
     addr = req->address & ~1u;
     if (!addr) return OS_ERR_INVALID_ARG;
-    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return jlink_not_conn_rc();
     if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; }
     if (!g_ctx.api.set_bp_ex) {
@@ -504,7 +510,7 @@ static int jlink_bp_clear(const OS_BpReq* req)
 {
     int i;
     if (!req) return OS_ERR_INVALID_ARG;
-    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return jlink_not_conn_rc();
     if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; }
     if (req->clear_all) {
@@ -536,7 +542,7 @@ static int jlink_bp_list(OS_BpList* list)
 {
     int i;
     if (!list || !list->items || list->capacity <= 0) return OS_ERR_INVALID_ARG;
-    if (!JL_CONN()) return OS_ERR_NOT_CONNECTED;
+    if (!JL_CONN()) return jlink_not_conn_rc();
     if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;
     list->count = 0;
     for (i = 0; i < JLINK_BP_MAX && list->count < list->capacity; i++) {
@@ -771,7 +777,7 @@ static int mod_flash_download(const OS_FlashReq* req)
  * 不再与采集读、或后台整库重载（FreeLibrary+LoadLibrary）并发调用 JLink DLL。
  * 进入后再检查一次 api.h / connected：两者只在持锁或独占期间改写。 */
 #define JL_UI_ENTER() do { \
-        if (!JL_CONN()) return OS_ERR_NOT_CONNECTED; \
+        if (!JL_CONN()) return jlink_not_conn_rc(); \
         if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN; \
         if (!g_ctx.api.h || !JL_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; } \
     } while (0)

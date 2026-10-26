@@ -32,7 +32,7 @@ typedef struct StLinkCtx {
     char loaders_dir[MAX_PATH]; /* setLoadersPath 目标（含 FlashLoader/ExternalLoader） */
     OS_StLinkDcp probes[OS_STLINK_MAX_PROBES]; /* 最近一次扫描的探针副本（含 freq 档位） */
     int probe_count;
-    int voltage_mv;                   /* 连接时/刷新读到的目标电压 mV；未知 -1 */
+    volatile LONG voltage_mv;         /* 连接时/刷新读到的目标电压 mV；未知 -1。GET_CPU_STATE 在锁外读 → 原子访问 */
     ULONGLONG last_reconnect_ms;      /* 自动重连节流时间戳 */
     ULONGLONG last_reconnect_log_ms;  /* 重连成功日志节流（对齐 jlink，5s） */
 } StLinkCtx;
@@ -379,18 +379,21 @@ static int mod_connect_mode_once(int conn_mode, int rst_mode, int speed_cap_khz,
         if (err) _snprintf(err, errlen, "connectStLink 失败 (rc=%d)", rc);
         if (g_fw) g_fw->log(OS_LOG_ERROR, "ST-Link 连接: connectStLink 失败 rc=%d", rc);
         ST_SET_CONN(0);
-        g_ctx.voltage_mv = -1;
+        InterlockedExchange(&g_ctx.voltage_mv, -1);
         return OS_ERR_NO_DEVICE;
     }
     ST_SET_CONN(1);
     /* CubeProgrammer DCP.targetVoltage 为短字符串，如 "3.30"（单位 V） */
-    g_ctx.voltage_mv = -1;
-    if (dcp.targetVoltage[0]) {
-        double v = atof(dcp.targetVoltage);
-        if (v > 0.1 && v < 20.0) g_ctx.voltage_mv = (int)(v * 1000.0 + 0.5);
+    {
+        LONG mv = -1;
+        if (dcp.targetVoltage[0]) {
+            double v = atof(dcp.targetVoltage);
+            if (v > 0.1 && v < 20.0) mv = (LONG)(v * 1000.0 + 0.5);
+        }
+        InterlockedExchange(&g_ctx.voltage_mv, mv);
+        if (g_fw && mv > 0)
+            g_fw->log(OS_LOG_INFO, "ST-Link 目标电压: %d mV", (int)mv);
     }
-    if (g_fw && g_ctx.voltage_mv > 0)
-        g_fw->log(OS_LOG_INFO, "ST-Link 目标电压: %d mV", g_ctx.voltage_mv);
     return OS_ERR_OK;
 }
 
@@ -613,12 +616,15 @@ static int stlink_reg_read(OS_RegSet* rs)
     memset(rs, 0, sizeof(*rs));
     rs->arch = OS_ARCH_ARM_CM;
     if (!g_ctx.api.read_cortex_reg) return OS_ERR_UNSUPPORTED;
+    /* 整个查询只等一次锁（≤ui_lock_ms）：原先 DHCSR 读、寄存器读各等一次，最坏 2×50ms。
+     * 会话锁是递归的，内层 mod_read 的加锁立即成功 */
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;
     memset(&mreq, 0, sizeof(mreq));
     mreq.address = 0xE000EDF0u; mreq.size = 4; mreq.data = buf;
-    { int rr = mod_read(&mreq); if (rr == OS_ERR_AGAIN) return OS_ERR_AGAIN; if (rr < 0) return OS_ERR_FAIL; }
+    { int rr = mod_read(&mreq);
+      if (rr < 0) { LeaveCriticalSection(&g_ctx.cs); return rr == OS_ERR_AGAIN ? OS_ERR_AGAIN : OS_ERR_FAIL; } }
     dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
-    if (!(dhcsr & (1u << 17))) return OS_ERR_BUSY; /* 运行中：不读（readCortexReg 可能强制 halt） */
-    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：寄存器读也串行化 */
+    if (!(dhcsr & (1u << 17))) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_BUSY; } /* 运行中：不读（readCortexReg 可能强制 halt） */
     for (i = 0; i < 17; i++) {
         v = 0;
         if (g_ctx.api.read_cortex_reg(i, &v) == 0) { rs->value[i] = v; rs->valid[i] = 1; }
@@ -689,6 +695,9 @@ static int stlink_step_out(void)
     return OS_ERR_OK;
 }
 
+/* 未使用：烧录已改走 STM32_Programmer_CLI（见下）。保留 API 路径代码备查；默认不编译，
+ * 免得 /W4 报 C4505（原先被 drv_guard.h 里全局关闭的 C4505 掩盖）。 */
+#ifdef OS_STLINK_API_FLASH
 /* 烧录前：尽量不切换连接模式。
  * 本机 CubeProgrammer 在 HOTPLUG 下调用 Halt/massErase/UNDER_RESET 重连
  * 曾出现 0xC0000005 @ 0x100000000；因此默认保持连接，由 downloadFile 做扇区擦除。 */
@@ -720,6 +729,7 @@ static int stlink_enter_flash_mode(void)
     if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link 烧录: NORMAL 失败，改试 Under Reset");
     return mod_connect_mode(OS_STLINK_MODE_UNDER_RESET, OS_STLINK_RST_HARDWARE, 8000, NULL, 0);
 }
+#endif
 
 /* 查找 STM32_Programmer_CLI.exe（CubeProgrammer API 烧录在本机易 AV，改走 CLI） */
 static int stlink_find_cli(wchar_t* out, int out_cch)
@@ -898,7 +908,7 @@ static int stlink_close_session(void)
     }
     memset(g_fpb, 0, sizeof(g_fpb));
     ST_SET_CONN(0);
-    g_ctx.voltage_mv = -1;
+    InterlockedExchange(&g_ctx.voltage_mv, -1);
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 已断开");
     return OS_ERR_OK;
@@ -1003,10 +1013,16 @@ static int mod_get_freq(OS_FreqList* out)
     return OS_ERR_OK;
 }
 
+/* 未连接时的返回码：后台重连/连接进行中 → OS_ERR_AGAIN（UI 显示“忙/重连中”），否则 NOT_CONNECTED */
+static int stlink_not_conn_rc(void)
+{
+    return InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) ? OS_ERR_AGAIN : OS_ERR_NOT_CONNECTED;
+}
+
 /* 风险2：运行控制 / 单步 / 断点 / 信息刷新 / 扫描一律在会话锁内（限时，忙或后台重连中 → OS_ERR_AGAIN），
  * 不再与采集读并发调用 CubeProgrammer_API。内部的 mod_read/mod_write 会递归进入同一把锁（CRITICAL_SECTION 可重入）。 */
 #define ST_UI_ENTER() do { \
-        if (!g_ctx.api.h || !ST_CONN()) return OS_ERR_NOT_CONNECTED; \
+        if (!g_ctx.api.h || !ST_CONN()) return stlink_not_conn_rc(); \
         if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN; \
         if (!ST_CONN()) { drv_unlock(&g_guard); return OS_ERR_NOT_CONNECTED; } \
     } while (0)
@@ -1126,10 +1142,10 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_STEP_OVER:
         return stlink_run_ctl(cmd);
     case OS_CMD_STEP_OUT:
-        if (!g_ctx.api.h || !ST_CONN()) return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.h || !ST_CONN()) return stlink_not_conn_rc();
         return stlink_step_out();
     case OS_CMD_REG_READ:
-        if (!g_ctx.api.h || !ST_CONN()) return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.h || !ST_CONN()) return stlink_not_conn_rc();
         return stlink_reg_read((OS_RegSet*)out);
     case OS_CMD_BP_SET:
     case OS_CMD_BP_CLEAR:
@@ -1152,14 +1168,16 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
             if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0)) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }
             return OS_ERR_NOT_CONNECTED;
         }
-        st->voltage_mv = g_ctx.voltage_mv;
+        st->voltage_mv = (int)InterlockedCompareExchange(&g_ctx.voltage_mv, 0, 0);
+        /* 整个状态查询只等一次锁（原先 DHCSR、PC 各等一次，最坏 2×ui_lock_ms）；内层加锁递归立即成功 */
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }
         /* DHCSR @ 0xE000EDF0：S_HALT=bit17，S_RESET_ST=bit25；能读通则视为有电 */
         memset(&mreq, 0, sizeof(mreq));
         mreq.address = 0xE000EDF0u;
         mreq.size = 4;
         mreq.data = buf;
         rc = mod_read(&mreq);
-        if (rc == OS_ERR_AGAIN) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }  /* Bug4 */
+        if (rc == OS_ERR_AGAIN) { LeaveCriticalSection(&g_ctx.cs); _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }  /* Bug4 */
         if (rc >= 0) {
             dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
                     ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
@@ -1171,14 +1189,12 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         /* 仅在已停住时读 PC（readCortexReg 可能强制 halt） */
         if (st->halted == 1 && g_ctx.api.read_cortex_reg) {
             unsigned int pc = 0;
-            if (drv_lock_ui(&g_guard) == OS_ERR_OK) {   /* Bug4 */
-                if (g_ctx.api.read_cortex_reg(15, &pc) == 0) {
-                    st->pc = pc;
-                    st->pc_valid = 1;
-                }
-                LeaveCriticalSection(&g_ctx.cs);
+            if (ST_CONN() && g_ctx.api.read_cortex_reg(15, &pc) == 0) {
+                st->pc = pc;
+                st->pc_valid = 1;
             }
         }
+        LeaveCriticalSection(&g_ctx.cs);
         if (st->under_reset == 1)
             _snprintf(st->state, sizeof(st->state), "RESET");
         else if (st->halted == 1)

@@ -112,8 +112,45 @@ static inline BOOL CloseHandle(HANDLE h)
     else pthread_detach(s->t);
     return TRUE;
 }
-/* LoadLibrary 系列由测试的 fake_mcd.c 提供（经 pre.h 重定向） */
+/* LoadLibrary 系列由测试的 fake_*.c 提供（经 pre*.h 重定向） */
 HMODULE LoadLibraryExA(const char* p, HANDLE f, DWORD fl);
+HMODULE LoadLibraryA(const char* p);
 FARPROC GetProcAddress(HMODULE h, const char* n);
 BOOL FreeLibrary(HMODULE h);
+
+/* ---- tests/drv_probe（jlink.c / stlink.c）额外需要的最小 Win32 面 ---- */
+typedef unsigned short WORD;
+typedef unsigned char BYTE;
+typedef wchar_t* LPWSTR;
+typedef const char* LPCSTR;
+#define DLL_PROCESS_ATTACH 1
+#define CP_ACP 0
+#define CP_UTF8 65001
+#define INVALID_FILE_ATTRIBUTES ((DWORD)-1)
+#define STARTF_USESHOWWINDOW 1
+#define SW_HIDE 0
+#define CREATE_NO_WINDOW 0x08000000
+#define EXCEPTION_EXECUTE_HANDLER 1
+#define _snwprintf swprintf
+#define _wcsicmp wcscasecmp
+/* SEH：Linux 下没有结构化异常，退化为普通分支（测试用假 DLL 不会抛异常） */
+#define __try if (1)
+#define __except(x) else
+#define GetExceptionCode() 0u
+static inline DWORD GetLastError(void) { return 0; }
+static inline HMODULE GetModuleHandleA(const char* n) { static int dummy; (void)n; return (HMODULE)&dummy; }
+static inline DWORD GetModuleFileNameA(HMODULE h, char* b, DWORD cap) { (void)h; if (cap < 16) return 0; strcpy(b, "\\fake\\x.dll"); return (DWORD)strlen(b); }
+static inline BOOL SetDllDirectoryW(LPCWSTR p) { (void)p; return TRUE; }
+static inline DWORD GetFileAttributesA(const char* p) { (void)p; return INVALID_FILE_ATTRIBUTES; }
+static inline DWORD GetFileAttributesW(LPCWSTR p) { (void)p; return INVALID_FILE_ATTRIBUTES; }
+static inline DWORD GetEnvironmentVariableW(LPCWSTR n, wchar_t* b, DWORD cap) { (void)n; (void)b; (void)cap; return 0; }
+static inline int MultiByteToWideChar(UINT cp, DWORD fl, const char* s, int n, wchar_t* w, int cap)
+{ int i = 0; (void)cp; (void)fl; (void)n; while (s[i] && i < cap - 1) { w[i] = (unsigned char)s[i]; i++; } if (cap > 0) w[i] = 0; return i + 1; }
+static inline int WideCharToMultiByte(UINT cp, DWORD fl, const wchar_t* w, int n, char* s, int cap, const char* d, BOOL* u)
+{ int i = 0; (void)cp; (void)fl; (void)n; (void)d; (void)u; while (w[i] && i < cap - 1) { s[i] = (char)(w[i] < 128 ? w[i] : '?'); i++; } if (cap > 0) s[i] = 0; return i + 1; }
+typedef struct { DWORD cb; DWORD dwFlags; WORD wShowWindow; } STARTUPINFOW;
+typedef struct { HANDLE hProcess, hThread; } PROCESS_INFORMATION;
+static inline BOOL CreateProcessW(LPCWSTR a, LPWSTR c, void* p, void* t, BOOL i, DWORD f, void* e, LPCWSTR d, STARTUPINFOW* si, PROCESS_INFORMATION* pi)
+{ (void)a; (void)c; (void)p; (void)t; (void)i; (void)f; (void)e; (void)d; (void)si; (void)pi; return FALSE; }
+static inline BOOL GetExitCodeProcess(HANDLE h, DWORD* c) { (void)h; *c = 1; return TRUE; }
 #endif
