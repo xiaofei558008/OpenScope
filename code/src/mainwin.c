@@ -206,6 +206,9 @@ static void ctrl_dark_theme(HWND h);
 static const char* drv_name(void);
 /* 第三轮 任务4：进行中的后台连接/Attach（NULL = 无）。只在主线程读写 */
 static OS_ConnJob* g_conn_job;
+/* 第三轮遗留项：后台连接中不允许刷新仿真器列表 / 切换驱动（job 持有 drv+ctx；将来驱动热重载时 ctx 可能失效）。
+ * 主线程读写 g_conn_job；AI 线程只读指针做判断（误差最多一条消息）。 */
+int os_mainwin_connecting(void) { return *(OS_ConnJob* volatile*)&g_conn_job != NULL; }
 
 static const wchar_t* g_main_class = L"OpenScopeMain";
 static const wchar_t* g_right_class = L"OSRightPanel";
@@ -628,6 +631,8 @@ void os_mainwin_update_buttons(void)
         ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay && !connecting &&
             (!ap || ap->kind == OS_PROJ_PROBE));
         ENB(IDC_BTN_DISCON, conn || connecting || (ap && ap->kind == OS_PROJ_XCP && g_app.xcp_connected));
+        ENB(IDC_CFG_DRIVER, !connecting);               /* 连接中不可切驱动/刷新 */
+        ENB(IDC_CFG_REFRESH, !connecting && !g_app.net_mode);
         /* Flash/CPU 仅对探针 Project */
         ENB(IDC_BTN_CPU_RUN, probe_ok && !replay);
         ENB(IDC_BTN_CPU_STOP, probe_ok && !replay);
@@ -2071,6 +2076,7 @@ static int conn_busy_ignore(void)
 }
 static void conn_job_start(int attach, const OS_ConnectCfg* cfg)
 {
+    os_modmgr_auto_alias_pre(os_modmgr_driver_index(), cfg->device);   /* 日志前缀别名：连接前先按器件名 */
     g_conn_job = os_conn_start(g_app.driver, g_app.driver_ctx, cfg, attach,
                                os_modmgr_driver_index(), g_app.hMain, WM_OS_CONNECT_DONE);
     if (!g_conn_job) {
@@ -2259,6 +2265,8 @@ static void on_connect_done(OS_ConnJob* job)
     }
     g_conn_job = NULL;
     rc = os_conn_settle(job);           /* 最后一刻被取消但已连上 → 这里补 DISCONNECT */
+    if (rc == OS_ERR_OK)                /* 日志来源前缀：按芯片推导目标别名（tc3x/stm32g4…；用户值优先） */
+        os_modmgr_auto_alias(job->driver_index, job->cfg.device, job->info.emulator);
     if (rc == OS_ERR_CANCELED) {
         os_log(OS_LOG_INFO, "%s已取消", job->attach ? "Attach " : "连接");
         set_status(0, L"已取消连接");
@@ -2645,9 +2653,22 @@ static void cmd_xcp_disconnect(void)
     os_xcpwin_refresh();
 }
 
+static int conn_busy_refuse(const char* what)
+{
+    if (!g_conn_job) return 0;
+    os_log(OS_LOG_INFO, "正在%s，暂不能%s（可先点「断开」取消）", g_conn_job->attach ? " Attach" : "连接", what);
+    set_status(0, L"正在连接…（完成或取消后再操作）");
+    return 1;
+}
+
 static void cmd_select_driver(int idx)
 {
     OS_Project* pr;
+    if (conn_busy_refuse("切换驱动")) {
+        HWND h = main_ctrl(IDC_CFG_DRIVER);         /* 下拉框回到当前驱动 */
+        if (h) SendMessageW(h, CB_SETCURSEL, (WPARAM)os_modmgr_driver_index(), 0);
+        return;
+    }
     if (os_modmgr_select_driver(idx) != OS_ERR_OK) return;
     g_app.net_mode = 0;
     net_mode_apply_controls();
@@ -5609,6 +5630,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
 
         case IDC_CFG_REFRESH:
+            if (conn_busy_refuse("刷新仿真器列表")) break;
             if (cfg_fill_emus() <= 0) {
                 wchar_t msg[256], dn[64];
                 os_utf8_to_wide_buf(drv_name(), dn, 64);

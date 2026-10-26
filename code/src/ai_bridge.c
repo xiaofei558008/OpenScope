@@ -196,6 +196,7 @@ static const AI_Tool g_tools[] = {
     {"drivers.list", "探针驱动列表（仅 J-Link/ST-Link）", "{}"},
     {"drivers.select", "选择探针驱动", "{\"index\":0}"},
     {"probe.scan", "扫描仿真器", "{}"},
+    {"targets.alias", "查询/设置目标别名（日志前缀 \"<别名> <模块>: \"；alias 空=恢复自动）", "{\"index\":0,\"alias\":\"tc3x\"}"},
     {"xcp.scan", "扫描 XCP 传输端点（串口/CAN/TCP）", "{}"},
     {"xcp.connect", "连接 XCP（与探针/网络并行；界面工具栏同步）", "{\"transport\":\"serial\",\"port\":\"COM5\",\"baud\":115200}"},
     {"xcp.disconnect", "断开 XCP", "{}"},
@@ -476,6 +477,7 @@ static int method_connect(const char* params, char* out, int cap)
             _snprintf(cfg.serial, sizeof(cfg.serial), "%s", serial);
     }
     g_app.speed_khz = cfg.speed_khz;
+    os_modmgr_auto_alias_pre(os_modmgr_driver_index(), cfg.device);   /* 日志前缀别名：连接前先按器件名 */
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
     {   /* 驱动后台重连中（OS_ERR_AGAIN）：本函数在 AI 工作线程，等重连结束再连，最多 15 s；不报 connect failed */
         DWORD t0 = GetTickCount();
@@ -493,6 +495,7 @@ static int method_connect(const char* params, char* out, int cap)
     ai_sync_ws_connected(c);
     memset(&info, 0, sizeof(info));
     g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
+    os_modmgr_auto_alias(os_modmgr_driver_index(), cfg.device, info.emulator);   /* 日志前缀别名 */
     os_mainwin_request_ui_sync();
     /* Attach 且有监视变量时自动开采集 */
     if (cfg.attach && c && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
@@ -1011,6 +1014,8 @@ int os_ai_call(const char* method, const char* params_json,
     if (strcmp(method, "modules.list") == 0) return method_modules_list(result_json, result_cap);
     if (strcmp(method, "drivers.list") == 0) return method_drivers_list(result_json, result_cap);
     if (strcmp(method, "drivers.select") == 0) {
+        if (os_mainwin_connecting())
+            return ai_fail(result_json, result_cap, OS_ERR_AGAIN, "connect in progress");
         if (json_get_int(params, "index", &idx) != 0)
             return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "index required");
         if (os_modmgr_select_driver(idx) != OS_ERR_OK)
@@ -1369,7 +1374,25 @@ int os_ai_call(const char* method, const char* params_json,
         }
         return OS_ERR_OK;
     }
-    if (strcmp(method, "probe.scan") == 0) return method_scan(result_json, result_cap);
+    if (strcmp(method, "probe.scan") == 0) {
+        if (os_mainwin_connecting())
+            return ai_fail(result_json, result_cap, OS_ERR_AGAIN, "connect in progress");
+        return method_scan(result_json, result_cap);
+    }
+    if (strcmp(method, "targets.alias") == 0) {
+        /* 目标别名：index 缺省 = 当前驱动；带 alias 字段则设置（用户值），alias="" 恢复自动 */
+        char al[64], cur[32];
+        int di = os_modmgr_driver_index(), user;
+        if (json_get_int(params, "index", &idx) == 0) di = idx;
+        if (json_get_str(params, "alias", al, sizeof(al)) == 0 &&
+            os_modmgr_set_driver_alias(di, al, 1) != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "bad index or alias");
+        user = os_modmgr_driver_alias(di, cur, sizeof(cur));
+        if (user < 0) return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "bad index");
+        _snprintf(result_json, result_cap, "{\"ok\":true,\"index\":%d,\"driver\":\"%s\",\"alias\":\"%s\",\"user\":%d}",
+                  di, os_modmgr_driver_name(di) ? os_modmgr_driver_name(di) : "", cur, user);
+        return OS_ERR_OK;
+    }
     if (strcmp(method, "connect") == 0) return method_connect(params, result_json, result_cap);
     if (strcmp(method, "disconnect") == 0) return method_disconnect(result_json, result_cap);
     if (strcmp(method, "halt") == 0) return method_drv_simple(OS_CMD_HALT, result_json, result_cap);

@@ -3,24 +3,32 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include "target_alias.h"
 
 /* 日志来源前缀：每个模块拿到一份独立的 OS_Framework 副本，其 log 指向按槽位区分的
  * 跳板函数，统一输出 "<模块名>: <消息>"（如 "das: 已连接 ..."）。若消息已自带
  * "<模块名>:" 前缀（remote/network/aiapi 历史写法）则不重复添加。 */
 static OS_Framework s_mod_fw[OS_MAX_MODULES];
 static char s_mod_src[OS_MAX_MODULES][32];
+/* 目标别名（Tom：实时日志统一 "<目标别名> <模块>: 消息"，如 "tc3x das: ..."）。
+ * 只对“数据源”模块（探针驱动 OS_CAP_DRIVER、XCP）设置；aiapi/network/remote 等没有别名，仍是 "<模块>: 消息"。
+ * 自动值（由芯片/驱动推导）不覆盖用户值。多目标（docs/multi_target_design.md M2/M3）时 alias = Target.id。
+ * 日志可来自任意线程 → SRW 锁保护读写。 */
+static char s_mod_alias[OS_MAX_MODULES][OS_ALIAS_MAX];
+static int  s_mod_alias_user[OS_MAX_MODULES];
+static SRWLOCK s_alias_lock = SRWLOCK_INIT;
 
 static void modlog_v(int slot, int level, const char* fmt, va_list ap)
 {
-    char buf[1024];
-    const char* src = s_mod_src[slot];
-    size_t n = strlen(src);
+    char buf[1024], line[1100], alias[OS_ALIAS_MAX];
     vsnprintf(buf, sizeof(buf), fmt, ap);
     buf[sizeof(buf) - 1] = 0;
-    if (n == 0 || (strncmp(buf, src, n) == 0 && (buf[n] == ':' || buf[n] == ' ')))
-        os_log(level, "%s", buf);
-    else
-        os_log(level, "%s: %s", src, buf);
+    AcquireSRWLockShared(&s_alias_lock);
+    memcpy(alias, s_mod_alias[slot], sizeof(alias));
+    ReleaseSRWLockShared(&s_alias_lock);
+    alias[sizeof(alias) - 1] = 0;
+    os_log_format_src(alias, s_mod_src[slot], buf, line, (int)sizeof(line));
+    os_log(level, "%s", line);
 }
 #define MODLOG_TRAMP(i) static void modlog_##i(int lv, const char* fmt, ...) \
     { va_list ap; va_start(ap, fmt); modlog_v(i, lv, fmt, ap); va_end(ap); }
@@ -45,7 +53,117 @@ static const OS_Framework* mod_fw_for_slot(int slot, const char* name)
     s_mod_fw[slot].log = s_modlog[slot];
     _snprintf(s_mod_src[slot], sizeof(s_mod_src[slot]) - 1, "%s", name ? name : "");
     s_mod_src[slot][sizeof(s_mod_src[slot]) - 1] = 0;
+    AcquireSRWLockExclusive(&s_alias_lock);
+    s_mod_alias[slot][0] = 0;                  /* 加载时还不知能力位：见 alias_init_targets() */
+    s_mod_alias_user[slot] = 0;
+    ReleaseSRWLockExclusive(&s_alias_lock);
     return &s_mod_fw[slot];
+}
+
+static int slot_of_driver(int drv_idx)
+{
+    int i;
+    if (drv_idx < 0 || drv_idx >= g_app.driver_count) return -1;
+    for (i = 0; i < g_app.mod_count; i++)
+        if (&g_app.mods[i] == g_app.drivers[drv_idx]) return i;
+    return -1;
+}
+
+/* 同一别名被其它槽占用时加后缀 _1、_2…（多目标同型号芯片） */
+static void alias_unique(int slot, char* a, int cap)
+{
+    char base[OS_ALIAS_MAX];
+    int k, i, clash;
+    _snprintf(base, sizeof(base) - 1, "%s", a); base[sizeof(base) - 1] = 0;
+    for (k = 1; k < 100; k++) {
+        clash = 0;
+        for (i = 0; i < g_app.mod_count; i++)
+            if (i != slot && s_mod_alias[i][0] && strcmp(s_mod_alias[i], a) == 0) { clash = 1; break; }
+        if (!clash) return;
+        base[OS_ALIAS_MAX - 4] = 0;
+        _snprintf(a, cap - 1, "%s_%d", base, k); a[cap - 1] = 0;
+    }
+}
+
+static void alias_set_slot(int slot, const char* alias, int user)
+{
+    char a[OS_ALIAS_MAX], old[OS_ALIAS_MAX];
+    int changed;
+    if (slot < 0 || slot >= g_app.mod_count) return;
+    if (!user && s_mod_alias_user[slot]) return;           /* 用户值优先 */
+    if (os_alias_sanitize(alias, a, (int)sizeof(a)) == 0) os_alias_default(s_mod_src[slot], a, (int)sizeof(a));
+    AcquireSRWLockExclusive(&s_alias_lock);
+    alias_unique(slot, a, (int)sizeof(a));
+    memcpy(old, s_mod_alias[slot], sizeof(old));
+    changed = strcmp(old, a) != 0;
+    memcpy(s_mod_alias[slot], a, sizeof(a));
+    if (user) s_mod_alias_user[slot] = (alias && alias[0]) ? 1 : 0;
+    ReleaseSRWLockExclusive(&s_alias_lock);
+    if (changed && old[0])
+        os_log(OS_LOG_INFO, "目标别名: %s %s → %s%s", old, s_mod_src[slot], a, user ? "（用户设置）" : "（自动）");
+}
+
+/* 加载完成后：探针驱动与 XCP 是数据源，给默认别名 "<驱动>0" */
+static void alias_init_targets(void)
+{
+    int i;
+    for (i = 0; i < g_app.mod_count; i++)
+        if (g_app.mods[i].capabilities & (OS_CAP_DRIVER | OS_CAP_XCP)) {
+            char a[OS_ALIAS_MAX];
+            os_alias_default(g_app.mods[i].name, a, (int)sizeof(a));
+            alias_set_slot(i, a, 0);
+        }
+}
+
+int os_modmgr_driver_alias(int drv_idx, char* out, int cap)
+{
+    int slot = slot_of_driver(drv_idx);
+    if (!out || cap <= 0) return -1;
+    out[0] = 0;
+    if (slot < 0) return -1;
+    AcquireSRWLockShared(&s_alias_lock);
+    _snprintf(out, cap - 1, "%s", s_mod_alias[slot]); out[cap - 1] = 0;
+    ReleaseSRWLockShared(&s_alias_lock);
+    return s_mod_alias_user[slot];
+}
+
+int os_modmgr_set_driver_alias(int drv_idx, const char* alias, int user)
+{
+    int slot = slot_of_driver(drv_idx);
+    if (slot < 0) return OS_ERR_INVALID_ARG;
+    if (user && alias && alias[0]) {
+        char a[OS_ALIAS_MAX];
+        if (os_alias_sanitize(alias, a, (int)sizeof(a)) == 0) return OS_ERR_INVALID_ARG;
+    }
+    if (user && (!alias || !alias[0])) {                    /* 清除用户值 → 回到驱动默认，下次连接再自动推导 */
+        s_mod_alias_user[slot] = 0;
+        alias_set_slot(slot, NULL, 0);
+        return OS_ERR_OK;
+    }
+    alias_set_slot(slot, alias, user);
+    return OS_ERR_OK;
+}
+
+void os_modmgr_auto_alias_pre(int drv_idx, const char* device)
+{
+    /* 连接前：只有能从器件名推导出芯片时才改（驱动在 CONNECT 里打的“已连接”行就带上新别名）；
+     * 推不出（如 DAS 不看器件名、"Cortex-M4"）则保留现值，连接成功后再按 GET_INFO 推导 */
+    char a[OS_ALIAS_MAX];
+    int slot = slot_of_driver(drv_idx);
+    if (slot < 0 || !device || !device[0]) return;
+    if (os_alias_from_chip(device, s_mod_src[slot], a, (int)sizeof(a)))
+        alias_set_slot(slot, a, 0);
+}
+
+void os_modmgr_auto_alias(int drv_idx, const char* device, const char* info_text)
+{
+    char t[512], a[OS_ALIAS_MAX];
+    int slot = slot_of_driver(drv_idx);
+    if (slot < 0) return;
+    _snprintf(t, sizeof(t) - 1, "%s %s", device ? device : "", info_text ? info_text : "");
+    t[sizeof(t) - 1] = 0;
+    os_alias_from_chip(t, s_mod_src[slot], a, (int)sizeof(a));
+    alias_set_slot(slot, a, 0);
 }
 
 static void dll_dir(wchar_t* out, int outlen)
@@ -157,6 +275,7 @@ int os_modmgr_load(void)
             g_app.driver_ctx = g_app.driver_ctxs[sel];
         }
     }
+    alias_init_targets();
     if (g_app.xcpmod)
         os_log(OS_LOG_INFO, "XCP 模块: %s（与探针/网络并行）", g_app.xcpmod->name);
     /* 窗口模块列表 */

@@ -4,6 +4,7 @@
  *       的“后台重连”窗口；窗口内 CONNECT 立即返回 OS_ERR_AGAIN，GET_CPU_STATE / BP_LIST 等 50 ms（限时锁）
  *       后返回 OS_ERR_AGAIN；窗口结束后正常返回。
  *   block：旧驱动行为——GET_CPU_STATE / BP_LIST 每次阻塞 SLOWDRV_MS，模拟持锁重连或驱动 DLL 卡住。
+ * SLOWDRV_CONNECT_MS（默认 0）：CONNECT 耗时，期间 DISCONNECT 返回取消；CONNECT 成功经 fw->log 打一行（测日志前缀）。
  * SLOWDRV_READ_MS（默认 0）：每次 READ_MEM 阻塞该时长（tests\\ui_bug4_acqstop.py 用）。
  * 统计写到 %SLOWDRV_STATS%（若设置）：connect_again connect_ok cpu_again cpu_ok bp_again bp_ok。仅供 tests\ui_bug4_slowdrv.py 在隔离目录中加载，
  * 不放进 dll\（不会出现在正式软件的驱动列表里）。
@@ -15,7 +16,7 @@
 #include <stdlib.h>
 #include "../code/src/module_api.h"
 
-static volatile LONG g_conn;
+static volatile LONG g_conn, g_cancel;
 static int slow_ms(void)
 {
     char b[16];
@@ -43,7 +44,13 @@ static void sd_stat(int i)
 }
 static void start_window(void) { InterlockedExchange(&g_busy_until, (LONG)(GetTickCount() + (DWORD)slow_ms())); }
 
-static int sd_init(const OS_Framework* fw, void** ctx) { (void)fw; *ctx = NULL; start_window(); return OS_ERR_OK; }
+static const OS_Framework* g_fw;
+static int env_ms(const char* name)
+{
+    char b[16];
+    return GetEnvironmentVariableA(name, b, sizeof(b)) > 0 ? atoi(b) : 0;
+}
+static int sd_init(const OS_Framework* fw, void** ctx) { g_fw = fw; *ctx = NULL; start_window(); return OS_ERR_OK; }
 static void sd_deinit(void* ctx) { (void)ctx; }
 
 static int sd_command(void* ctx, int cmd, void* in, void* out)
@@ -61,11 +68,20 @@ static int sd_command(void* ctx, int cmd, void* in, void* out)
     }
     case OS_CMD_CONNECT:
         if (!is_block() && busy()) { sd_stat(0); if (out) *(int*)out = OS_ERR_AGAIN; return OS_ERR_AGAIN; }
+        {   /* SLOWDRV_CONNECT_MS：CONNECT 本身耗时（测异步连接中的置灰/拒绝），期间 DISCONNECT 可取消 */
+            int ms = env_ms("SLOWDRV_CONNECT_MS"), t;
+            InterlockedExchange(&g_cancel, 0);
+            for (t = 0; t < ms; t += 20) {
+                if (g_cancel) { if (g_fw && g_fw->log) g_fw->log(OS_LOG_INFO, "slowdrv 模块: 连接已取消"); return OS_ERR_CANCELED; }
+                Sleep(20);
+            }
+        }
         InterlockedExchange(&g_conn, 1); if (out) *(int*)out = 0;
         sd_stat(1);
+        if (g_fw && g_fw->log) g_fw->log(OS_LOG_INFO, "slowdrv 模块: 已连接 %s", (in && ((OS_ConnectCfg*)in)->device[0]) ? ((OS_ConnectCfg*)in)->device : "?");
         if (!is_block()) start_window();   /* 连上后再来一段“后台重连”，让 UI 走 AGAIN 分支 */
         return OS_ERR_OK;
-    case OS_CMD_DISCONNECT: InterlockedExchange(&g_conn, 0); return OS_ERR_OK;
+    case OS_CMD_DISCONNECT: InterlockedExchange(&g_cancel, 1); InterlockedExchange(&g_conn, 0); return OS_ERR_OK;
     case OS_CMD_IS_CONNECTED: if (out) *(int*)out = g_conn ? 1 : 0; return OS_ERR_OK;
     case OS_CMD_GET_CPU_STATE: {
         OS_CpuState* st = (OS_CpuState*)out;
