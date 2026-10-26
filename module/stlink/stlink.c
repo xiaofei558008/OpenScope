@@ -713,6 +713,8 @@ static int stlink_step_out_impl(void)
     } else if (g_fw) {
         g_fw->log(OS_LOG_WARN, "ST-Link StepOut: 驱动忙，临时断点稍后清除");
     }
+    /* Stop 与「命中/停住」同时到达（取消标志已置、但先看到了 halted）：按取消报告 */
+    if (!cancelled && so_cancelled()) cancelled = 1;
     if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link StepOut: LR=0x%08X%s%s",
                         lr, keep_user ? " (保留用户断点)" : "", cancelled ? "（已取消）" : "");
     return cancelled ? OS_ERR_CANCELED : OS_ERR_OK;

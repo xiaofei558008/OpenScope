@@ -883,6 +883,8 @@ static int jlink_step_out_impl(void)
         /* 临时断点仍登记为 temp（不进 LIST）；下次 BP 全清 / 断开 / 重连时清除 */
         g_fw->log(OS_LOG_WARN, "J-Link StepOut: 驱动忙，临时断点稍后清除");
     }
+    /* Stop 与「命中/停住」同时到达（取消标志已置、但先看到了 halted）：按取消报告 */
+    if (!cancelled && so_cancelled()) cancelled = 1;
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link StepOut: LR=0x%08X%s", lr, cancelled ? "（已取消）" : "");
     return cancelled ? OS_ERR_CANCELED : OS_ERR_OK;
 }
