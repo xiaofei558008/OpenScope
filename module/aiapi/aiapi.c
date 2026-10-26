@@ -584,17 +584,24 @@ static int ai_start(int port)
 }
 
 /* 自连一次监听端口：阻塞在 select/accept 上的监听线程立即返回 */
-static void ai_wake_listener(void)
+/* 唤醒监听线程：非阻塞自连一次（不等连接完成），socket 由 ai_stop 在监听线程汇合之后再关闭。
+ * 必须非阻塞：监听线程可能已因 select 超时看到 g_running=0 并关掉了监听 socket，
+ * Windows 上连本机已拒绝的端口，阻塞 connect 会重试 SYN 约 2 s
+ * （实测 1~3 个 RPC 客户端时约 1/3 次关闭耗时 2.1 s，全部卡在这里）。 */
+static SOCKET ai_wake_listener(void)
 {
     SOCKET w = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     struct sockaddr_in a;
-    if (w == INVALID_SOCKET) return;
+    if (w == INVALID_SOCKET) return INVALID_SOCKET;
     memset(&a, 0, sizeof(a));
     a.sin_family = AF_INET;
     a.sin_port = htons((u_short)g_port);
     a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-    connect(w, (struct sockaddr*)&a, sizeof(a));   /* 失败也无妨：select 超时兜底 */
-    closesocket(w);
+#ifdef _WIN32
+    { u_long nb = 1; ioctlsocket(w, FIONBIO, &nb); }
+#endif
+    connect(w, (struct sockaddr*)&a, sizeof(a));   /* 非阻塞：立即返回；失败也无妨，select 超时兜底 */
+    return w;
 }
 
 static DWORD ai_ms_left(ULONGLONG deadline)
@@ -614,9 +621,10 @@ static void ai_stop(void)
     InterlockedExchange(&g_running, 0);
     if (g_conn_cs_ready) sock_shutdown_all();
     if (g_thread) {
-        ai_wake_listener();
+        SOCKET w = ai_wake_listener();
         if (WaitForSingleObject(g_thread, ai_ms_left(deadline)) != WAIT_OBJECT_0 && g_fw)
             g_fw->log(OS_LOG_WARN, "aiapi: 监听线程未在期限内退出（已钉住 aiapi.dll）");
+        if (w != INVALID_SOCKET) closesocket(w);
         CloseHandle(g_thread);   /* 只关线程句柄，线程本身不受影响 */
         g_thread = NULL;
     }
