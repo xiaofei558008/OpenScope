@@ -109,6 +109,15 @@ static int wait_cpu_ok(long ms)
     return 0;
 }
 
+/* wait until a worker thread is really inside the fake vendor DLL; on Windows a new thread is sometimes
+ * scheduled >60 ms late, so a fixed Sleep() lets the main thread race ahead (test timing artefact) */
+static void wait_inside(long ms)
+{
+    ULONGLONG end = now_ms() + (ULONGLONG)ms;
+    while (FK_GET(g_fk_inside) == 0 && now_ms() < end) Sleep(1);
+    Sleep(5);
+}
+
 static volatile LONG g_conn_rc = 12345;
 static DWORD WINAPI connect_thread(LPVOID p)
 {
@@ -203,7 +212,7 @@ int main(void)
     FK_SET(g_fk_open_delay_ms, 1500);
     InterlockedExchange(&g_conn_rc, 12345);
     th = CreateThread(NULL, 0, connect_thread, NULL, 0, NULL);
-    Sleep(100);
+    wait_inside(2000);
     run_ui_for(200, &st);
     CHECK(st.max_ms <= g_max_ms && st.ok == 0, "UI during connect: max=%ld ok=%d", st.max_ms, st.ok);
     t0 = now_ms();
@@ -231,7 +240,7 @@ int main(void)
         FK_SET(g_fk_read_delay_ms, 300);
         InterlockedExchange(&g_stop_acq, 0);
         th = CreateThread(NULL, 0, acq_thread, (LPVOID)(intptr_t)4096, 0, NULL);
-        Sleep(60);                                   /* 读已在 DLL 内持锁 */
+        wait_inside(2000);                                   /* 读已在 DLL 内持锁 */
         cl0 = FK_GET(g_fk_close); fr0 = FK_GET(g_fk_free);
         t0 = now_ms();
         rc = cmd(OS_CMD_DISCONNECT, NULL, NULL);
@@ -253,7 +262,7 @@ int main(void)
         FK_SET(g_fk_read_delay_ms, 300);
         InterlockedExchange(&g_stop_acq, 0);
         th = CreateThread(NULL, 0, acq_thread, (LPVOID)(intptr_t)4096, 0, NULL);
-        Sleep(60);
+        wait_inside(2000);
         cl0 = FK_GET(g_fk_close);
         cmd(OS_CMD_DISCONNECT, NULL, NULL);
         InterlockedExchange(&g_stop_acq, 1);
@@ -271,7 +280,7 @@ int main(void)
         LONG fl0;
         FK_SET(g_fk_open_delay_ms, 6000);
         th = CreateThread(NULL, 0, connect_thread, NULL, 0, NULL);
-        Sleep(100);                       /* jlink 连接前会整库重载一次：之后才开始计数 */
+        wait_inside(2000);                       /* jlink 连接前会整库重载一次：之后才开始计数 */
         fl0 = FK_GET(g_fk_free);
         t0 = now_ms();
         M->deinit(ctx);
