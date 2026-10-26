@@ -102,7 +102,7 @@ static void bp_refresh_list(HWND hwnd)
     wchar_t line[160];
     char note[64];
     if (!lb) return;
-    if (!g_app.driver || !g_app.connected || !g_app.driver->command) {
+    if (!g_app.driver || !OS_APP_CONNECTED() || !g_app.driver->command) {
         SendMessageW(lb, LB_RESETCONTENT, 0, 0);
         bp_set_status(hwnd, L"未连接驱动");
         return;
@@ -152,7 +152,7 @@ static void bp_do_set(HWND hwnd)
         bp_set_status(hwnd, L"请输入有效地址（如 0x08001234）");
         return;
     }
-    if (!g_app.driver || !g_app.connected) {
+    if (!g_app.driver || !OS_APP_CONNECTED()) {
         bp_set_status(hwnd, L"未连接");
         return;
     }
@@ -184,7 +184,7 @@ static void bp_do_clear_sel(HWND hwnd)
     OS_BpReq req;
     uint32_t addr;
     int rc;
-    if (!lb || !g_app.driver || !g_app.connected) return;
+    if (!lb || !g_app.driver || !OS_APP_CONNECTED()) return;
     sel = (int)SendMessageW(lb, LB_GETCURSEL, 0, 0);
     if (sel < 0) {
         /* 无选中则尝试用地址框 */
@@ -212,7 +212,7 @@ static void bp_do_clear_all(HWND hwnd)
 {
     OS_BpReq req;
     int rc;
-    if (!g_app.driver || !g_app.connected) return;
+    if (!g_app.driver || !OS_APP_CONNECTED()) return;
     if (os_msgbox(hwnd, L"清除全部硬件断点？", L"断点", MB_YESNO | MB_ICONQUESTION) != IDYES)
         return;
     memset(&req, 0, sizeof(req));

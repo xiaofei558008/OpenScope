@@ -341,7 +341,7 @@ int os_modmgr_select_driver(int idx)
     g_app.driver_ctx = g_app.driver_ctxs[idx];
     if (g_app.driver && g_app.driver->command)
         g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
-    g_app.connected = c;
+    OS_APP_SET_CONNECTED(c);
     return OS_ERR_OK;
 }
 
@@ -371,7 +371,7 @@ void os_modmgr_shutdown(void)
         if (g_app.drivers[i] && g_app.drivers[i]->command)
             g_app.drivers[i]->command(g_app.driver_ctxs[i], OS_CMD_DISCONNECT, NULL, NULL);
     }
-    g_app.connected = 0;
+    OS_APP_SET_CONNECTED(0);
 
     /* 3) 其余模块逆序卸载 */
     for (i = g_app.mod_count - 1; i >= 0; i--) {

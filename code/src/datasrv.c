@@ -81,7 +81,7 @@ static int acq_is_connected(void)
     OS_Module* m;
     void* ctx;
     if (g_app.xcp_connected && g_app.xcpmod) return 1;
-    if (g_app.connected && g_app.driver) return 1;
+    if (OS_APP_CONNECTED() && g_app.driver) return 1;
     for (i = 0; i < os_ws()->project_count; i++) {
         if (os_ws_resolve_mod(os_ws_project_at(i), &m, &ctx) == 0)
             return 1;

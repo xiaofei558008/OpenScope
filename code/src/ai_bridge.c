@@ -14,6 +14,7 @@
 #include "elf.h"
 #include "srcwin.h"
 #include "conn_async.h"
+#include "ai_step.h"
 #include "a2l_export.h"
 #include "xcpsym.h"
 #include "workspace.h"
@@ -220,7 +221,8 @@ static const AI_Tool g_tools[] = {
     {"step", "单步（需已 Halt）", "{}"},
     {"step_in", "步入", "{}"},
     {"step_over", "步过", "{}"},
-    {"step_out", "步出（跑到 LR）", "{}"},
+    {"step_out", "步出（跑到 LR）；{\"async\":1} 立即返回 pending，再用 step_out.status 轮询", "{}"},
+    {"step_out.status", "查询异步步出：pending / rc / result(ok|canceled|failed)", "{}"},
     {"bp.set", "设置硬件断点", "{\"address\":\"0x08001234\",\"note\":\"\"}"},
     {"bp.clear", "清除断点（all=1 全清）", "{\"address\":\"0x08001234\",\"all\":0}"},
     {"bp.list", "列出当前硬件断点", "{}"},
@@ -362,7 +364,7 @@ static int method_status2(char* out, int cap)
 {
     char elf8[MAX_PATH], esc[MAX_PATH], drv[64], desc[80];
     int di = os_modmgr_driver_index();
-    int connected = (int)g_app.connected;
+    int connected = (int)OS_APP_CONNECTED();
     int acq = (int)g_app.acq_state;
     elf8[0] = 0;
     if (g_app.elf_path[0]) os_wide_to_utf8_buf(g_app.elf_path, elf8, sizeof(elf8));
@@ -506,7 +508,7 @@ static int method_connect(const char* params, char* out, int cap)
         return ai_fail(out, cap, rc, "connect failed");
     c = cres.connected;
     info = cres.info;
-    g_app.connected = c;
+    OS_APP_SET_CONNECTED(c);
     ai_sync_ws_connected(c);
     os_modmgr_auto_alias(os_modmgr_driver_index(), cfg.device, info.emulator);   /* 日志前缀别名 */
     os_mainwin_request_ui_sync();
@@ -525,7 +527,7 @@ static int method_disconnect(char* out, int cap)
     if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
     if (g_app.driver && g_app.driver->command)
         g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
-    g_app.connected = 0;
+    OS_APP_SET_CONNECTED(0);
     ai_sync_ws_connected(0);
     os_mainwin_request_ui_sync();
     return ai_ok(out, cap, "\"connected\":0");
@@ -776,7 +778,7 @@ static int method_flash(const char* params, int erase, char* out, int cap)
     int rc, was_running;
     if (!g_app.driver || !g_app.driver->command)
         return ai_fail(out, cap, OS_ERR_NO_DEVICE, "no driver");
-    if (!g_app.connected)
+    if (!OS_APP_CONNECTED())
         return ai_fail(out, cap, OS_ERR_NOT_CONNECTED, "not connected");
     memset(&req, 0, sizeof(req));
     req.verify = 1;
@@ -1420,14 +1422,37 @@ int os_ai_call(const char* method, const char* params_json,
         return method_drv_simple(OS_CMD_STEP_IN, result_json, result_cap);
     if (strcmp(method, "step_over") == 0)
         return method_drv_simple(OS_CMD_STEP_OVER, result_json, result_cap);
-    if (strcmp(method, "step_out") == 0)
-        return method_drv_simple(OS_CMD_STEP_OUT, result_json, result_cap);
+    if (strcmp(method, "step_out") == 0) {
+        /* 第五轮：StepOut 在工作线程执行（ai_step.c）。默认仍“完成后回复”（兼容），但 AI 线程只是
+         * 分片等待、可被关停打断；{"async":1} 立即回 pending，用 step_out.status 轮询。 */
+        int async = 0, rc = OS_ERR_FAIL, r;
+        if (!g_app.driver || !g_app.driver->command)
+            return ai_fail(result_json, result_cap, OS_ERR_NO_DEVICE, "no driver");
+        json_get_int(params, "async", &async);
+        r = os_ai_step_out(g_app.driver, g_app.driver_ctx, os_modmgr_driver_index(), async ? 0 : 3000, &rc);
+        if (r == OS_ERR_AGAIN) return ai_fail(result_json, result_cap, r, "step_out already in progress");
+        if (r == OS_ERR_CANCELED) return ai_fail(result_json, result_cap, r, "shutting down");
+        if (r < 0) return ai_fail(result_json, result_cap, r, "command failed");
+        if (r == 0) return ai_ok(result_json, result_cap, "\"pending\":1");
+        if (rc != OS_ERR_OK)
+            return ai_fail(result_json, result_cap, rc, rc == OS_ERR_CANCELED ? "step_out canceled" : "command failed");
+        return ai_ok(result_json, result_cap, NULL);
+    }
+    if (strcmp(method, "step_out.status") == 0) {
+        int rc = OS_ERR_FAIL, r = os_ai_step_status(&rc);
+        char body[96];
+        if (r < 0) return ai_ok(result_json, result_cap, "\"pending\":0,\"idle\":1");
+        if (r == 0) return ai_ok(result_json, result_cap, "\"pending\":1");
+        _snprintf(body, sizeof(body), "\"pending\":0,\"rc\":%d,\"result\":\"%s\"", rc,
+                  rc == OS_ERR_OK ? "ok" : rc == OS_ERR_CANCELED ? "canceled" : "failed");
+        return ai_ok(result_json, result_cap, body);
+    }
     if (strcmp(method, "bp.set") == 0) {
         OS_BpReq req;
         uint64_t addr64 = 0;
         char note[64];
         int rc;
-        if (!g_app.driver || !g_app.connected)
+        if (!g_app.driver || !OS_APP_CONNECTED())
             return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
         if (json_get_u64(params, "address", &addr64) != 0 || addr64 == 0)
             return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "address required");
@@ -1451,7 +1476,7 @@ int os_ai_call(const char* method, const char* params_json,
         OS_BpReq req;
         uint64_t addr64 = 0;
         int all = 0, rc;
-        if (!g_app.driver || !g_app.connected)
+        if (!g_app.driver || !OS_APP_CONNECTED())
             return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
         all = json_get_bool(params, "all", 0);
         memset(&req, 0, sizeof(req));
@@ -1505,7 +1530,7 @@ int os_ai_call(const char* method, const char* params_json,
     if (strcmp(method, "debug.regs") == 0) {
         OS_RegSet rs;
         int i, n = 0, rc, first = 1;
-        if (!g_app.driver || !g_app.connected)
+        if (!g_app.driver || !OS_APP_CONNECTED())
             return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
         memset(&rs, 0, sizeof(rs));
         rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_REG_READ, NULL, &rs);
@@ -1530,7 +1555,7 @@ int os_ai_call(const char* method, const char* params_json,
         OS_BpInfo items[OS_BP_MAX];
         OS_BpList list;
         int i, n = 0, rc;
-        if (!g_app.driver || !g_app.connected)
+        if (!g_app.driver || !OS_APP_CONNECTED())
             return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
         memset(items, 0, sizeof(items));
         memset(&list, 0, sizeof(list));
@@ -1560,7 +1585,7 @@ int os_ai_call(const char* method, const char* params_json,
         uint32_t addr = 0;
         OS_BpReq req;
         is_set = (strcmp(method, "bp.set_line") == 0);
-        if (!g_app.driver || !g_app.connected)
+        if (!g_app.driver || !OS_APP_CONNECTED())
             return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
         if (!g_app.elf)
             return ai_fail(result_json, result_cap, OS_ERR_FAIL, "no elf");
@@ -1738,7 +1763,7 @@ int os_ai_call(const char* method, const char* params_json,
         } else {
             OS_CpuState st;
             int rc;
-            if (!g_app.driver || !g_app.connected)
+            if (!g_app.driver || !OS_APP_CONNECTED())
                 return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
             memset(&st, 0, sizeof(st));
             st.halted = -1;
@@ -1760,7 +1785,7 @@ int os_ai_call(const char* method, const char* params_json,
         int rc;
         char src_path[MAX_PATH] = "";
         int src_line = 0;
-        if (!g_app.driver || !g_app.connected)
+        if (!g_app.driver || !OS_APP_CONNECTED())
             return ai_fail(result_json, result_cap, OS_ERR_NOT_CONNECTED, "not connected");
         memset(&st, 0, sizeof(st));
         st.halted = -1;

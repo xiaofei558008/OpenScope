@@ -223,7 +223,7 @@ static void src_sync_bps_from_driver(OS_SrcWin* s)
     OS_BpList list;
     char path8[MAX_PATH];
     int i, rc;
-    if (!g_app.driver || !g_app.connected || !g_app.driver->command || !g_app.elf) {
+    if (!g_app.driver || !OS_APP_CONNECTED() || !g_app.driver->command || !g_app.elf) {
         s->bp_count = 0;
         return;
     }
@@ -276,7 +276,7 @@ static void src_toggle_bp(OS_SrcWin* s, int line1)
     int ix = src_has_bp(s, line1);
     int rc;
 
-    if (!g_app.connected || !g_app.driver || !g_app.driver->command) {
+    if (!OS_APP_CONNECTED() || !g_app.driver || !g_app.driver->command) {
         os_msgbox(s->hwnd, L"请先连接仿真器后再设置断点", L"源码断点", MB_OK | MB_ICONINFORMATION);
         return;
     }

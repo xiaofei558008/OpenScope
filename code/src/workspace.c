@@ -134,7 +134,7 @@ int os_ws_resolve_mod(const OS_Project* pr, OS_Module** out_mod, void** out_ctx)
         return 0;
     }
     /* driver_index 未绑定时才用全局当前驱动（旧会话兼容） */
-    if (pr->driver_index < 0 && g_app.driver && g_app.connected) {
+    if (pr->driver_index < 0 && g_app.driver && OS_APP_CONNECTED()) {
         *out_mod = g_app.driver;
         if (out_ctx) *out_ctx = g_app.driver_ctx;
         return 0;

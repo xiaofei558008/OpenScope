@@ -183,7 +183,7 @@ typedef struct OS_App {
     OS_Framework fw;
 
     volatile LONG acq_state;
-    volatile LONG connected;
+    volatile LONG connected;   /* 第五轮：只经 OS_APP_CONNECTED() / OS_APP_SET_CONNECTED() 原子访问（UI/AI/采集多线程） */
     HANDLE hPoll;
     volatile LONG stop_poll;
     int poll_interval_ms;
@@ -248,6 +248,9 @@ typedef struct OS_App {
 } OS_App;
 
 extern OS_App g_app;
+/* 第五轮：g_app.connected 跨线程（UI 线程、AI 客户端线程、采集线程）读写 → 原子 */
+#define OS_APP_CONNECTED()       (InterlockedCompareExchange(&g_app.connected, 0, 0) != 0)
+#define OS_APP_SET_CONNECTED(v)  InterlockedExchange(&g_app.connected, (LONG)((v) ? 1 : 0))
 
 /* 框架回调实现（分布于各文件） */
 void os_fw_log(int level, const char* fmt, ...);

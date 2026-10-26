@@ -26,6 +26,7 @@
 #include "xcpsym.h"
 #include "conn_async.h"
 #include "cmd_async.h"
+#include "ai_step.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <stdio.h>
@@ -533,7 +534,7 @@ static void apply_cpu_status(const OS_CpuState* stp, int rc);
 static void refresh_cpu_status(void)
 {
     if (!g_app.hStatus) return;
-    if (!g_app.connected || !g_app.driver || !g_app.driver->command || g_app.net_mode) {
+    if (!OS_APP_CONNECTED() || !g_app.driver || !g_app.driver->command || g_app.net_mode) {
         SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
         g_cpu_prev_halted = -1;
         os_locals_on_cpu(-1, 0, 0);
@@ -560,7 +561,7 @@ static void apply_cpu_status(const OS_CpuState* stp, int rc)
     wchar_t w[96];
     char label[32];
     if (!g_app.hStatus) return;
-    if (!g_app.connected || !g_app.driver || g_app.net_mode) return;  /* 结果到达前已断开/切网络 */
+    if (!OS_APP_CONNECTED() || !g_app.driver || g_app.net_mode) return;  /* 结果到达前已断开/切网络 */
     if (rc == OS_ERR_AGAIN) {
         /* Bug4（驱动侧）：驱动忙/重连中——保留上次已知状态（不清 PC 高亮、不动局部变量），
          * 状态栏提示，300ms 后自动重试；不弹框 */
@@ -603,7 +604,7 @@ static void update_record_btn_text(void)
 void os_mainwin_update_buttons(void)
 {
     int hasDriver = g_app.driver != NULL;
-    int conn = g_app.connected ? 1 : 0;
+    int conn = OS_APP_CONNECTED() ? 1 : 0;
     int running = g_app.acq_state == OS_ACQ_RUNNING;
     int replay = g_app.acq_state == OS_ACQ_REPLAY;
     HWND b;
@@ -724,7 +725,7 @@ static void refresh_status(void)
     OS_Project* ap = os_ws_active();
     int i, nconn = 0;
     dn[0] = 0; xn[0] = 0; pn[0] = 0;
-    if (g_app.connected && g_app.driver)
+    if (OS_APP_CONNECTED() && g_app.driver)
         os_utf8_to_wide_buf(g_app.driver->name, dn, 64);
     _snwprintf(xn, 16, g_app.xcp_connected ? L"XCP:ON" : L"XCP:off");
     if (ap) os_utf8_to_wide_buf(ap->name, pn, 80);
@@ -1966,7 +1967,7 @@ static int load_elf_path(const wchar_t* path)
     }
     os_log(OS_LOG_INFO, "已加载 ELF: %ls (%d 位, %s)",
            path, os_elf_bits(g_app.elf), os_elf_arch_name(g_app.elf));
-    if (was_running && g_app.connected && g_app.watch_count > 0) {
+    if (was_running && OS_APP_CONNECTED() && g_app.watch_count > 0) {
         if (os_ds_start() == 0)
             os_log(OS_LOG_INFO, "ELF 重载后已恢复采集");
     }
@@ -2186,7 +2187,7 @@ static void connect_done(OS_ConnJob* job)
         os_mainwin_update_buttons();
         return;
     }
-    if (same) g_app.connected = c;
+    if (same) OS_APP_SET_CONNECTED(c);
     {
         OS_Project* pr = os_ws_active();
         int di = job->driver_index;
@@ -2268,11 +2269,11 @@ static void attach_done(OS_ConnJob* job)
         os_mainwin_update_buttons();
         return;
     }
-    if (same) g_app.connected = job->connected;
+    if (same) OS_APP_SET_CONNECTED(job->connected);
     os_log(OS_LOG_INFO, "Attach 成功: %s", job->info.emulator[0] ? job->info.emulator : "?");
     refresh_status();
     os_mainwin_update_buttons();
-    if (same && g_app.connected && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
+    if (same && OS_APP_CONNECTED() && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
         cmd_start_acq();
 }
 
@@ -2314,7 +2315,7 @@ static void cmd_cpu_ctrl(int cmd, const wchar_t* ok_msg)
         set_status(0, L"正在步出…（按「停止」取消）");
         return;
     }
-    if (!g_app.driver || !g_app.connected) {
+    if (!g_app.driver || !OS_APP_CONNECTED()) {
         MessageBoxW(g_app.hMain, L"请先连接或 Attach", L"CPU", MB_OK | MB_ICONWARNING);
         return;
     }
@@ -2339,7 +2340,7 @@ static void cmd_step_out(void)
 {
     if (g_app.net_mode) return;
     if (g_step_job) { set_status(0, L"正在步出…（按「停止」取消）"); return; }   /* 重复点击 */
-    if (!g_app.driver || !g_app.connected) {
+    if (!g_app.driver || !OS_APP_CONNECTED()) {
         MessageBoxW(g_app.hMain, L"请先连接或 Attach", L"CPU", MB_OK | MB_ICONWARNING);
         return;
     }
@@ -2430,7 +2431,7 @@ static void cmd_disconnect(void)
         int c = 0;
         if (g_app.driver && g_app.driver->command)
             g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
-        g_app.connected = c;
+        OS_APP_SET_CONNECTED(c);
     }
     refresh_status();
     os_mainwin_update_buttons();
@@ -2768,7 +2769,7 @@ static void cmd_select_driver(int idx)
     if (os_modmgr_select_driver(idx) != OS_ERR_OK) return;
     g_app.net_mode = 0;
     net_mode_apply_controls();
-    g_app.connected = 0;
+    OS_APP_SET_CONNECTED(0);
     g_emu_count = -1;
     cfg_fill_emus();
     cfg_fill_speeds();
@@ -3768,7 +3769,7 @@ static LRESULT CALLBACK flash_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPa
                 MessageBoxW(dlg, L"请先选择 .elf / .out / .hex / .bin 文件", L"烧录", MB_OK | MB_ICONWARNING);
                 return 0;
             }
-            if (!g_app.driver || !g_app.connected) {
+            if (!g_app.driver || !OS_APP_CONNECTED()) {
                 MessageBoxW(dlg, L"请先连接仿真器", L"烧录", MB_OK | MB_ICONWARNING);
                 return 0;
             }
@@ -3799,7 +3800,7 @@ static LRESULT CALLBACK flash_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPa
             OS_FlashReq req;
             int was_running = 0, rc;
             flash_fill_req(dlg, &req);
-            if (!g_app.driver || !g_app.connected) {
+            if (!g_app.driver || !OS_APP_CONNECTED()) {
                 MessageBoxW(dlg, L"请先连接仿真器", L"擦除", MB_OK | MB_ICONWARNING);
                 return 0;
             }
@@ -3856,7 +3857,7 @@ static void cmd_flash_dialog(void)
                 _snwprintf(cur_dev, 128, L"%s", tmp);
         }
     }
-    if (g_app.driver && g_app.connected && g_app.driver->command) {
+    if (g_app.driver && OS_APP_CONNECTED() && g_app.driver->command) {
         OS_DriverInfo info;
         memset(&info, 0, sizeof(info));
         g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
@@ -5343,11 +5344,11 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         else if (wParam == CONN_PEND_TIMER) connect_pending_tick();
         else if (wParam == 6) {   /* Bug4：CPU 状态忙 → 一次性重试 */
             KillTimer(hwnd, 6);
-            if (g_app.connected && !g_app.net_mode) refresh_cpu_status();
+            if (OS_APP_CONNECTED() && !g_app.net_mode) refresh_cpu_status();
         }
         else if (wParam == 4) {
             /* 只有打开了局部变量窗口才查询 CPU 状态；变量只在停住且 PC 变化时读一次 */
-            if (os_locals_window_count() > 0 && g_app.connected && !g_app.net_mode)
+            if (os_locals_window_count() > 0 && OS_APP_CONNECTED() && !g_app.net_mode)
                 refresh_cpu_status();
         }
         return 0;
@@ -5657,7 +5658,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_CPU_STEPOVER: cmd_cpu_ctrl(OS_CMD_STEP_OVER, L"Step Over"); break;
         case IDC_BTN_BP:
         case IDM_BP:
-            if (!g_app.connected)
+            if (!OS_APP_CONNECTED())
                 os_msgbox(hwnd, L"请先连接仿真器", L"断点", MB_OK | MB_ICONINFORMATION);
             else
                 os_bpwin_dialog(hwnd);
@@ -5959,6 +5960,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             if (!os_cmd_abandon(j, 3000))
                 os_log(OS_LOG_WARN, "退出：步出线程 3s 未结束（驱动 DLL 已钉住）");
         }
+        /* 第五轮：AI 发起的异步 StepOut → 打断 AI 线程的等待 + HALT，最多等 3s（线程钉住驱动 DLL） */
+        if (!os_ai_step_abort(3000))
+            os_log(OS_LOG_WARN, "退出：AI 步出线程 3s 未结束（驱动 DLL 已钉住）");
         if (g_conn_job) {
             /* 任务4：退出时仍在连接 → 取消 + DISCONNECT，最多等 5s；仍卡在厂商 DLL 里则放弃该 job
              * （线程钉住驱动 DLL，os_modmgr_shutdown 的 FreeLibrary 不会卸掉其代码） */

@@ -13,6 +13,8 @@ for d in jlink stlink; do
   D=$(echo $d | tr a-z A-Z)
   gcc $CF -include pre_probe.h -DPROBE_$D -I$SRC/module/$d test_stepout.c $P/fake_common.c $P/fake_$d.c $SRC/module/$d/$d.c \
       $O/cmd_async.o -lpthread -o test_stepout_$d${1:+_$1}
+  gcc $CF -include pre_probe.h -DPROBE_$D -I$SRC/module/$d test_ai_step.c $SRC/code/src/ai_step.c $P/fake_common.c $P/fake_$d.c $SRC/module/$d/$d.c \
+      $O/cmd_async.o -lpthread -o test_ai_step_$d${1:+_$1}
 done
 rm -rf $O
-echo built test_stepout_jlink${1:+_$1} test_stepout_stlink${1:+_$1}
+echo built test_stepout_{jlink,stlink}${1:+_$1} test_ai_step_{jlink,stlink}${1:+_$1}

@@ -199,7 +199,7 @@ int os_locals_snapshot(OS_LocSnap* s, int (*is_exp)(const char*, void*), void* u
     int n, i, rc, pc_reg;
     uint64_t lo = 0, hi = 0;
     memset(s, 0, sizeof(*s));
-    if (!g_app.driver || !g_app.connected) { s->status = OS_LOCS_NOT_CONNECTED; snprintf(s->msg, sizeof(s->msg), "仿真器未连接"); return s->status; }
+    if (!g_app.driver || !OS_APP_CONNECTED()) { s->status = OS_LOCS_NOT_CONNECTED; snprintf(s->msg, sizeof(s->msg), "仿真器未连接"); return s->status; }
     if (!g_app.elf) { s->status = OS_LOCS_NO_ELF; snprintf(s->msg, sizeof(s->msg), "未加载带调试信息的 ELF"); return s->status; }
     s_read_busy = 0;
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_REG_READ, NULL, &s->regs);
@@ -518,7 +518,7 @@ static LRESULT CALLBACK loc_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_TIMER:
         if (wp == LOC_TIMER_RETRY) {   /* Bug4 */
             KillTimer(hwnd, LOC_TIMER_RETRY);
-            if (w && g_app.connected && g_app.driver) lw_refresh(w);
+            if (w && OS_APP_CONNECTED() && g_app.driver) lw_refresh(w);
             return 0;
         }
         break;
@@ -544,7 +544,7 @@ static LRESULT CALLBACK loc_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         snprintf(w->snap.msg, sizeof(w->snap.msg), "CPU 停住（断点/暂停）后显示当前函数的参数与局部变量");
         lw_fill(w);
         /* 打开时若已停住则立即刷新 */
-        if (g_app.connected && g_app.driver) lw_refresh(w);
+        if (OS_APP_CONNECTED() && g_app.driver) lw_refresh(w);
         return 0;
     }
     case WM_SIZE:

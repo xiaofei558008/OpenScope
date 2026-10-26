@@ -15,3 +15,14 @@ if errorlevel 1 exit /b 1
 test_stepout_jlink.exe
 if errorlevel 1 exit /b 1
 test_stepout_stlink.exe
+if errorlevel 1 exit /b 1
+rem 第五轮：AI step_out 异步（ai_step.c）
+cl /nologo /utf-8 /W4 /Zi %INC% /I..\..\module\jlink /FIpre_probe.h /DPROBE_JLINK ^
+   test_ai_step.c ..\..\code\src\ai_step.c %P%\fake_common.c %P%\fake_jlink.c ..\..\module\jlink\jlink.c cmd_async_t.obj /Fe:test_ai_step_jlink.exe
+if errorlevel 1 exit /b 1
+cl /nologo /utf-8 /W4 /Zi %INC% /I..\..\module\stlink /FIpre_probe.h /DPROBE_STLINK ^
+   test_ai_step.c ..\..\code\src\ai_step.c %P%\fake_common.c %P%\fake_stlink.c ..\..\module\stlink\stlink.c cmd_async_t.obj /Fe:test_ai_step_stlink.exe
+if errorlevel 1 exit /b 1
+test_ai_step_jlink.exe
+if errorlevel 1 exit /b 1
+test_ai_step_stlink.exe
