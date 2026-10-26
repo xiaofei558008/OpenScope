@@ -356,6 +356,14 @@ static DWORD WINAPI poll_thread(LPVOID p)
 /* Bug4/C3: os_ds_stop 等待超时后采集线程可能仍卡在驱动调用里；不再 CloseHandle 后假装已停，
  * 而是记住它，未退出前拒绝重新开始（否则两个采集线程并发读、并发写 spool/状态）。 */
 static HANDLE g_poll_stale;
+#define OS_DS_STOP_WAIT_MS 200
+
+/* Bug4（续）：有界等待残留采集线程（退出程序 / 卸载驱动前调用）。返回 1 = 已无残留线程 */
+int os_ds_join(DWORD wait_ms)
+{
+    if (g_poll_stale) WaitForSingleObject(g_poll_stale, wait_ms);
+    return !os_ds_poll_busy();
+}
 
 int os_ds_poll_busy(void)
 {
@@ -420,8 +428,10 @@ void os_ds_stop(void)
     if (g_app.acq_state != OS_ACQ_RUNNING) return;
     g_app.stop_poll = 1;
     if (g_app.hPoll) {
-        if (WaitForSingleObject(g_app.hPoll, 3000) == WAIT_TIMEOUT) {
-            os_log(OS_LOG_WARN, "采集线程 3 s 内未退出（驱动调用阻塞），后台继续等待其退出");
+        /* Bug4（续）：驱动侧已改为不在调用线程重连、UI 命令限时，采集线程正常应在一个读周期内退出；
+         * UI 线程最多等 OS_DS_STOP_WAIT_MS，超时不关句柄，交给 os_ds_poll_busy/os_ds_join 回收 */
+        if (WaitForSingleObject(g_app.hPoll, OS_DS_STOP_WAIT_MS) == WAIT_TIMEOUT) {
+            os_log(OS_LOG_WARN, "采集线程未立即退出（驱动调用中），后台继续等待其退出");
             if (g_poll_stale) CloseHandle(g_poll_stale);
             g_poll_stale = g_app.hPoll;
         } else {

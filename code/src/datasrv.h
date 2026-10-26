@@ -8,6 +8,8 @@ int os_ds_start(void);
 void os_ds_stop(void);
 /* 上次停止超时的采集线程是否仍在运行（仍卡在驱动里） */
 int  os_ds_poll_busy(void);
+/* Bug4（续）：有界等待残留采集线程；返回 1 = 已退出（退出程序/卸载驱动前调用） */
+int  os_ds_join(DWORD wait_ms);
 /* 任一 Workspace Project / XCP / 全局探针已连接即可采集 */
 int os_ds_any_connected(void);
 
