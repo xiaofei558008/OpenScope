@@ -69,9 +69,12 @@ struct OS_ElfFile {
     /* .debug_line 矩阵（文件名 os_alloc；recs 用 realloc） */
     char**   line_files;
     int      line_file_count;
-    struct { uint32_t addr; uint32_t line; uint16_t file; }* line_recs;
+    /* 第五轮：增加 end（本行覆盖到的下一行地址，= 同一序列下一行的 addr）、seq（序列号）、
+     * is_stmt、is_end（DW_LNE_end_sequence 行：标记序列结束后的第一个地址，不是一条真实指令）。 */
+    struct { uint32_t addr; uint32_t end; uint32_t line; uint32_t seq; uint16_t file; uint8_t is_stmt, is_end; }* line_recs;
     int      line_rec_count;
     int      line_rec_cap;
+    uint32_t line_seq;   /* 解析中的序列计数 */
 
     OS_Variable* vars;
     int var_count;
@@ -384,9 +387,13 @@ static uint64_t leb128_u(const uint8_t** pp, const uint8_t* end)
     return r;
 }
 
+static void line_emit_ex(OS_ElfFile* f, uint64_t addr, uint32_t line, uint16_t file, int is_stmt, int is_end);
 static void line_emit(OS_ElfFile* f, uint64_t addr, uint32_t line, uint16_t file, int is_stmt)
 {
-    (void)is_stmt;
+    line_emit_ex(f, addr, line, file, is_stmt, 0);
+}
+static void line_emit_ex(OS_ElfFile* f, uint64_t addr, uint32_t line, uint16_t file, int is_stmt, int is_end)
+{
     if (file == 0 || line == 0) return;
     if (addr == 0) return; /* 未 set_address 前的拷贝无意义 */
     if (f->line_rec_count >= f->line_rec_cap) {
@@ -399,7 +406,25 @@ static void line_emit(OS_ElfFile* f, uint64_t addr, uint32_t line, uint16_t file
     f->line_recs[f->line_rec_count].addr = (uint32_t)addr;
     f->line_recs[f->line_rec_count].line = line;
     f->line_recs[f->line_rec_count].file = file;
+    f->line_recs[f->line_rec_count].end = (uint32_t)addr;   /* 解析完后由 line_finalize 填 */
+    f->line_recs[f->line_rec_count].seq = f->line_seq;
+    f->line_recs[f->line_rec_count].is_stmt = (uint8_t)(is_stmt ? 1 : 0);
+    f->line_recs[f->line_rec_count].is_end = (uint8_t)(is_end ? 1 : 0);
     f->line_rec_count++;
+}
+
+/* 每行的覆盖范围 [addr, end)：end = 同一序列中下一行的地址（序列内地址单调不减）。
+ * 同地址的多行中，除最后一行外 end==addr（零长度行：该行代码被编译器并入/调度到别处）。 */
+static void line_finalize(OS_ElfFile* f)
+{
+    int i;
+    for (i = 0; i < f->line_rec_count; i++) {
+        f->line_recs[i].end = f->line_recs[i].addr;
+        if (!f->line_recs[i].is_end && i + 1 < f->line_rec_count &&
+            f->line_recs[i + 1].seq == f->line_recs[i].seq &&
+            f->line_recs[i + 1].addr >= f->line_recs[i].addr)
+            f->line_recs[i].end = f->line_recs[i + 1].addr;
+    }
 }
 
 static int line_add_file(OS_ElfFile* f, const char* path)
@@ -675,7 +700,10 @@ static void parse_debug_line(OS_ElfFile* f)
                 if (p >= eend) { p = eend; continue; }
                 ext = *p++;
                 if (ext == DW_LNE_end_sequence) {
-                    line_emit(f, address, line, file_g, is_stmt);
+                    /* 第五轮：结束行只标记“序列后第一个地址”，不是真实指令（旧代码当普通行用：
+                     * 例如 0x80002860 既是 stm_hz 序列的结束、又是 main 的首行，PC→行 会报成 stm_hz 的 57 行） */
+                    line_emit_ex(f, address, line, file_g, is_stmt, 1);
+                    f->line_seq++;
                     address = 0;
                     line = 1;
                     file_local = 1;
@@ -2543,7 +2571,7 @@ OS_ElfFile* os_elf_open(const char* path, char* errbuf, int errbuf_len)
     }
     if (f->dbg_info) parse_dwarf(f);
     if (f->symtab) parse_symtab(f);
-    if (f->dbg_line) parse_debug_line(f);
+    if (f->dbg_line) { parse_debug_line(f); line_finalize(f); }
     if (f->var_count == 0) {
         snprintf(errbuf, errbuf_len, "no global variables found (no debug info / symbols)");
         os_elf_close(f);
@@ -2589,63 +2617,86 @@ const char* os_elf_line_file_at(OS_ElfFile* f, int idx)
     return f->line_files[idx];
 }
 
-int os_elf_addr_of_line(OS_ElfFile* f, const char* path_or_name, int line, uint32_t* out_addr)
+/* 第五轮：行 → 地址（断点地址）。规则（与 gdb 一致）：
+ *  1) 该行的 is_stmt、非零长度行里取最低地址（不是行表里第一次出现的那一行；
+ *     零长度行 = 同地址后面还有别的行，该指令实际归属后面那一行，断在这里 PC→行 会显示成别的行）；
+ *  2) 只有零长度 / 非 is_stmt 行时退而取其中最低地址；
+ *  3) 该行没有任何行表记录（空行、注释、声明、被优化掉）：取同一函数（序列）内下一条有代码的行；
+ *     不在任何函数的行区间内时，沿用旧规则（上一条有代码的行；比所有行都小则取最小行）。
+ *  结束序列行（DW_LNE_end_sequence）一律不参与。 */
+static int line_file_ok(OS_ElfFile* f, int i, const char* path_or_name)
 {
-    int i, best_i = -1, file_hits = 0;
-    uint32_t best_line = 0;
-    if (!f || !path_or_name || line <= 0 || !out_addr) return 0;
-    for (i = 0; i < f->line_rec_count; i++) {
-        uint16_t fi = f->line_recs[i].file;
-        const char* fp;
-        if (fi == 0 || (int)fi >= f->line_file_count) continue;
-        fp = f->line_files[fi];
-        if (!fp || !path_match_file(fp, path_or_name)) continue;
-        file_hits++;
-        if ((int)f->line_recs[i].line == line) {
-            *out_addr = f->line_recs[i].addr & ~1u;
-            return 1;
-        }
-        /* 取不超过目标行的最近行；也可取超过目标行最近的一行作为回退 */
-        if (f->line_recs[i].line <= (uint32_t)line &&
-            f->line_recs[i].line >= best_line) {
-            best_line = f->line_recs[i].line;
-            best_i = i;
-        }
-    }
-    if (best_i < 0 && file_hits > 0) {
-        /* 点击行小于该文件所有映射行时：取该文件最小行 */
-        uint32_t min_line = 0xffffffffu;
-        for (i = 0; i < f->line_rec_count; i++) {
-            uint16_t fi = f->line_recs[i].file;
-            const char* fp;
-            if (fi == 0 || (int)fi >= f->line_file_count) continue;
-            fp = f->line_files[fi];
-            if (!fp || !path_match_file(fp, path_or_name)) continue;
-            if (f->line_recs[i].line < min_line) {
-                min_line = f->line_recs[i].line;
-                best_i = i;
-            }
-        }
-    }
-    if (best_i >= 0) {
-        *out_addr = f->line_recs[best_i].addr & ~1u;
-        return 1;
-    }
-    return 0;
+    uint16_t fi = f->line_recs[i].file;
+    const char* fp;
+    if (fi == 0 || (int)fi >= f->line_file_count) return 0;
+    fp = f->line_files[fi];
+    return fp && path_match_file(fp, path_or_name);
 }
 
+/* 返回该行最佳行记录下标；strict=1 只要 is_stmt 且非零长度 */
+static int line_best_row(OS_ElfFile* f, const char* path_or_name, uint32_t line, int strict)
+{
+    int i, best = -1;
+    for (i = 0; i < f->line_rec_count; i++) {
+        if (f->line_recs[i].is_end || f->line_recs[i].line != line) continue;
+        if (strict && (!f->line_recs[i].is_stmt || f->line_recs[i].end <= f->line_recs[i].addr)) continue;
+        if (!line_file_ok(f, i, path_or_name)) continue;
+        if (best < 0 || f->line_recs[i].addr < f->line_recs[best].addr) best = i;
+    }
+    return best;
+}
+
+static int line_row_for(OS_ElfFile* f, const char* path_or_name, uint32_t line)
+{
+    int r = line_best_row(f, path_or_name, line, 1);
+    return r >= 0 ? r : line_best_row(f, path_or_name, line, 0);
+}
+
+int os_elf_addr_of_line(OS_ElfFile* f, const char* path_or_name, int line, uint32_t* out_addr)
+{
+    int i, r, file_hits = 0;
+    uint32_t next_in_fn = 0, prev_line = 0, min_line = 0xffffffffu;
+    if (!f || !path_or_name || line <= 0 || !out_addr) return 0;
+    r = line_row_for(f, path_or_name, (uint32_t)line);
+    if (r >= 0) { *out_addr = f->line_recs[r].addr & ~1u; return 1; }
+    for (i = 0; i < f->line_rec_count; i++) {
+        uint32_t ln = f->line_recs[i].line;
+        if (f->line_recs[i].is_end || !line_file_ok(f, i, path_or_name)) continue;
+        file_hits++;
+        if (ln < min_line) min_line = ln;
+        if (ln < (uint32_t)line && ln > prev_line) prev_line = ln;
+        if (ln > (uint32_t)line && (!next_in_fn || ln < next_in_fn)) {
+            /* 只接受与“比目标小的行”同处一个序列（同一函数）的下一行 */
+            int j, inside = 0;
+            for (j = 0; j < f->line_rec_count && !inside; j++)
+                if (f->line_recs[j].seq == f->line_recs[i].seq && !f->line_recs[j].is_end &&
+                    f->line_recs[j].line < (uint32_t)line && line_file_ok(f, j, path_or_name))
+                    inside = 1;
+            if (inside) next_in_fn = ln;
+        }
+    }
+    if (!file_hits) return 0;
+    if (next_in_fn) r = line_row_for(f, path_or_name, next_in_fn);
+    else if (prev_line) r = line_row_for(f, path_or_name, prev_line);
+    else r = line_row_for(f, path_or_name, min_line);
+    if (r < 0) return 0;
+    *out_addr = f->line_recs[r].addr & ~1u;
+    return 1;
+}
+
+/* 第五轮：地址 → 行。取覆盖该地址的行记录 [addr, end)（同地址多行时即最后一行，与 gdb 一致）；
+ * 不再使用结束序列行，也不再把序列之外（无调试信息的库代码/空隙）的地址就近算到前一个函数的末行。 */
 int os_elf_line_of_addr(OS_ElfFile* f, uint32_t addr, char* file_out, int file_cap, int* line_out)
 {
     int i, best = -1;
-    uint32_t best_addr = 0;
     addr &= ~1u;
     if (!f || !file_out || file_cap <= 0 || !line_out) return 0;
     for (i = 0; i < f->line_rec_count; i++) {
         uint32_t a = f->line_recs[i].addr & ~1u;
-        if (a <= addr && a >= best_addr) {
-            best_addr = a;
+        if (f->line_recs[i].is_end || a > addr || f->line_recs[i].end <= addr) continue;
+        if (best < 0 || a > (f->line_recs[best].addr & ~1u) ||
+            (a == (f->line_recs[best].addr & ~1u) && f->line_recs[i].is_stmt >= f->line_recs[best].is_stmt))
             best = i;
-        }
     }
     if (best < 0) return 0;
     {

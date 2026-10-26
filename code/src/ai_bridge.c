@@ -1586,11 +1586,15 @@ int os_ai_call(const char* method, const char* params_json,
                                "bp.set_line failed");
             os_src_refresh_bps();
             {
-                char esc[MAX_PATH * 2];
+                char esc[MAX_PATH * 2], f8[MAX_PATH];
+                int actual = 0;
+                /* 第五轮：附带 actual_line（该地址 PC→行 的结果）。行无代码/被并入别的行时它 ≠ line，
+                 * 命中后 cpu.state 报的就是 actual_line（新增字段，旧客户端忽略即可） */
+                if (!os_elf_line_of_addr(g_app.elf, addr, f8, sizeof(f8), &actual)) actual = 0;
                 json_escape(path, esc, sizeof(esc));
                 _snprintf(result_json, result_cap,
-                    "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\"}",
-                    esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u));
+                    "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\",\"actual_line\":%d}",
+                    esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u), actual);
             }
             return OS_ERR_OK;
         }
@@ -1698,10 +1702,15 @@ int os_ai_call(const char* method, const char* params_json,
             return ai_fail(result_json, result_cap, OS_ERR_INVALID_ARG, "line required");
         if (!os_elf_addr_of_line(g_app.elf, path, line, &addr) || !addr)
             return ai_fail(result_json, result_cap, OS_ERR_FAIL, "line map failed");
-        json_escape(path, esc, sizeof(esc));
-        _snprintf(result_json, result_cap,
-            "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\"}",
-            esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u));
+        {
+            char f8[MAX_PATH];
+            int actual = 0;
+            if (!os_elf_line_of_addr(g_app.elf, addr, f8, sizeof(f8), &actual)) actual = 0;
+            json_escape(path, esc, sizeof(esc));
+            _snprintf(result_json, result_cap,
+                "{\"ok\":true,\"path\":\"%s\",\"line\":%d,\"address\":%u,\"address_hex\":\"0x%08X\",\"actual_line\":%d}",
+                esc, line, (unsigned)(addr & ~1u), (unsigned)(addr & ~1u), actual);
+        }
         return OS_ERR_OK;
     }
     if (strcmp(method, "src.addr_to_line") == 0) {
