@@ -47,6 +47,12 @@
 #ifndef OS_DRV_SPIN_US
 #define OS_DRV_SPIN_US 500
 #endif
+/* 第五轮：粗睡阈值自适应上限。Sleep(1) 在 Windows 上通常 ≤1 tick（15.6ms），但 CPU 有竞争时
+ * 线程到点后还要等调度（再 1~2 个 tick），实测偶发 >20ms → 等锁超时越界到 ~67ms（50+17）。
+ * 记录本进程观察到的 Sleep(1) 最坏耗时，阈值取 max(OS_DRV_COARSE_MS, 最坏+2ms)，不超过此上限。 */
+#ifndef OS_DRV_COARSE_MAX_MS
+#define OS_DRV_COARSE_MAX_MS 40
+#endif
 #ifndef OS_DRV_SMALL_IO
 #define OS_DRV_SMALL_IO 256   /* ≤ 此字节数的读/写走限时锁（UI 读局部变量、断点 FPB 写等） */
 #endif
@@ -139,10 +145,37 @@ DRV_FN int drv_is_reconnecting(OS_DrvGuard* g)
  *   剩余 > OS_DRV_SPIN_US     → SwitchToThread()，无可让线程时 Sleep(0)
  *   最后 OS_DRV_SPIN_US 微秒  → 纯自旋（pause）
  * 截止判断只用 QPC，因此超时返回的误差 = 一次 TryEnter + 一次让出，CPU 不饱和时为微秒级。 */
+static volatile LONG g_drv_sleep1_worst_us;   /* 观察到的 Sleep(1) 最坏耗时（每个包含本头文件的模块各一份） */
+
+/* 当前粗睡阈值（QPC 计数） */
+DRV_FN LONGLONG drv_coarse_qpc(LONGLONG f)
+{
+    LONGLONG us = (LONGLONG)InterlockedCompareExchange(&g_drv_sleep1_worst_us, 0, 0) + 2000;
+    if (us < (LONGLONG)OS_DRV_COARSE_MS * 1000) us = (LONGLONG)OS_DRV_COARSE_MS * 1000;
+    if (us > (LONGLONG)OS_DRV_COARSE_MAX_MS * 1000) us = (LONGLONG)OS_DRV_COARSE_MAX_MS * 1000;
+    return f * us / 1000000;
+}
+
+/* Sleep(1) 并记录实际耗时 */
+DRV_FN void drv_sleep1_tracked(LONGLONG f)
+{
+    LONGLONG t = drv_qpc(), us;
+    LONG old;
+    Sleep(1);
+    us = (drv_qpc() - t) * 1000000 / f;
+    if (us > 1000000) us = 1000000;
+    old = InterlockedCompareExchange(&g_drv_sleep1_worst_us, 0, 0);
+    while ((LONG)us > old) {
+        LONG seen = InterlockedCompareExchange(&g_drv_sleep1_worst_us, (LONG)us, old);
+        if (seen == old) break;
+        old = seen;
+    }
+}
+
 DRV_FN int drv_try_cs_until(OS_DrvGuard* g, CRITICAL_SECTION* cs, LONGLONG deadline, int check_reconn)
 {
     LONGLONG f = drv_qpf();
-    LONGLONG coarse = f * OS_DRV_COARSE_MS / 1000;
+    LONGLONG coarse = drv_coarse_qpc(f);
     LONGLONG spin = f * OS_DRV_SPIN_US / 1000000;
     for (;;) {
         LONGLONG left;
@@ -150,7 +183,7 @@ DRV_FN int drv_try_cs_until(OS_DrvGuard* g, CRITICAL_SECTION* cs, LONGLONG deadl
         if (TryEnterCriticalSection(cs)) return 1;
         left = deadline - drv_qpc();
         if (left <= 0) return 0;
-        if (left > coarse) Sleep(1);
+        if (left > coarse) { drv_sleep1_tracked(f); coarse = drv_coarse_qpc(f); }
         else if (left > spin) { if (!SwitchToThread()) Sleep(0); }
         else drv_cpu_relax();
     }

@@ -44,48 +44,7 @@ static void fw_log(int lv, const char* fmt, ...)
 }
 #define CHECK(c, ...) do { if (!(c)) { g_fail++; printf("  FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
-#ifdef _WIN32
-/* 精度自检：另一线程占住锁，测本线程 20ms 限时等锁的超时误差（最坏值，ms） */
-static CRITICAL_SECTION g_cal_cs;
-static volatile LONG g_cal_stop;
-static DWORD WINAPI cal_holder(LPVOID p)
-{
-    (void)p;
-    EnterCriticalSection(&g_cal_cs);
-    while (!InterlockedCompareExchange(&g_cal_stop, 0, 0)) Sleep(5);
-    LeaveCriticalSection(&g_cal_cs);
-    return 0;
-}
-static long precision_selftest(void)
-{
-    LARGE_INTEGER f, a, b; long worst = 0; int i; HANDLE h;
-    InitializeCriticalSection(&g_cal_cs);
-    h = CreateThread(NULL, 0, cal_holder, NULL, 0, NULL);
-    Sleep(20);
-    QueryPerformanceFrequency(&f);
-    for (i = 0; i < 10; i++) {
-        LONGLONG dl;
-        QueryPerformanceCounter(&a);
-        dl = a.QuadPart + f.QuadPart * 20 / 1000;
-        for (;;) {   /* 与 drv_try_cs_until 同一策略 */
-            LONGLONG left;
-            if (TryEnterCriticalSection(&g_cal_cs)) { LeaveCriticalSection(&g_cal_cs); break; }
-            QueryPerformanceCounter(&b);
-            left = dl - b.QuadPart;
-            if (left <= 0) break;
-            if (left > f.QuadPart / 50) Sleep(1);
-            else if (left > f.QuadPart / 2000) { if (!SwitchToThread()) Sleep(0); }
-            else YieldProcessor();
-        }
-        QueryPerformanceCounter(&b);
-        { long over = (long)((b.QuadPart - a.QuadPart) * 1000 / f.QuadPart) - 20; if (over > worst) worst = over; }
-    }
-    InterlockedExchange(&g_cal_stop, 1);
-    WaitForSingleObject(h, INFINITE); CloseHandle(h);
-    DeleteCriticalSection(&g_cal_cs);
-    return worst;
-}
-#endif
+#include "precision.h"   /* 第五轮：精度自检改为真实 50ms 等锁 ×10 */
 
 static int cmd(int c, void* in, void* out) { return M->command(NULL, c, in, out); }
 
@@ -161,17 +120,7 @@ int main(void)
     long stuck = getenv("TEST_STUCK_MS") ? atol(getenv("TEST_STUCK_MS")) : 3000;
     int rc, c; ULONGLONG t0; LONG trig0;
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (getenv("TEST_MAX_MS")) g_max_ms = atol(getenv("TEST_MAX_MS"));
-#ifdef _WIN32
-    else {
-        long over = precision_selftest();
-        printf("[0] 精度自检：20ms 限时等锁最坏超时误差 %ldms\n", over);
-        if (over > 10) {
-            g_max_ms = 100;
-            printf("    WARN: 本机无法保证精确等待（CPU 饱和/调度抖动），UI 时延上限放宽到 100ms\n");
-        }
-    }
-#endif
+    prec_pick_limit(&g_max_ms);
     InitializeCriticalSection(&g_log_cs);
     memset(&fw, 0, sizeof(fw)); fw.api_version = OS_API_VERSION; fw.log = fw_log;
     M = os_module_get();

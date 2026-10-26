@@ -28,6 +28,7 @@
 
 const OS_Module* os_module_get(void);
 
+#include "../drv_reconnect/precision.h"
 static const OS_Module* M;
 static int g_fail;
 static long g_max_ms = 60;
@@ -126,7 +127,7 @@ int main(void)
     long stuck = getenv("TEST_STUCK_MS") ? atol(getenv("TEST_STUCK_MS")) : 3000;
     int rc, c; ULONGLONG t0; LONG run0;
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (getenv("TEST_MAX_MS")) g_max_ms = atol(getenv("TEST_MAX_MS"));
+    prec_pick_limit(&g_max_ms);   /* 第五轮：按本机实测调度抖动定上限（原固定 60ms） */
     InitializeCriticalSection(&g_log_cs);
     memset(&fw, 0, sizeof(fw)); fw.api_version = OS_API_VERSION; fw.log = fw_log;
     printf("== 驱动 %s\n", DRV_NAME);
