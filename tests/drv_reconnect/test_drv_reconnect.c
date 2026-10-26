@@ -8,6 +8,10 @@
  *  E 卸载：deinit 有界返回。
  * 全程：MCD 调用并发度必须 = 1（MCD 全局锁），不得使用已关闭的 core（stale_use=0）。
  * 环境变量：TEST_STUCK_MS（默认 3000）、TEST_MAX_MS（默认 60）。
+ * 时延上限：默认 60ms（50ms 锁等待 + 10ms 余量），所有平台相同。驱动用 QPC 截止 + SwitchToThread/
+ * Sleep(0) + 末段自旋等锁，正常机器上超时误差为微秒级。仅当 _WIN32 下开测前的“精度自检”发现
+ * 本机让出 CPU 的误差 > 10ms（CPU 被占满 / 虚拟机调度抖动，精确等待无法保证）时，才放宽到 100ms，
+ * 并打印 WARN。显式设置 TEST_MAX_MS 时以环境变量为准，不做自检。
  */
 #include "pre.h"
 #include <stdio.h>
@@ -35,6 +39,49 @@ static void fw_log(int lv, const char* fmt, ...)
     LeaveCriticalSection(&g_log_cs);
 }
 #define CHECK(c, ...) do { if (!(c)) { g_fail++; printf("  FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
+
+#ifdef _WIN32
+/* 精度自检：另一线程占住锁，测本线程 20ms 限时等锁的超时误差（最坏值，ms） */
+static CRITICAL_SECTION g_cal_cs;
+static volatile LONG g_cal_stop;
+static DWORD WINAPI cal_holder(LPVOID p)
+{
+    (void)p;
+    EnterCriticalSection(&g_cal_cs);
+    while (!InterlockedCompareExchange(&g_cal_stop, 0, 0)) Sleep(5);
+    LeaveCriticalSection(&g_cal_cs);
+    return 0;
+}
+static long precision_selftest(void)
+{
+    LARGE_INTEGER f, a, b; long worst = 0; int i; HANDLE h;
+    InitializeCriticalSection(&g_cal_cs);
+    h = CreateThread(NULL, 0, cal_holder, NULL, 0, NULL);
+    Sleep(20);
+    QueryPerformanceFrequency(&f);
+    for (i = 0; i < 10; i++) {
+        LONGLONG dl;
+        QueryPerformanceCounter(&a);
+        dl = a.QuadPart + f.QuadPart * 20 / 1000;
+        for (;;) {   /* 与 drv_try_cs_until 同一策略 */
+            LONGLONG left;
+            if (TryEnterCriticalSection(&g_cal_cs)) { LeaveCriticalSection(&g_cal_cs); break; }
+            QueryPerformanceCounter(&b);
+            left = dl - b.QuadPart;
+            if (left <= 0) break;
+            if (left > f.QuadPart / 50) Sleep(1);
+            else if (left > f.QuadPart / 2000) { if (!SwitchToThread()) Sleep(0); }
+            else YieldProcessor();
+        }
+        QueryPerformanceCounter(&b);
+        { long over = (long)((b.QuadPart - a.QuadPart) * 1000 / f.QuadPart) - 20; if (over > worst) worst = over; }
+    }
+    InterlockedExchange(&g_cal_stop, 1);
+    WaitForSingleObject(h, INFINITE); CloseHandle(h);
+    DeleteCriticalSection(&g_cal_cs);
+    return worst;
+}
+#endif
 
 static int cmd(int c, void* in, void* out) { return M->command(NULL, c, in, out); }
 
@@ -99,8 +146,18 @@ int main(void)
     OS_Framework fw; void* ctx = NULL; OS_ConnectCfg cfg; Stat st; HANDLE th;
     long stuck = getenv("TEST_STUCK_MS") ? atol(getenv("TEST_STUCK_MS")) : 3000;
     int rc, c; ULONGLONG t0; LONG trig0;
-    if (getenv("TEST_MAX_MS")) g_max_ms = atol(getenv("TEST_MAX_MS"));
     setvbuf(stdout, NULL, _IONBF, 0);
+    if (getenv("TEST_MAX_MS")) g_max_ms = atol(getenv("TEST_MAX_MS"));
+#ifdef _WIN32
+    else {
+        long over = precision_selftest();
+        printf("[0] 精度自检：20ms 限时等锁最坏超时误差 %ldms\n", over);
+        if (over > 10) {
+            g_max_ms = 100;
+            printf("    WARN: 本机无法保证精确等待（CPU 饱和/调度抖动），UI 时延上限放宽到 100ms\n");
+        }
+    }
+#endif
     InitializeCriticalSection(&g_log_cs);
     memset(&fw, 0, sizeof(fw)); fw.api_version = OS_API_VERSION; fw.log = fw_log;
     M = os_module_get();

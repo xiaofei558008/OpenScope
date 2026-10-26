@@ -20,12 +20,12 @@
 #include <string.h>
 #include "module_api.h"
 
-#if defined(_MSC_VER)
-#pragma warning(disable: 4505)  /* 未引用的 static 函数（header-only） */
-#endif
-#if defined(__GNUC__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-function"
+/* header-only：全部函数声明为 static inline（DRV_FN）。未被某个驱动引用的 inline 函数
+ * 不会触发 MSVC C4505 / gcc -Wunused-function，因此不需要任何 pragma 关警告。 */
+#if defined(_MSC_VER) && !defined(__cplusplus)
+#define DRV_FN static __inline
+#else
+#define DRV_FN static inline
 #endif
 
 #ifndef OS_ERR_AGAIN
@@ -33,6 +33,15 @@
 #endif
 #ifndef OS_DRV_UI_LOCK_MS
 #define OS_DRV_UI_LOCK_MS 50
+#endif
+/* 限时等锁的“粗睡”阈值：剩余时间 > 此值才 Sleep(1)（Windows 默认时钟粒度 15.6ms，
+ * Sleep(1) 实际可能睡满一个 tick）；剩余 ≤ 此值改为 SwitchToThread/Sleep(0) 让出，
+ * 最后 OS_DRV_SPIN_US 微秒纯自旋，保证在截止时刻（QPC）准时返回。 */
+#ifndef OS_DRV_COARSE_MS
+#define OS_DRV_COARSE_MS 20
+#endif
+#ifndef OS_DRV_SPIN_US
+#define OS_DRV_SPIN_US 500
 #endif
 #ifndef OS_DRV_SMALL_IO
 #define OS_DRV_SMALL_IO 256   /* ≤ 此字节数的读/写走限时锁（UI 读局部变量、断点 FPB 写等） */
@@ -53,15 +62,42 @@ typedef struct OS_DrvGuard {
 #endif
 } OS_DrvGuard;
 
-static ULONGLONG drv_now_ms(void)
+DRV_FN LONGLONG drv_qpc(void)
 {
-    LARGE_INTEGER f, c;
-    QueryPerformanceFrequency(&f);
+    LARGE_INTEGER c;
     QueryPerformanceCounter(&c);
-    return (ULONGLONG)(c.QuadPart / (f.QuadPart / 1000 ? f.QuadPart / 1000 : 1));
+    return (LONGLONG)c.QuadPart;
 }
 
-static void drv_guard_init(OS_DrvGuard* g, CRITICAL_SECTION* cs, int (*fn)(void), DWORD min_interval_ms)
+DRV_FN LONGLONG drv_qpf(void)
+{
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);   /* 开机后恒定；每次查询，避免 static 缓存的数据竞争 */
+    return f.QuadPart > 0 ? (LONGLONG)f.QuadPart : 1;
+}
+
+DRV_FN ULONGLONG drv_now_ms(void)
+{
+    LONGLONG f = drv_qpf(), c = drv_qpc();
+    return (ULONGLONG)(c / (f / 1000 ? f / 1000 : 1));
+}
+
+/* 现在起 ms 毫秒后的 QPC 截止时刻 */
+DRV_FN LONGLONG drv_deadline(DWORD ms)
+{
+    return drv_qpc() + (LONGLONG)ms * drv_qpf() / 1000;
+}
+
+DRV_FN void drv_cpu_relax(void)
+{
+#if defined(_MSC_VER)
+    YieldProcessor();
+#elif defined(__i386__) || defined(__x86_64__)
+    __builtin_ia32_pause();
+#endif
+}
+
+DRV_FN void drv_guard_init(OS_DrvGuard* g, CRITICAL_SECTION* cs, int (*fn)(void), DWORD min_interval_ms)
 {
     char env[16];
     DWORD n;
@@ -78,39 +114,61 @@ static void drv_guard_init(OS_DrvGuard* g, CRITICAL_SECTION* cs, int (*fn)(void)
     }
 }
 
-static int drv_is_owner(OS_DrvGuard* g)
+DRV_FN int drv_is_owner(OS_DrvGuard* g)
 {
     return InterlockedCompareExchange(&g->owner_tid, 0, 0) == (LONG)GetCurrentThreadId();
 }
 
-static int drv_is_reconnecting(OS_DrvGuard* g)
+DRV_FN int drv_is_reconnecting(OS_DrvGuard* g)
 {
     return InterlockedCompareExchange(&g->reconnecting, 0, 0) != 0 && !drv_is_owner(g);
 }
 
-/* 限时加锁。成功返回 OS_ERR_OK（持有 cs）；否则 OS_ERR_AGAIN（未持锁）。 */
-static int drv_lock_timed(OS_DrvGuard* g, DWORD timeout_ms)
+/* 精确限时 TryEnter：在 QPC 截止时刻 deadline 之前拿到 cs 返回 1，否则 0。
+ * check_reconn=1 时，一旦发现正在重连立刻放弃（返回 0，不持锁）。
+ * 等待策略（Windows 计时粒度 15.6ms 的修正）：
+ *   剩余 > OS_DRV_COARSE_MS   → Sleep(1)（可能睡满 15.6ms，但离截止还远，不会越界）
+ *   剩余 > OS_DRV_SPIN_US     → SwitchToThread()，无可让线程时 Sleep(0)
+ *   最后 OS_DRV_SPIN_US 微秒  → 纯自旋（pause）
+ * 截止判断只用 QPC，因此超时返回的误差 = 一次 TryEnter + 一次让出，CPU 不饱和时为微秒级。 */
+DRV_FN int drv_try_cs_until(OS_DrvGuard* g, CRITICAL_SECTION* cs, LONGLONG deadline, int check_reconn)
 {
-    ULONGLONG t0 = drv_now_ms();
-    unsigned spins = 0;
+    LONGLONG f = drv_qpf();
+    LONGLONG coarse = f * OS_DRV_COARSE_MS / 1000;
+    LONGLONG spin = f * OS_DRV_SPIN_US / 1000000;
     for (;;) {
-        if (drv_is_reconnecting(g)) return OS_ERR_AGAIN;
-        if (TryEnterCriticalSection(g->cs)) {
-            if (drv_is_reconnecting(g)) { LeaveCriticalSection(g->cs); return OS_ERR_AGAIN; }
-            return OS_ERR_OK;
-        }
-        if (drv_now_ms() - t0 >= timeout_ms) return OS_ERR_AGAIN;
-        if (++spins < 16) SwitchToThread(); else Sleep(1);
+        LONGLONG left;
+        if (check_reconn && g && drv_is_reconnecting(g)) return 0;
+        if (TryEnterCriticalSection(cs)) return 1;
+        left = deadline - drv_qpc();
+        if (left <= 0) return 0;
+        if (left > coarse) Sleep(1);
+        else if (left > spin) { if (!SwitchToThread()) Sleep(0); }
+        else drv_cpu_relax();
     }
 }
 
-static int drv_lock_ui(OS_DrvGuard* g)
+/* 限时加锁。成功返回 OS_ERR_OK（持有 cs）；否则 OS_ERR_AGAIN（未持锁）。 */
+DRV_FN int drv_lock_until(OS_DrvGuard* g, LONGLONG deadline)
+{
+    if (drv_is_reconnecting(g)) return OS_ERR_AGAIN;
+    if (!drv_try_cs_until(g, g->cs, deadline, 1)) return OS_ERR_AGAIN;
+    if (drv_is_reconnecting(g)) { LeaveCriticalSection(g->cs); return OS_ERR_AGAIN; }
+    return OS_ERR_OK;
+}
+
+DRV_FN int drv_lock_timed(OS_DrvGuard* g, DWORD timeout_ms)
+{
+    return drv_lock_until(g, drv_deadline(timeout_ms));
+}
+
+DRV_FN int drv_lock_ui(OS_DrvGuard* g)
 {
     return drv_lock_timed(g, (DWORD)g->ui_lock_ms);
 }
 
 /* 工作线程（采集）用的阻塞加锁：仍然尊重 reconnecting（返回 AGAIN），但锁本身会等。 */
-static int drv_lock_worker(OS_DrvGuard* g)
+DRV_FN int drv_lock_worker(OS_DrvGuard* g)
 {
     if (drv_is_reconnecting(g)) return OS_ERR_AGAIN;
     EnterCriticalSection(g->cs);
@@ -118,23 +176,23 @@ static int drv_lock_worker(OS_DrvGuard* g)
     return OS_ERR_OK;
 }
 
-static void drv_unlock(OS_DrvGuard* g) { LeaveCriticalSection(g->cs); }
+DRV_FN void drv_unlock(OS_DrvGuard* g) { LeaveCriticalSection(g->cs); }
 
 /* 同步独占（用户点 CONNECT）：成功返回 OS_ERR_OK，已有重连在跑则 OS_ERR_AGAIN。 */
-static int drv_begin_exclusive(OS_DrvGuard* g)
+DRV_FN int drv_begin_exclusive(OS_DrvGuard* g)
 {
     if (InterlockedCompareExchange(&g->reconnecting, 1, 0) != 0) return OS_ERR_AGAIN;
     InterlockedExchange(&g->owner_tid, (LONG)GetCurrentThreadId());
     return OS_ERR_OK;
 }
 
-static void drv_end_exclusive(OS_DrvGuard* g)
+DRV_FN void drv_end_exclusive(OS_DrvGuard* g)
 {
     InterlockedExchange(&g->owner_tid, 0);
     InterlockedExchange(&g->reconnecting, 0);
 }
 
-static DWORD WINAPI drv_reconnect_thread(LPVOID p)
+DRV_FN DWORD WINAPI drv_reconnect_thread(LPVOID p)
 {
     OS_DrvGuard* g = (OS_DrvGuard*)p;
 #ifdef _WIN32
@@ -151,7 +209,7 @@ static DWORD WINAPI drv_reconnect_thread(LPVOID p)
 
 /* 请求后台重连（节流 min_interval_ms；已在跑则不重复）。总是立即返回。
  * 返回 OS_ERR_AGAIN（重连已在进行/已启动）或 OS_ERR_NOT_CONNECTED（节流中）。 */
-static int drv_kick_reconnect(OS_DrvGuard* g)
+DRV_FN int drv_kick_reconnect(OS_DrvGuard* g)
 {
     LONG now = (LONG)(DWORD)drv_now_ms();
     LONG last;
@@ -181,7 +239,7 @@ static int drv_kick_reconnect(OS_DrvGuard* g)
 }
 
 /* 卸载前调用：等后台重连结束（最多 wait_ms）。返回 1 表示线程已结束，0 表示仍在跑。 */
-static int drv_guard_shutdown(OS_DrvGuard* g, DWORD wait_ms)
+DRV_FN int drv_guard_shutdown(OS_DrvGuard* g, DWORD wait_ms)
 {
     int done = 1;
     HANDLE h;
@@ -198,9 +256,5 @@ static int drv_guard_shutdown(OS_DrvGuard* g, DWORD wait_ms)
     }
     return done;
 }
-
-#if defined(__GNUC__)
-#pragma GCC diagnostic pop
-#endif
 
 #endif /* OS_DRV_GUARD_H */

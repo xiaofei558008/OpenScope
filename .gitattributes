@@ -1,0 +1,3 @@
+# Windows 批处理必须 CRLF：cmd.exe 解析 LF 行尾的 .bat 时，标签/goto、^ 续行、多字节注释会错位
+*.bat text eol=crlf
+*.cmd text eol=crlf

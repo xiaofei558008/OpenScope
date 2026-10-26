@@ -77,16 +77,13 @@ static void das_unlock(void) { LeaveCriticalSection(&g_mcd_cs); LeaveCriticalSec
 static void das_mcd_enter(void) { EnterCriticalSection(&g_mcd_cs); }
 static void das_mcd_leave(void) { LeaveCriticalSection(&g_mcd_cs); }
 
-/* UI 路径：重连中或 ~50ms 内拿不到 cs+MCD 锁 → OS_ERR_AGAIN */
+/* UI 路径：重连中或 ~50ms 内拿不到 cs+MCD 锁 → OS_ERR_AGAIN。
+ * 两把锁共用一个 QPC 截止时刻（原先各自计时 + Sleep(1)，Windows 上最坏 50+15.6+… ms）。 */
 static int das_lock_ui(void)
 {
-    ULONGLONG t0 = drv_now_ms();
-    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;
-    for (;;) {
-        if (TryEnterCriticalSection(&g_mcd_cs)) return OS_ERR_OK;
-        if (drv_now_ms() - t0 >= (ULONGLONG)g_guard.ui_lock_ms) break;
-        Sleep(1);
-    }
+    LONGLONG dl = drv_deadline((DWORD)g_guard.ui_lock_ms);
+    if (drv_lock_until(&g_guard, dl) != OS_ERR_OK) return OS_ERR_AGAIN;
+    if (drv_try_cs_until(NULL, &g_mcd_cs, dl, 0)) return OS_ERR_OK;
     LeaveCriticalSection(&g_ctx.cs);
     return OS_ERR_AGAIN;
 }
