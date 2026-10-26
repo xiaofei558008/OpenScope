@@ -36,6 +36,8 @@
 #define OS_ERR_CANCELED      -6
 #define OS_ERR_BUSY          -7  /* 资源占用（如断点槽满） */
 #define OS_ERR_UNSUPPORTED   -8  /* 驱动/目标不支持该命令 */
+#define OS_ERR_AGAIN         -9  /* 驱动暂时忙（正在重连，或拿不到会话锁超过 ~50ms）：不是错误，稍后重试。
+                                    * 与 OS_ERR_BUSY（断点槽满 / 核运行中）区分，UI 对它不弹框 */
 
 /* OS_Module::command 命令号
  * 注：Bug14 已删除 OS_CMD_CONFIGURE（弹芯片配置对话框），连接配置一律由主界面

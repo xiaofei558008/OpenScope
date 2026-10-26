@@ -13,6 +13,7 @@
  */
 #include "jlink.h"
 #include "module_api.h"
+#include "drv_guard.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -39,6 +40,11 @@ static struct {
 } g_bp[JLINK_BP_MAX];
 
 static JLinkCtx g_ctx;
+/* Bug4：后台重连守卫。重连（DLL 重载 + Open + Connect，可达数秒）只在后台线程、且不持 g_ctx.cs 执行；
+ * UI 命令限时拿锁，重连中 / 50ms 拿不到锁 → OS_ERR_AGAIN。 */
+static OS_DrvGuard g_guard;
+static volatile LONG g_want;   /* 用户 CONNECT 成功后 1，用户 DISCONNECT 后 0；为 0 时不自动重连 */
+static int jlink_reconnect_worker(void);
 static const OS_Framework* g_fw;
 static HMODULE g_hmod;
 
@@ -395,7 +401,7 @@ static int mod_connect_ex(char* err, int errlen)
     return rc;
 }
 
-static int mod_disconnect(void)
+static int jlink_close_session(void)
 {
     OS_JLinkApi* a = &g_ctx.api;
     int i;
@@ -420,6 +426,18 @@ static int mod_disconnect(void)
     memset(&g_ctx.info, 0, sizeof(g_ctx.info));
     if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已断开");
     return OS_ERR_OK;
+}
+
+/* 用户断开：重连进行中时只置标志，由重连线程收尾（不与 Open 并发 Close） */
+static int mod_disconnect(void)
+{
+    InterlockedExchange(&g_want, 0);
+    if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) && !drv_is_owner(&g_guard)) {
+        g_ctx.connected = 0;
+        if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 已断开（后台重连收尾中）");
+        return OS_ERR_OK;
+    }
+    return jlink_close_session();
 }
 
 static int jlink_bp_find(uint32_t addr)
@@ -454,7 +472,7 @@ static int jlink_bp_set(const OS_BpReq* req)
         if (g_fw) g_fw->log(OS_LOG_ERROR, "J-Link 断点: 表已满（最多 %d）", JLINK_BP_MAX);
         return OS_ERR_BUSY;
     }
-    EnterCriticalSection(&g_ctx.cs);
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     handle = g_ctx.api.set_bp_ex(addr, 0xFFFFFFFFu);
     LeaveCriticalSection(&g_ctx.cs);
     if (handle < 0) {
@@ -474,7 +492,7 @@ static int jlink_bp_clear(const OS_BpReq* req)
     if (!req) return OS_ERR_INVALID_ARG;
     if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
     if (req->clear_all) {
-        EnterCriticalSection(&g_ctx.cs);
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
         for (i = 0; i < JLINK_BP_MAX; i++) {
             if (!g_bp[i].addr) continue;
             if (g_ctx.api.clr_bp_ex && g_bp[i].handle >= 0)
@@ -489,7 +507,7 @@ static int jlink_bp_clear(const OS_BpReq* req)
     }
     i = jlink_bp_find(req->address);
     if (i < 0) return OS_ERR_FAIL;
-    EnterCriticalSection(&g_ctx.cs);
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     if (g_ctx.api.clr_bp_ex && g_bp[i].handle >= 0)
         g_ctx.api.clr_bp_ex(g_bp[i].handle);
     LeaveCriticalSection(&g_ctx.cs);
@@ -521,69 +539,68 @@ static int jlink_bp_list(OS_BpList* list)
  * 若每次打日志会 2 条/秒刷屏；采集线程已改为时间基停摆判定，无需每次重连都提醒。 */
 #define OS_JLINK_RECONNECT_LOG_MS 5000
 
-/* 掉线后重连。失败也记下节流时间，避免 Open 返回垃圾值时采集线程空转狂重连。
- * 返回 1 表示已经重新连上。 */
-static int jlink_try_reconnect(void)
+/* 掉线后重连（Bug4：后台线程执行，调用时不持 g_ctx.cs）。返回 OS_ERR_OK 表示已重新连上。 */
+static int jlink_reconnect_worker(void)
 {
     int attempt;
     ULONGLONG now = (ULONGLONG)GetTickCount64();
-    if (now - g_ctx.last_reconnect_ms < OS_JLINK_RECONNECT_MIN_MS)
-        return 0;
-    g_ctx.last_reconnect_ms = now;
+    if (!g_want) return OS_ERR_CANCELED;
     if (g_fw && now - g_ctx.last_reconnect_log_ms >= OS_JLINK_RECONNECT_LOG_MS) {
         g_ctx.last_reconnect_log_ms = now;
-        g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，自动重连恢复");
+        g_fw->log(OS_LOG_WARN, "J-Link 读取失败：连接丢失，后台自动重连");
     }
     if (g_ctx.connected)
-        mod_disconnect();
+        jlink_close_session();
     /* Bug16：高速掉线后 DLL/USB 会话短暂损坏，open 可能返回垃圾值（-488389840）。
-     * 连接路径会整库重载；这里再给 USB 层几次恢复机会。间隔 400ms，三次合计仍落在
-     * 采集线程 3 秒停摆窗口内，避免一次重连就把线程拖死。 */
-    for (attempt = 0; attempt < 3; attempt++) {
-        if (mod_connect_ex(NULL, 0) == OS_ERR_OK)
-            return 1;
+     * 连接路径会整库重载；这里再给 USB 层几次恢复机会（间隔 400ms）。 */
+    for (attempt = 0; attempt < 3 && g_want; attempt++) {
+        if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
+            if (!g_want) { jlink_close_session(); return OS_ERR_CANCELED; }  /* 期间用户断开 */
+            return OS_ERR_OK;
+        }
         if (attempt < 2) Sleep(400);
     }
-    return 0;
+    return OS_ERR_FAIL;
+}
+
+/* 请求后台重连；立即返回 OS_ERR_AGAIN（进行中）或 OS_ERR_NOT_CONNECTED */
+static int jlink_kick(void)
+{
+    if (!g_want) return OS_ERR_NOT_CONNECTED;
+    return drv_kick_reconnect(&g_guard);
+}
+
+static int jlink_io_lock(uint32_t size)
+{
+    return size <= OS_DRV_SMALL_IO ? drv_lock_ui(&g_guard) : drv_lock_worker(&g_guard);
 }
 
 static int mod_read(OS_MemReq* req)
 {
     OS_JLinkApi* a = &g_ctx.api;
-    int r, attempt, retried = 0;
+    int r, attempt;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
     if (!a->h) return OS_ERR_NOT_CONNECTED;
-    if (!g_ctx.connected) {
-        /* 采集线程在停摆窗口内会继续调用读。连接标志已清时主动重连，而不是立刻失败。 */
-        if (!jlink_try_reconnect()) return OS_ERR_NOT_CONNECTED;
-        a = &g_ctx.api;
+    /* Bug4：不在调用线程（可能是 UI）里重连；未连接 → 请求后台重连并立即返回 */
+    if (!g_ctx.connected) return jlink_kick();
+    r = 1;
+    for (attempt = 0; attempt < 3; attempt++) {
+        if (jlink_io_lock(req->size) != OS_ERR_OK) return OS_ERR_AGAIN;
+        if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return jlink_kick(); }
+        if (a->h && a->read_mem)
+            r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
+        else
+            r = -1;
+        LeaveCriticalSection(&g_ctx.cs);
+        /* JLINKARM_ReadMem 成功返回 0；失败返回正值（未能读取的字节数）或负错误码。
+         * 严禁用 r>=0 判定成功——失败返回 1 会被当成成功，零缓冲被推为有效样本（Bug 9）。 */
+        if (r == 0) return (int)req->size;
     }
-    for (;;) {
-        r = 1;
-        for (attempt = 0; attempt < 3; attempt++) {
-            EnterCriticalSection(&g_ctx.cs);
-            if (a->h && a->read_mem)
-                r = a->read_mem((uint32_t)req->address, req->size, (uint8_t*)req->data);
-            else
-                r = -1;
-            LeaveCriticalSection(&g_ctx.cs);
-            /* JLINKARM_ReadMem 成功返回 0；失败返回正值（未能读取的字节数）或负错误码。
-             * 严禁用 r>=0 判定成功——失败返回 1 会被当成成功，零缓冲被推为有效样本（Bug 9）。 */
-            if (r == 0) return (int)req->size;
-        }
-        if (retried) break; /* 已重连重试过，不再重试 */
-        /* 探针仍报告已连接时，失败多半是这个地址本身读不了，拆掉会话只会更糟。
-         * 只有 IsConnected==0（或查询函数缺失）才重连。 */
-        if (a->is_connected && a->is_connected())
-            break;
-        if (jlink_try_reconnect()) {
-            a = &g_ctx.api;
-            retried = 1;
-            continue;
-        }
-        break;
-    }
-    return OS_ERR_TIMEOUT;
+    /* 探针仍报告已连接时，失败多半是这个地址本身读不了，拆掉会话只会更糟。
+     * 只有 IsConnected==0（或查询函数缺失）才重连。 */
+    if (a->is_connected && a->is_connected())
+        return OS_ERR_TIMEOUT;
+    return jlink_kick() == OS_ERR_AGAIN ? OS_ERR_AGAIN : OS_ERR_TIMEOUT;
 }
 
 static int mod_write(OS_MemReq* req)
@@ -592,7 +609,7 @@ static int mod_write(OS_MemReq* req)
     int r;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
     if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-    EnterCriticalSection(&g_ctx.cs);
+    if (jlink_io_lock(req->size) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     r = a->write_mem((uint32_t)req->address, req->size, (const uint8_t*)req->data);
     LeaveCriticalSection(&g_ctx.cs);
     /* JLINKARM_WriteMem 返回值因 DLL 版本而异：有的返回 0=成功，有的返回写入
@@ -651,7 +668,7 @@ static int mod_flash_erase(const OS_FlashReq* req)
     OS_JLinkApi* a = &g_ctx.api;
     int rc;
     if (!a->h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-    EnterCriticalSection(&g_ctx.cs);
+    if (drv_lock_worker(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：重连中不烧录 */
     jlink_install_flash_progress();
     if (req && req->device[0]) jlink_set_flash_device(req->device);
     if (a->halt) a->halt();
@@ -687,7 +704,7 @@ static int mod_flash_download(const OS_FlashReq* req)
     if (wide_to_acp(req->path, path8, (int)sizeof(path8)) != 0)
         return OS_ERR_FAIL;
     addr = req->address ? req->address : 0x08000000u;
-    EnterCriticalSection(&g_ctx.cs);
+    if (drv_lock_worker(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：重连中不烧录 */
     jlink_install_flash_progress();
     if (req->device[0]) jlink_set_flash_device(req->device);
     if (a->halt) a->halt();
@@ -733,9 +750,15 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     switch (cmd) {
     case OS_CMD_SCAN:
         return mod_scan((OS_ScanReq*)in);
-    case OS_CMD_CONNECT:
+    case OS_CMD_CONNECT: {
+        int rc;
+        if (drv_begin_exclusive(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;  /* 后台重连中 */
         if (in) memcpy(&g_ctx.cfg, in, sizeof(g_ctx.cfg));
-        return mod_connect_ex(NULL, 0);
+        rc = mod_connect_ex(NULL, 0);
+        InterlockedExchange(&g_want, rc == OS_ERR_OK ? 1 : 0);
+        drv_end_exclusive(&g_guard);
+        return rc;
+    }
     case OS_CMD_DISCONNECT:
         return mod_disconnect();
     case OS_CMD_IS_CONNECTED:
@@ -799,7 +822,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         int bp = -1, i, slot = -1;
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         if (!g_ctx.api.read_reg || !g_ctx.api.go) return OS_ERR_FAIL;
-        EnterCriticalSection(&g_ctx.cs);
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
         lr = g_ctx.api.read_reg(14) & ~1u;
         if (g_ctx.api.set_bp_ex)
             bp = g_ctx.api.set_bp_ex(lr, 0xFFFFFFFFu); /* type=any/default */
@@ -838,7 +861,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         rs->arch = OS_ARCH_ARM_CM;
         if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         if (!g_ctx.api.read_reg || !g_ctx.api.is_halted) return OS_ERR_UNSUPPORTED;
-        EnterCriticalSection(&g_ctx.cs);
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
         if (!g_ctx.api.is_halted()) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_BUSY; }
         for (i = 0; i < 17; i++) {
             rs->value[i] = g_ctx.api.read_reg(i);
@@ -866,8 +889,11 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         st->under_reset = -1;
         st->voltage_mv = -1;
         _snprintf(st->state, sizeof(st->state), "—");
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        EnterCriticalSection(&g_ctx.cs);
+        if (!g_ctx.api.h || !g_ctx.connected) {
+            if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0)) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }
+            return OS_ERR_NOT_CONNECTED;
+        }
+        if (drv_lock_ui(&g_guard) != OS_ERR_OK) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }  /* Bug4 */
         if (g_ctx.api.is_halted) st->halted = g_ctx.api.is_halted() ? 1 : 0;
         if (g_ctx.api.get_hw_status) {
             memset(&hw, 0, sizeof(hw));
@@ -913,6 +939,7 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     (void)out_ctx;
     g_fw = fw;
     InitializeCriticalSection(&g_ctx.cs);
+    drv_guard_init(&g_guard, &g_ctx.cs, jlink_reconnect_worker, OS_JLINK_RECONNECT_MIN_MS);
     memset(&g_ctx.cfg, 0, sizeof(g_ctx.cfg));
     g_ctx.cfg.iface = OS_IF_SWD;
     g_ctx.cfg.speed_khz = 4000;
@@ -929,7 +956,12 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
 static void mod_deinit(void* ctx)
 {
     (void)ctx;
-    mod_disconnect();
+    InterlockedExchange(&g_want, 0);
+    if (!drv_guard_shutdown(&g_guard, 5000)) {
+        if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link: 后台重连 5s 未结束，跳过 DLL 卸载");
+        return;   /* 线程仍在 JLink DLL 里：不能 unbind/删锁 */
+    }
+    jlink_close_session();
     os_jlink_unbind(&g_ctx.api);
     DeleteCriticalSection(&g_ctx.cs);
 }

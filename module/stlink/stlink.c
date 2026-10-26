@@ -14,6 +14,7 @@
  */
 #include "stlink.h"
 #include "module_api.h"
+#include "drv_guard.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,6 +38,10 @@ typedef struct StLinkCtx {
 } StLinkCtx;
 
 static StLinkCtx g_ctx;
+/* Bug4：后台重连守卫（同 jlink/das）：重连不在调用线程、不持 g_ctx.cs；UI 命令限时拿锁 → OS_ERR_AGAIN */
+static OS_DrvGuard g_guard;
+static volatile LONG g_want;
+static int stlink_reconnect_worker(void);
 static const OS_Framework* g_fw;
 /* 仅在 massErase/downloadFile 期间转发 loadBar；connectStLink 也会打进度，会误显示 100% */
 static volatile LONG g_accept_flash_progress;
@@ -606,14 +611,16 @@ static int stlink_reg_read(OS_RegSet* rs)
     if (!g_ctx.api.read_cortex_reg) return OS_ERR_UNSUPPORTED;
     memset(&mreq, 0, sizeof(mreq));
     mreq.address = 0xE000EDF0u; mreq.size = 4; mreq.data = buf;
-    if (mod_read(&mreq) < 0) return OS_ERR_FAIL;
+    { int rr = mod_read(&mreq); if (rr == OS_ERR_AGAIN) return OS_ERR_AGAIN; if (rr < 0) return OS_ERR_FAIL; }
     dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
     if (!(dhcsr & (1u << 17))) return OS_ERR_BUSY; /* 运行中：不读（readCortexReg 可能强制 halt） */
+    if (drv_lock_ui(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：寄存器读也串行化 */
     for (i = 0; i < 17; i++) {
         v = 0;
         if (g_ctx.api.read_cortex_reg(i, &v) == 0) { rs->value[i] = v; rs->valid[i] = 1; }
         _snprintf(rs->name[i], sizeof(rs->name[i]) - 1, "%s", nm[i]);
     }
+    LeaveCriticalSection(&g_ctx.cs);
     rs->count = 17;
     return OS_ERR_OK;
 }
@@ -859,7 +866,7 @@ static int mod_scan(OS_ScanReq* req)
     return OS_ERR_OK;
 }
 
-static int mod_disconnect(void)
+static int stlink_close_session(void)
 {
     int i;
     if (g_ctx.api.h && g_ctx.connected) {
@@ -878,44 +885,68 @@ static int mod_disconnect(void)
     return OS_ERR_OK;
 }
 
+static int mod_disconnect(void)
+{
+    InterlockedExchange(&g_want, 0);
+    if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) && !drv_is_owner(&g_guard)) {
+        g_ctx.connected = 0;   /* 重连线程看到 g_want=0 会自行收尾 */
+        if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 已断开（后台重连收尾中）");
+        return OS_ERR_OK;
+    }
+    return stlink_close_session();
+}
+
+/* 后台重连线程（不持 g_ctx.cs 进入） */
+static int stlink_reconnect_worker(void)
+{
+    ULONGLONG now = (ULONGLONG)GetTickCount64();
+    if (!g_want) return OS_ERR_CANCELED;
+    if (g_fw && now - g_ctx.last_reconnect_log_ms >= OS_STLINK_RECONNECT_LOG_MS) {
+        g_ctx.last_reconnect_log_ms = now;
+        g_fw->log(OS_LOG_WARN, "ST-Link 读取失败：连接丢失，后台自动重连");
+    }
+    stlink_close_session();
+    if (mod_connect_ex(NULL, 0) != OS_ERR_OK) return OS_ERR_FAIL;
+    g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
+    if (!g_want) { stlink_close_session(); return OS_ERR_CANCELED; }
+    return OS_ERR_OK;
+}
+
+static int stlink_kick(void)
+{
+    if (!g_want) return OS_ERR_NOT_CONNECTED;
+    return drv_kick_reconnect(&g_guard);
+}
+
+static int stlink_io_lock(uint32_t size)
+{
+    return size <= OS_DRV_SMALL_IO ? drv_lock_ui(&g_guard) : drv_lock_worker(&g_guard);
+}
+
 static int mod_read(OS_MemReq* req)
 {
     unsigned char* p = NULL;
-    int r, retried = 0, attempt;
+    int r, attempt;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
-    if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-    for (;;) {
-        r = -1;
+    if (!g_ctx.api.h) return OS_ERR_NOT_CONNECTED;
+    if (!g_ctx.connected) return stlink_kick();   /* 掉线：请求后台重连（节流），立即返回 */
+    r = -1;
+    for (attempt = 0; attempt < 3; attempt++) {
+        if (stlink_io_lock(req->size) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
         p = NULL;
-        for (attempt = 0; attempt < 3; attempt++) {
-            EnterCriticalSection(&g_ctx.cs);
-            /* readMemory 双重指针：DLL 分配缓冲回填，成功返回 0 */
-            r = g_ctx.api.read_memory((unsigned int)req->address, &p, req->size);
-            LeaveCriticalSection(&g_ctx.cs);
-            if (r == 0 && p) {
-                memcpy(req->data, p, req->size);
-                if (g_stlink_free) g_stlink_free(p); /* 用 msvcrt 的 free 释放，避免跨 CRT 崩溃/泄漏 */
-                return (int)req->size;
-            }
-            if (p && g_stlink_free) g_stlink_free(p);
-            p = NULL;
+        /* readMemory 双重指针：DLL 分配缓冲回填，成功返回 0 */
+        r = g_ctx.connected ? g_ctx.api.read_memory((unsigned int)req->address, &p, req->size) : -1;
+        LeaveCriticalSection(&g_ctx.cs);
+        if (r == 0 && p) {
+            memcpy(req->data, p, req->size);
+            if (g_stlink_free) g_stlink_free(p); /* 用 msvcrt 的 free 释放，避免跨 CRT 崩溃/泄漏 */
+            return (int)req->size;
         }
-        if (retried) break;
-        if (g_ctx.api.check_device_connection && !g_ctx.api.check_device_connection() &&
-            (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_ms >= OS_STLINK_RECONNECT_MIN_MS) {
-            if (g_fw && (ULONGLONG)GetTickCount64() - g_ctx.last_reconnect_log_ms >= OS_STLINK_RECONNECT_LOG_MS) {
-                g_ctx.last_reconnect_log_ms = (ULONGLONG)GetTickCount64();
-                g_fw->log(OS_LOG_WARN, "ST-Link 读取失败：连接丢失，自动重连恢复");
-            }
-            mod_disconnect();
-            if (mod_connect_ex(NULL, 0) == OS_ERR_OK) {
-                g_ctx.last_reconnect_ms = (ULONGLONG)GetTickCount64();
-                retried = 1;
-                continue;
-            }
-        }
-        break;
+        if (p && g_stlink_free) g_stlink_free(p);
     }
+    /* 连接丢失 → 请求后台重连（Bug4：原先在调用线程里 disconnect+connect，UI 会卡住） */
+    if (g_ctx.api.check_device_connection && !g_ctx.api.check_device_connection())
+        return stlink_kick() == OS_ERR_AGAIN ? OS_ERR_AGAIN : OS_ERR_TIMEOUT;
     return OS_ERR_TIMEOUT;
 }
 
@@ -924,7 +955,7 @@ static int mod_write(OS_MemReq* req)
     int r;
     if (!req || !req->data) return OS_ERR_INVALID_ARG;
     if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-    EnterCriticalSection(&g_ctx.cs);
+    if (stlink_io_lock(req->size) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4 */
     r = g_ctx.api.write_memory((unsigned int)req->address, (char*)req->data, req->size);
     LeaveCriticalSection(&g_ctx.cs);
     return r == 0 ? OS_ERR_OK : OS_ERR_TIMEOUT;
@@ -954,9 +985,15 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     switch (cmd) {
     case OS_CMD_SCAN:
         return mod_scan((OS_ScanReq*)in);
-    case OS_CMD_CONNECT:
+    case OS_CMD_CONNECT: {
+        int rc;
+        if (drv_begin_exclusive(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;  /* 后台重连中 */
         if (in) memcpy(&g_ctx.cfg, in, sizeof(g_ctx.cfg));
-        return mod_connect_ex(NULL, 0);
+        rc = mod_connect_ex(NULL, 0);
+        InterlockedExchange(&g_want, rc == OS_ERR_OK ? 1 : 0);
+        drv_end_exclusive(&g_guard);
+        return rc;
+    }
     case OS_CMD_DISCONNECT:
         return mod_disconnect();
     case OS_CMD_IS_CONNECTED:
@@ -1065,7 +1102,10 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         st->under_reset = -1;
         st->voltage_mv = -1;
         _snprintf(st->state, sizeof(st->state), "—");
-        if (!g_ctx.api.h || !g_ctx.connected) return OS_ERR_NOT_CONNECTED;
+        if (!g_ctx.api.h || !g_ctx.connected) {
+            if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0)) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }
+            return OS_ERR_NOT_CONNECTED;
+        }
         st->voltage_mv = g_ctx.voltage_mv;
         /* DHCSR @ 0xE000EDF0：S_HALT=bit17，S_RESET_ST=bit25；能读通则视为有电 */
         memset(&mreq, 0, sizeof(mreq));
@@ -1073,6 +1113,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         mreq.size = 4;
         mreq.data = buf;
         rc = mod_read(&mreq);
+        if (rc == OS_ERR_AGAIN) { _snprintf(st->state, sizeof(st->state), "BUSY"); return OS_ERR_AGAIN; }  /* Bug4 */
         if (rc >= 0) {
             dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
                     ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
@@ -1084,9 +1125,12 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         /* 仅在已停住时读 PC（readCortexReg 可能强制 halt） */
         if (st->halted == 1 && g_ctx.api.read_cortex_reg) {
             unsigned int pc = 0;
-            if (g_ctx.api.read_cortex_reg(15, &pc) == 0) {
-                st->pc = pc;
-                st->pc_valid = 1;
+            if (drv_lock_ui(&g_guard) == OS_ERR_OK) {   /* Bug4 */
+                if (g_ctx.api.read_cortex_reg(15, &pc) == 0) {
+                    st->pc = pc;
+                    st->pc_valid = 1;
+                }
+                LeaveCriticalSection(&g_ctx.cs);
             }
         }
         if (st->under_reset == 1)
@@ -1108,7 +1152,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         /* CubeProgrammer API massErase 在本机易 AV；统一走 CLI */
         if (!g_ctx.api.h) return OS_ERR_FAIL;
         if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
-        EnterCriticalSection(&g_ctx.cs);
+        if (drv_lock_worker(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：重连中不烧录 */
         /* 勿调用 g_fw->flash_progress：旧宿主 OS_Framework 无此字段会野指针崩溃 */
         rc = stlink_cli_erase(req ? req->reset_run : 1);
         stlink_leave_flash_mode();
@@ -1123,7 +1167,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
         if (!g_ctx.api.h) return OS_ERR_FAIL;
         if (!g_ctx.connected) return OS_ERR_NOT_CONNECTED;
         addr = req->address ? req->address : 0x08000000u;
-        EnterCriticalSection(&g_ctx.cs);
+        if (drv_lock_worker(&g_guard) != OS_ERR_OK) return OS_ERR_AGAIN;   /* Bug4：重连中不烧录 */
         /* CubeProgrammer_API downloadFile 在本机 AV；改走 STM32_Programmer_CLI。
          * 勿调 flash_progress（与旧宿主 ABI 不兼容时会崩在 0x100000000）。 */
         if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 烧录(CLI) '%ls' @0x%08X verify=%d",
@@ -1147,6 +1191,7 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     (void)out_ctx;
     g_fw = fw;
     InitializeCriticalSection(&g_ctx.cs);
+    drv_guard_init(&g_guard, &g_ctx.cs, stlink_reconnect_worker, OS_STLINK_RECONNECT_MIN_MS);
     memset(&g_ctx.cfg, 0, sizeof(g_ctx.cfg));
     g_ctx.cfg.iface = OS_IF_SWD;
     g_ctx.cfg.speed_khz = 4000;
@@ -1167,7 +1212,12 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
 static void mod_deinit(void* ctx)
 {
     (void)ctx;
-    mod_disconnect();
+    InterlockedExchange(&g_want, 0);
+    if (!drv_guard_shutdown(&g_guard, 5000)) {
+        if (g_fw) g_fw->log(OS_LOG_WARN, "ST-Link: 后台重连 5s 未结束，跳过 DLL 卸载");
+        return;
+    }
+    stlink_close_session();
     os_stlink_unbind(&g_ctx.api);
     DeleteCriticalSection(&g_ctx.cs);
 }
