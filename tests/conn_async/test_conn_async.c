@@ -21,11 +21,12 @@ static int fake_cmd(void* ctx, int cmd, void* in, void* out)
     (void)ctx; (void)in;
     switch (cmd) {
     case OS_CMD_CONNECT: {
-        int waited = 0, d = L(&g_delay_ms);
+        /* 按真实耗时计时：Windows 上 Sleep(5) 实际约 15.6 ms，按次数累加会把 1500 ms 拖成约 4.7 s */
+        ULONGLONG t0 = GetTickCount64(), d = (ULONGLONG)L(&g_delay_ms);
         InterlockedExchange(&g_want, 1);
         InterlockedExchange(&g_in_connect, 1);
-        while (waited < d) {
-            Sleep(5); waited += 5;
+        while (GetTickCount64() - t0 < d) {
+            Sleep(5);
             if (!L(&g_ignore_cancel) && !L(&g_want)) { InterlockedExchange(&g_in_connect, 0); return OS_ERR_CANCELED; }
         }
         InterlockedExchange(&g_in_connect, 0);
