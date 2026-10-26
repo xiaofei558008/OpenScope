@@ -2022,6 +2022,42 @@ static void check_elf_mtime(void)
 
 /* ---------- 连接 / 采集 / 记录 ---------- */
 
+/* CONNECT/Attach 碰上驱动后台重连（OS_ERR_AGAIN）：这不是连接失败。状态栏提示“正在后台重连”，
+ * 500 ms 后静默重试同一命令，最多约 15 s；仍忙则提示稍后再试（不弹框、不报“连接失败”）。 */
+#define CONN_PEND_TIMER 7
+static int g_conn_pend = -1;   /* -1 无；0 = 连接；1 = Attach */
+static int g_conn_pend_ticks;
+static void cmd_connect(void);
+static void cmd_attach(void);
+static int connect_again(int attach, int rc)
+{
+    if (rc != OS_ERR_AGAIN) {
+        if (g_conn_pend >= 0) { KillTimer(g_app.hMain, CONN_PEND_TIMER); g_conn_pend = -1; }
+        return 0;
+    }
+    if (g_conn_pend != attach) {
+        g_conn_pend = attach; g_conn_pend_ticks = 0;
+        os_log(OS_LOG_INFO, "驱动正在后台重连，%s请求将在重连结束后自动完成", attach ? "Attach " : "连接");
+    }
+    if (++g_conn_pend_ticks > 30) {
+        KillTimer(g_app.hMain, CONN_PEND_TIMER); g_conn_pend = -1;
+        set_status(0, L"探针仍在后台重连，请稍后再试");
+        os_log(OS_LOG_WARN, "驱动后台重连超过 15 s 未结束，请稍后再试（不是连接失败）");
+    } else {
+        set_status(0, L"探针正在后台重连，请稍候…");
+        SetTimer(g_app.hMain, CONN_PEND_TIMER, 500, NULL);
+    }
+    os_mainwin_update_buttons();
+    return 1;
+}
+static void connect_pending_tick(void)
+{
+    int a = g_conn_pend;
+    KillTimer(g_app.hMain, CONN_PEND_TIMER);
+    if (a < 0 || !g_app.driver || g_app.net_mode) { g_conn_pend = -1; return; }
+    if (a) cmd_attach(); else cmd_connect();
+}
+
 static void cmd_connect(void)
 {
     int rc, c = 0;
@@ -2083,6 +2119,7 @@ static void cmd_connect(void)
         }
     }
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    if (connect_again(0, rc)) return;
     if (rc != OS_ERR_OK) {
         set_status(0, L"连接失败");
         os_log(OS_LOG_ERROR, "连接失败 (rc=%d)，请检查仿真器与目标板", rc);
@@ -2162,6 +2199,7 @@ static void cmd_attach(void)
         _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
     } else _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    if (connect_again(1, rc)) return;
     if (rc != OS_ERR_OK) {
         os_log(OS_LOG_ERROR, "Attach 失败 rc=%d", rc);
         os_mainwin_update_buttons();
@@ -5117,6 +5155,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if (wParam == 1) check_elf_mtime();
         else if (wParam == 2) os_replay_tick();
         else if (wParam == 3) { tree_auto_tick(); os_tab_edit_focus_check(); }
+        else if (wParam == CONN_PEND_TIMER) connect_pending_tick();
         else if (wParam == 6) {   /* Bug4：CPU 状态忙 → 一次性重试 */
             KillTimer(hwnd, 6);
             if (g_app.connected && !g_app.net_mode) refresh_cpu_status();
@@ -5718,6 +5757,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         KillTimer(hwnd, 3);
         KillTimer(hwnd, 4);
         KillTimer(hwnd, 6);
+        KillTimer(hwnd, CONN_PEND_TIMER);
         cps_shutdown();
         g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */
         g_tab_edit_idx = -1;

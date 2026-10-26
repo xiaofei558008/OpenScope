@@ -477,6 +477,15 @@ static int method_connect(const char* params, char* out, int cap)
     }
     g_app.speed_khz = cfg.speed_khz;
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    {   /* 驱动后台重连中（OS_ERR_AGAIN）：本函数在 AI 工作线程，等重连结束再连，最多 15 s；不报 connect failed */
+        DWORD t0 = GetTickCount();
+        while (rc == OS_ERR_AGAIN && GetTickCount() - t0 < 15000) {
+            Sleep(250);
+            rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+        }
+    }
+    if (rc == OS_ERR_AGAIN)
+        return ai_fail(out, cap, rc, "driver is reconnecting in background, retry later");
     if (rc != OS_ERR_OK)
         return ai_fail(out, cap, rc, "connect failed");
     g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
