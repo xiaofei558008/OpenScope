@@ -205,6 +205,7 @@ int os_map_load(const char* utf8_path, OS_MapSym** out, char* err, int errcap)
     char line[2048];
     int lineno = 0;
     int in_memcfg = 0;
+    int in_tasking_syms = 0;   /* 第五轮：TASKING 表格式 map 的 "* Symbols (sorted on name)" 段 */
     if (err && errcap > 0) err[0] = 0;
     if (!utf8_path || !utf8_path[0] || !out) {
         if (err) _snprintf(err, errcap, "路径为空");
@@ -244,6 +245,19 @@ int os_map_load(const char* utf8_path, OS_MapSym** out, char* err, int errcap)
             continue;
         }
         if (in_memcfg) continue;
+        /* 第五轮：TASKING（TriCore）map 是 '|' 分隔的表格；旧解析把 '|' 当名字字符 → 0 个符号。
+         * 只取 "Symbols (sorted on name)" 段：| name | 0xADDR | space |。其它段（Sections 等）
+         * 同时列出 ROM 初始化副本（[.data.x] @0x8xxxxxxx）与 RAM 地址，不能当符号地址用。 */
+        if (strstr(line, "* Symbols (sorted on name)")) { in_tasking_syms = 1; continue; }
+        if (in_tasking_syms && line[0] == '*') {   /* 下一段（"* Symbols (sorted on address)" 等） */
+            in_tasking_syms = 0;
+            continue;
+        }
+        if (line[0] == '|') {
+            char* q;
+            if (!in_tasking_syms) continue;
+            for (q = line; *q; q++) if (*q == '|') *q = ' ';
+        }
         nt = map_split(line, tok, 12);
         if (nt < 2) continue;
         {
