@@ -57,7 +57,55 @@ static OS_SrcWin* src_from(HWND hwnd)
     return s;
 }
 
+/* Bug1: 同一文件的路径可能来自源码树（D:\\a\\b.c）、ELF/IAR 行表（D:\\a/b.c、.\\、大小写不同）
+ * 或布局恢复：统一成绝对、反斜杠、规范化路径后再比较；仍不同则按卷序列号+文件索引判同一文件。 */
+static void src_norm_path(const wchar_t* in, wchar_t* out, int cap)
+{
+    wchar_t tmp[MAX_PATH];
+    int i;
+    DWORD n;
+    if (!in) { if (cap) out[0] = 0; return; }
+    _snwprintf(tmp, MAX_PATH, L"%s", in);
+    tmp[MAX_PATH - 1] = 0;
+    for (i = 0; tmp[i]; i++) if (tmp[i] == L'/') tmp[i] = L'\\';
+    n = GetFullPathNameW(tmp, (DWORD)cap, out, NULL);
+    if (n == 0 || n >= (DWORD)cap) { _snwprintf(out, cap, L"%s", tmp); out[cap - 1] = 0; }
+}
+
+static int src_file_id(const wchar_t* p, BY_HANDLE_FILE_INFORMATION* fi)
+{
+    HANDLE h = CreateFileW(p, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    int ok;
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    ok = GetFileInformationByHandle(h, fi) ? 1 : 0;
+    CloseHandle(h);
+    return ok;
+}
+
+int os_src_same_path(const wchar_t* a, const wchar_t* b)
+{
+    wchar_t na[MAX_PATH], nb[MAX_PATH];
+    BY_HANDLE_FILE_INFORMATION fa, fb;
+    if (!a || !b || !a[0] || !b[0]) return 0;
+    if (_wcsicmp(a, b) == 0) return 1;
+    src_norm_path(a, na, MAX_PATH);
+    src_norm_path(b, nb, MAX_PATH);
+    if (_wcsicmp(na, nb) == 0) return 1;
+    /* 基名不同必不同：避免对每个窗口都打开文件 */
+    {
+        const wchar_t* ba = wcsrchr(na, L'\\'), *bb = wcsrchr(nb, L'\\');
+        ba = ba ? ba + 1 : na; bb = bb ? bb + 1 : nb;
+        if (_wcsicmp(ba, bb) != 0) return 0;
+    }
+    if (src_file_id(na, &fa) && src_file_id(nb, &fb))
+        return fa.dwVolumeSerialNumber == fb.dwVolumeSerialNumber &&
+               fa.nFileIndexHigh == fb.nFileIndexHigh && fa.nFileIndexLow == fb.nFileIndexLow;
+    return 0;
+}
+
 static void src_free_lines(OS_SrcWin* s)
+
 {
     int i;
     if (!s || !s->lines) return;
@@ -141,10 +189,10 @@ static int src_load_file(OS_SrcWin* s, const wchar_t* path)
     free(wide);
     s->line_count = n;
     s->top = 0;
-    _snwprintf(s->path, MAX_PATH, L"%s", path);
+    src_norm_path(path, s->path, MAX_PATH);
     {
-        const wchar_t* base = wcsrchr(path, L'\\');
-        base = base ? base + 1 : path;
+        const wchar_t* base = wcsrchr(s->path, L'\\');
+        base = base ? base + 1 : s->path;
         _snwprintf(s->title, 128, L"%s", base);
         SetWindowTextW(s->hwnd, s->title);
     }
@@ -159,21 +207,38 @@ static int src_has_bp(OS_SrcWin* s, int line1)
     return -1;
 }
 
+/* Bug4 扫查：BP_LIST 是 UI 线程上的同步探针调用（要拿驱动锁）。os_src_refresh_bps/打开窗口会对
+ * 每个源码窗口各调一次；改为 300 ms 内共用一份缓存，本地设/清断点后失效。 */
+static OS_BpInfo g_bpc_items[OS_BP_MAX];
+static int g_bpc_count = -1;
+static ULONGLONG g_bpc_tick;
+static const void* g_bpc_drv;
+static void src_bp_cache_invalidate(void) { g_bpc_count = -1; }
+
 static void src_sync_bps_from_driver(OS_SrcWin* s)
 {
-    OS_BpInfo items[OS_BP_MAX];
+    OS_BpInfo* items = g_bpc_items;
     OS_BpList list;
     char path8[MAX_PATH];
     int i;
     s->bp_count = 0;
     if (!g_app.driver || !g_app.connected || !g_app.driver->command || !g_app.elf)
         return;
-    memset(items, 0, sizeof(items));
     memset(&list, 0, sizeof(list));
-    list.items = items;
-    list.capacity = OS_BP_MAX;
-    if (g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_LIST, NULL, &list) != OS_ERR_OK)
-        return;
+    if (g_bpc_count >= 0 && g_bpc_drv == (const void*)g_app.driver && GetTickCount64() - g_bpc_tick < 300) {
+        list.count = g_bpc_count;
+    } else {
+        memset(g_bpc_items, 0, sizeof(g_bpc_items));
+        list.items = g_bpc_items;
+        list.capacity = OS_BP_MAX;
+        g_bpc_count = -1;
+        if (g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_LIST, NULL, &list) != OS_ERR_OK)
+            return;
+        if (list.count > OS_BP_MAX) list.count = OS_BP_MAX;
+        g_bpc_count = list.count;
+        g_bpc_tick = GetTickCount64();
+        g_bpc_drv = (const void*)g_app.driver;
+    }
     os_wide_to_utf8_buf(s->path, path8, sizeof(path8));
     for (i = 0; i < list.count && s->bp_count < OS_BP_MAX; i++) {
         char file[512];
@@ -212,6 +277,7 @@ static void src_toggle_bp(OS_SrcWin* s, int line1)
         memset(&req, 0, sizeof(req));
         req.address = s->bps[ix].addr;
         rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_CLEAR, &req, NULL);
+        src_bp_cache_invalidate();
         if (rc == OS_ERR_OK) {
             int j;
             for (j = ix; j < s->bp_count - 1; j++) s->bps[j] = s->bps[j + 1];
@@ -269,6 +335,7 @@ static void src_toggle_bp(OS_SrcWin* s, int line1)
     req.address = addr;
     _snprintf(req.note, sizeof(req.note), "%s:%d", path8, line1);
     rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_BP_SET, &req, NULL);
+    src_bp_cache_invalidate();
     if (rc != OS_ERR_OK) {
         const wchar_t* why;
         wchar_t msg[384];
@@ -713,7 +780,7 @@ HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line)
         for (j = 0; j < g_app.wins[i].group_count; j++) {
             HWND w = g_app.wins[i].group[j];
             s = src_from(w);
-            if (s && _wcsicmp(s->path, path) == 0) {
+            if (s && os_src_same_path(s->path, path)) {
                 os_mainwin_select_tab(i);
                 if (goto_line > 0) {
                     s->caret_line = goto_line - 1;
@@ -729,6 +796,10 @@ HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line)
         }
     }
     base = wcsrchr(path, L'\\');
+    {
+        const wchar_t* fs = wcsrchr(path, L'/');
+        if (fs && (!base || fs > base)) base = fs;
+    }
     base = base ? base + 1 : path;
     /* 停靠默认布局里预留的空源码窗口：直接复用（保持其停靠位置） */
     h = NULL;
@@ -758,6 +829,7 @@ HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line)
 void os_src_refresh_bps(void)
 {
     int i, j;
+    src_bp_cache_invalidate();   /* 外部（断点窗/AI）改了断点：重新取一次，之后各窗口共用 */
     for (i = 0; i < g_app.win_count; i++) {
         for (j = 0; j < g_app.wins[i].group_count; j++) {
             OS_SrcWin* s = src_from(g_app.wins[i].group[j]);
@@ -777,7 +849,7 @@ void os_src_set_pc_line(const wchar_t* path, int line1)
             OS_SrcWin* s = src_from(g_app.wins[i].group[j]);
             if (!s) continue;
             if (line1 > 0 && path && path[0] &&
-                _wcsicmp(s->path, path) == 0) {
+                os_src_same_path(s->path, path)) {
                 s->pc_line = line1 - 1;
                 if (s->pc_line < 0) s->pc_line = 0;
                 if (s->pc_line >= s->line_count && s->line_count > 0)

@@ -13,6 +13,8 @@ extern "C" {
 void os_src_register(void);
 HWND os_src_create(HWND parent, int x, int y, int w, int h, const wchar_t* title);
 int  os_src_is(HWND hwnd);
+/* Bug1: 两个路径是否指同一源文件（斜杠/相对/大小写/同一文件索引） */
+int  os_src_same_path(const wchar_t* a, const wchar_t* b);
 /* 打开/切换到指定本机源文件；已打开则聚焦并可选跳行 */
 HWND os_src_open_file(HWND parent_tab, const wchar_t* path, int goto_line);
 /* 刷新所有源码窗断点标记（驱动 BP 变化后） */
