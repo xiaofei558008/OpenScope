@@ -33,7 +33,7 @@ static int s_read(unsigned int a, unsigned char** p, unsigned int n)
     else {
         *p = (unsigned char*)malloc(n ? n : 1);
         memset(*p, 0xAB, n);
-        if (a == 0xE000EDF0u && n >= 4) { uint32_t v = (1u << 17) | 1u; memcpy(*p, &v, 4); }   /* S_HALT | C_DEBUGEN */
+        if (a == 0xE000EDF0u && n >= 4) { uint32_t v = (fk_halted() ? (1u << 17) : 0u) | 1u; memcpy(*p, &v, 4); }   /* S_HALT | C_DEBUGEN */
     }
     fk_leave();
     return r;
@@ -43,6 +43,8 @@ static int s_reset(int m) { (void)m; fk_enter(1); InterlockedIncrement(&g_fk_run
 static int s_execute(unsigned int a) { (void)a; fk_enter(1); fk_leave(); return 0; }
 static OS_StLinkGenInf* s_gen(void) { fk_enter(1); memset(&s_gi, 0, sizeof(s_gi)); strcpy(s_gi.name, "STM32F4FAKE"); strcpy(s_gi.cpu, "Cortex-M4"); fk_leave(); return &s_gi; }
 static int s_runctl(void) { fk_enter(1); InterlockedIncrement(&g_fk_run_ctl); fk_leave(); return 0; }
+static int s_halt(void) { fk_enter(1); fk_halt(); fk_leave(); return 0; }
+static int s_run(void) { fk_enter(1); fk_go(); fk_leave(); return 0; }
 static int s_reg(unsigned int r, unsigned int* v) { fk_enter(1); *v = 0x08000000u + r * 4u; fk_leave(); return 0; }
 static int s_core_state(void) { fk_enter(1); fk_leave(); return 0; }
 
@@ -51,7 +53,7 @@ static const struct { const char* n; void* f; } k_tab[] = {
     {"getStLinkList", (void*)s_get_list}, {"deleteInterfaceList", (void*)s_del_list}, {"connectStLink", (void*)s_connect},
     {"checkDeviceConnection", (void*)s_check}, {"disconnect", (void*)s_disconnect}, {"readMemory", (void*)s_read},
     {"writeMemory", (void*)s_write}, {"reset", (void*)s_reset}, {"execute", (void*)s_execute},
-    {"getDeviceGeneralInf", (void*)s_gen}, {"Halt", (void*)s_runctl}, {"Run", (void*)s_runctl}, {"Step", (void*)s_runctl},
+    {"getDeviceGeneralInf", (void*)s_gen}, {"Halt", (void*)s_halt}, {"Run", (void*)s_run}, {"Step", (void*)s_runctl},
     {"CoreReset", (void*)s_runctl}, {"SystemReset", (void*)s_runctl}, {"readCortexReg", (void*)s_reg}, {"getCoreState", (void*)s_core_state},
 };
 static int s_lib;

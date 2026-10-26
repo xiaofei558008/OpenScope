@@ -57,6 +57,7 @@ static void (*g_stlink_free)(void*); /* msvcrt.dll 的 free（CubeProgrammer_API
 static int mod_scan(OS_ScanReq* req);
 static int mod_connect_ex(char* err, int errlen);
 static int mod_disconnect(void);
+static void so_cancel(void);   /* 第四轮：取消进行中的 StepOut（定义在 StepOut 段） */
 static int mod_read(OS_MemReq* req);
 static int mod_write(OS_MemReq* req);
 
@@ -637,10 +638,30 @@ static int stlink_reg_read(OS_RegSet* rs)
 
 /* 步出：读 LR、在 LR 设临时 FPB、越过当前断点、Run，轮询 DHCSR.S_HALT（≤2s），再清临时断点。
  * 风险2：设置/清理阶段在会话锁内（限时，忙 → OS_ERR_AGAIN）；轮询阶段不持锁（每次 mod_read 短暂拿锁）。 */
-static int stlink_step_out(void)
+/* 第四轮 任务1：StepOut 由宿主工作线程执行（轮询 ≤2s 不再占 UI 线程）。
+ * 同一时刻只允许一个 StepOut（g_so_busy）；HALT / RESET / DISCONNECT / deinit 置 g_so_cancel，
+ * 轮询在下一次（≤10ms）检查时退出并清临时断点，返回 OS_ERR_CANCELED。 */
+static volatile LONG g_so_busy, g_so_cancel;
+static void so_cancel(void) { InterlockedExchange(&g_so_cancel, 1); }
+static int  so_cancelled(void) { return (int)InterlockedCompareExchange(&g_so_cancel, 0, 0); }
+/* deinit 用：取消并等进行中的 StepOut 离开（其收尾最多再等 500ms 锁） */
+static void so_cancel_wait(DWORD ms)
+{
+    LARGE_INTEGER f, t0, t;
+    so_cancel();
+    QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t0);
+    while (InterlockedCompareExchange(&g_so_busy, 0, 0)) {
+        QueryPerformanceCounter(&t);
+        if ((t.QuadPart - t0.QuadPart) * 1000 / f.QuadPart >= (LONGLONG)ms) break;
+        Sleep(1);
+    }
+}
+
+static int stlink_step_out_impl(void)
 {
     unsigned int lr = 0;
-    int i, slot, keep_user = 0, pre;
+    int slot, keep_user = 0, pre, cancelled = 0;
+    LONGLONG dl;
     uint32_t dhcsr;
     OS_MemReq rd;
     uint8_t buf[4];
@@ -667,9 +688,11 @@ static int stlink_step_out(void)
     rd.address = 0xE000EDF0u;
     rd.size = 4;
     rd.data = buf;
-    for (i = 0; i < 200; i++) {
+    /* ≤2s：按 QPC 计时（原先 200×Sleep(10)，Windows 上 Sleep(10)≈15.6ms，实际约 3.1s） */
+    for (dl = drv_deadline(2000); drv_qpc() < dl; ) {
         int r;
         Sleep(10);
+        if (so_cancelled()) { cancelled = 1; break; }   /* 用户 Stop / 断开 / 卸载 */
         r = mod_read(&rd);
         if (r >= 0) {
             dhcsr = (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) |
@@ -690,9 +713,19 @@ static int stlink_step_out(void)
     } else if (g_fw) {
         g_fw->log(OS_LOG_WARN, "ST-Link StepOut: 驱动忙，临时断点稍后清除");
     }
-    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link StepOut: LR=0x%08X%s",
-                        lr, keep_user ? " (保留用户断点)" : "");
-    return OS_ERR_OK;
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link StepOut: LR=0x%08X%s%s",
+                        lr, keep_user ? " (保留用户断点)" : "", cancelled ? "（已取消）" : "");
+    return cancelled ? OS_ERR_CANCELED : OS_ERR_OK;
+}
+
+static int stlink_step_out(void)
+{
+    int rc;
+    if (InterlockedCompareExchange(&g_so_busy, 1, 0) != 0) return OS_ERR_BUSY;   /* 已有 StepOut 在跑 */
+    InterlockedExchange(&g_so_cancel, 0);
+    rc = stlink_step_out_impl();
+    InterlockedExchange(&g_so_busy, 0);
+    return rc;
 }
 
 /* 未使用：烧录已改走 STM32_Programmer_CLI（见下）。保留 API 路径代码备查；默认不编译，
@@ -916,6 +949,7 @@ static int stlink_close_session(void)
 
 static int mod_disconnect(void)
 {
+    so_cancel();
     InterlockedExchange(&g_want, 0);
     if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) && !drv_is_owner(&g_guard)) {
         /* 连接/重连线程正在 DLL 里：不碰 connected（否则它收尾时跳过 disconnect，会话泄漏）；
@@ -1030,6 +1064,8 @@ static int stlink_not_conn_rc(void)
 static int stlink_run_ctl(int cmd)
 {
     int rc = OS_ERR_FAIL;
+    if (cmd == OS_CMD_HALT || cmd == OS_CMD_RESET || cmd == OS_CMD_RESET_RUN)
+        so_cancel();   /* 进行中的 StepOut 停止等待（先于拿锁，StepOut 轮询期间不持锁） */
     ST_UI_ENTER();
     switch (cmd) {
     case OS_CMD_HALT:
@@ -1294,6 +1330,7 @@ static void mod_deinit(void* ctx)
     const OS_Framework* fw = g_fw;   /* 交接后 g_fw 归收尾线程所有，这里只用副本 */
     (void)ctx;
     InterlockedExchange(&g_want, 0);   /* 正在进行的连接/重连在下一个取消点放弃 */
+    so_cancel_wait(1000);              /* StepOut 轮询不持锁：先让它退出，再删锁 */
     if (!drv_guard_shutdown_or_orphan(&g_guard, 5000, stlink_final_cleanup)) {
         /* 风险1：线程卡在 CubeProgrammer_API 的单个调用里。不阻塞宿主；收尾已交接给该线程 */
         if (fw) fw->log(OS_LOG_WARN, "ST-Link: 连接/重连 5s 未结束，卸载收尾已交给后台线程");

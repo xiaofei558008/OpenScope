@@ -25,6 +25,7 @@
 #include "workspace.h"
 #include "xcpsym.h"
 #include "conn_async.h"
+#include "cmd_async.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <stdio.h>
@@ -209,6 +210,8 @@ static OS_ConnJob* g_conn_job;
 /* 第三轮遗留项：后台连接中不允许刷新仿真器列表 / 切换驱动（job 持有 drv+ctx；将来驱动热重载时 ctx 可能失效）。
  * 主线程读写 g_conn_job；AI 线程只读指针做判断（误差最多一条消息）。 */
 int os_mainwin_connecting(void) { return *(OS_ConnJob* volatile*)&g_conn_job != NULL; }
+/* 第四轮 任务1：进行中的后台 StepOut（NULL = 无）。只在主线程读写 */
+static OS_CmdJob* g_step_job;
 
 static const wchar_t* g_main_class = L"OpenScopeMain";
 static const wchar_t* g_right_class = L"OSRightPanel";
@@ -631,21 +634,22 @@ void os_mainwin_update_buttons(void)
         ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay && !connecting &&
             (!ap || ap->kind == OS_PROJ_PROBE));
         ENB(IDC_BTN_DISCON, conn || connecting || (ap && ap->kind == OS_PROJ_XCP && g_app.xcp_connected));
-        ENB(IDC_CFG_DRIVER, !connecting);               /* 连接中不可切驱动/刷新 */
-        ENB(IDC_CFG_REFRESH, !connecting && !g_app.net_mode);
+        int stepping = g_step_job != NULL;     /* 后台 StepOut 中：只留 Stop（= 取消）/ 断开 */
+        ENB(IDC_CFG_DRIVER, !connecting && !stepping);  /* 连接/步出中不可切驱动/刷新 */
+        ENB(IDC_CFG_REFRESH, !connecting && !stepping && !g_app.net_mode);
         /* Flash/CPU 仅对探针 Project */
-        ENB(IDC_BTN_CPU_RUN, probe_ok && !replay);
-        ENB(IDC_BTN_CPU_STOP, probe_ok && !replay);
-        ENB(IDC_BTN_CPU_RHALT, probe_ok && !replay);
-        ENB(IDC_BTN_CPU_STEP, probe_ok && !replay);
-        ENB(IDC_BTN_CPU_STEPIN, probe_ok && !replay);
-        ENB(IDC_BTN_CPU_STEPOUT, probe_ok && !replay);
-        ENB(IDC_BTN_CPU_STEPOVER, probe_ok && !replay);
-        ENB(IDC_BTN_BP, probe_ok && !replay);
+        ENB(IDC_BTN_CPU_RUN, probe_ok && !replay && !stepping);
+        ENB(IDC_BTN_CPU_STOP, (probe_ok && !replay) || stepping);
+        ENB(IDC_BTN_CPU_RHALT, probe_ok && !replay && !stepping);
+        ENB(IDC_BTN_CPU_STEP, probe_ok && !replay && !stepping);
+        ENB(IDC_BTN_CPU_STEPIN, probe_ok && !replay && !stepping);
+        ENB(IDC_BTN_CPU_STEPOUT, probe_ok && !replay && !stepping);
+        ENB(IDC_BTN_CPU_STEPOVER, probe_ok && !replay && !stepping);
+        ENB(IDC_BTN_BP, probe_ok && !replay && !stepping);
         ENB(IDC_BTN_START, any && g_app.watch_count > 0 && !running && !replay);
         ENB(IDC_BTN_STOP, running);
         ENB(IDC_BTN_LOGSTART, !replay);
-        ENB(IDC_BTN_FLASH, probe_ok && !replay);
+        ENB(IDC_BTN_FLASH, probe_ok && !replay && !stepping);
         ENB(IDC_BTN_REPLAY, !running && !replay);
         ENB(IDC_BTN_REPLAYSTOP, replay);
         ENB(IDC_BTN_OPEN, 1);
@@ -2285,8 +2289,19 @@ static void cmd_cpu_ctrl(int cmd, const wchar_t* ok_msg)
 {
     int rc;
     if (g_app.net_mode) return;
+    if (g_step_job && cmd != OS_CMD_HALT) {
+        /* 步出进行中：只接受 Stop（= 取消步出）。菜单/快捷键也可能走到这里 */
+        set_status(0, L"正在步出…（按「停止」取消）");
+        return;
+    }
     if (!g_app.driver || !g_app.connected) {
         MessageBoxW(g_app.hMain, L"请先连接或 Attach", L"CPU", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    if (cmd == OS_CMD_HALT && g_step_job && g_step_job->drv != g_app.driver) {
+        /* 期间切了 Project：Stop 打到正在步出的那个驱动 */
+        rc = g_step_job->drv->command(g_step_job->ctx, cmd, NULL, NULL);
+        os_log(OS_LOG_INFO, "CPU: Stop（取消步出）rc=%d", rc);
         return;
     }
     rc = g_app.driver->command(g_app.driver_ctx, cmd, NULL, NULL);
@@ -2296,6 +2311,52 @@ static void cmd_cpu_ctrl(int cmd, const wchar_t* ok_msg)
     } else {
         os_log(OS_LOG_ERROR, "CPU 控制失败 cmd=%d rc=%d", cmd, rc);
     }
+}
+
+/* 第四轮 任务1：StepOut 在工作线程执行（驱动轮询 DHCSR 最多 2s），完成经 WM_OS_STEPOUT_DONE 回主线程。
+ * 取消：Stop（驱动 HALT）或断开（驱动 DISCONNECT），驱动 ≤10ms 内返回 OS_ERR_CANCELED。 */
+static void cmd_step_out(void)
+{
+    if (g_app.net_mode) return;
+    if (g_step_job) { set_status(0, L"正在步出…（按「停止」取消）"); return; }   /* 重复点击 */
+    if (!g_app.driver || !g_app.connected) {
+        MessageBoxW(g_app.hMain, L"请先连接或 Attach", L"CPU", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    g_step_job = os_cmd_start(g_app.driver, g_app.driver_ctx, OS_CMD_STEP_OUT,
+                              os_modmgr_driver_index(), g_app.hMain, WM_OS_STEPOUT_DONE);
+    if (!g_step_job) {
+        os_log(OS_LOG_ERROR, "Step Out 失败：无法创建线程");
+        return;
+    }
+    set_status(0, L"正在步出…（按「停止」取消）");
+    os_mainwin_update_buttons();
+}
+
+static void on_step_out_done(OS_CmdJob* job)
+{
+    int rc;
+    if (!job) return;
+    if (job != g_step_job) { os_cmd_finish(job, 1000); return; }
+    g_step_job = NULL;
+    rc = job->rc;
+    if (rc == OS_ERR_OK) {
+        os_log(OS_LOG_INFO, "CPU: Step Out");
+        set_status(0, L"步出完成");
+    } else if (rc == OS_ERR_CANCELED) {
+        os_log(OS_LOG_INFO, "CPU: Step Out 已取消");
+        set_status(0, L"步出已取消");
+    } else if (rc == OS_ERR_AGAIN) {
+        os_log(OS_LOG_INFO, "CPU: 驱动忙（后台重连中），Step Out 未执行，请稍后再试");
+        set_status(0, L"探针忙，请稍后再试");
+    } else {
+        os_log(OS_LOG_ERROR, "CPU 控制失败 cmd=%d rc=%d", OS_CMD_STEP_OUT, rc);
+        set_status(0, L"步出失败");
+    }
+    if (!os_cmd_finish(job, 2000))
+        os_log(OS_LOG_WARN, "步出线程 2s 未结束（已忽略）");
+    refresh_cpu_status();
+    os_mainwin_update_buttons();
 }
 
 static void cmd_disconnect(void)
@@ -2655,6 +2716,11 @@ static void cmd_xcp_disconnect(void)
 
 static int conn_busy_refuse(const char* what)
 {
+    if (g_step_job) {
+        os_log(OS_LOG_INFO, "正在步出，暂不能%s（可先点「停止」取消）", what);
+        set_status(0, L"正在步出…（完成或取消后再操作）");
+        return 1;
+    }
     if (!g_conn_job) return 0;
     os_log(OS_LOG_INFO, "正在%s，暂不能%s（可先点「断开」取消）", g_conn_job->attach ? " Attach" : "连接", what);
     set_status(0, L"正在连接…（完成或取消后再操作）");
@@ -5270,6 +5336,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
     case WM_OS_CONNECT_DONE:
         on_connect_done((OS_ConnJob*)lParam);
         return 0;
+    case WM_OS_STEPOUT_DONE:
+        on_step_out_done((OS_CmdJob*)lParam);
+        return 0;
     case WM_OS_CPU_STATE: {
         CpsResult* r = (CpsResult*)lParam;
         if (r) {
@@ -5554,7 +5623,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         case IDC_BTN_CPU_RHALT: cmd_cpu_ctrl(OS_CMD_RESET, L"Reset & Halt"); break;
         case IDC_BTN_CPU_STEP: cmd_cpu_ctrl(OS_CMD_STEP, L"Step"); break;
         case IDC_BTN_CPU_STEPIN: cmd_cpu_ctrl(OS_CMD_STEP_IN, L"Step In"); break;
-        case IDC_BTN_CPU_STEPOUT: cmd_cpu_ctrl(OS_CMD_STEP_OUT, L"Step Out"); break;
+        case IDC_BTN_CPU_STEPOUT: cmd_step_out(); break;   /* 第四轮：异步 */
         case IDC_BTN_CPU_STEPOVER: cmd_cpu_ctrl(OS_CMD_STEP_OVER, L"Step Over"); break;
         case IDC_BTN_BP:
         case IDM_BP:
@@ -5851,6 +5920,15 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         KillTimer(hwnd, 4);
         KillTimer(hwnd, 6);
         KillTimer(hwnd, CONN_PEND_TIMER);
+        if (g_step_job) {
+            /* 第四轮：退出时仍在步出 → HALT（驱动轮询 ≤10ms 内退出并清临时断点），最多等 3s；
+             * 超时则放弃 job（线程钉住驱动 DLL）。驱动 deinit 另外还会等 StepOut 离开再删锁 */
+            OS_CmdJob* j = g_step_job;
+            g_step_job = NULL;
+            j->drv->command(j->ctx, OS_CMD_HALT, NULL, NULL);
+            if (!os_cmd_abandon(j, 3000))
+                os_log(OS_LOG_WARN, "退出：步出线程 3s 未结束（驱动 DLL 已钉住）");
+        }
         if (g_conn_job) {
             /* 任务4：退出时仍在连接 → 取消 + DISCONNECT，最多等 5s；仍卡在厂商 DLL 里则放弃该 job
              * （线程钉住驱动 DLL，os_modmgr_shutdown 的 FreeLibrary 不会卸掉其代码） */

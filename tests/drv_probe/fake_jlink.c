@@ -15,10 +15,12 @@ static int j_exec(const char* c, char* r, int n) { (void)c; fk_enter(1); if (r &
 static int j_connect(void) { fk_enter(1); InterlockedExchange(&s_target, 1); fk_leave(); return 0; }
 static int j_tif(int t) { (void)t; fk_enter(1); fk_leave(); return 0; }
 static int j_runctl(void) { fk_enter(1); InterlockedIncrement(&g_fk_run_ctl); fk_leave(); return 0; }
-static int j_is_halted(void) { fk_enter(1); fk_leave(); return 1; }
+static int j_is_halted(void) { int r; fk_enter(1); r = fk_halted(); fk_leave(); return r; }
+static int j_halt(void) { fk_enter(1); fk_halt(); fk_leave(); return 0; }
+static int j_go(void) { fk_enter(1); fk_go(); fk_leave(); return 0; }
 static uint32_t j_read_reg(int i) { fk_enter(1); fk_leave(); return 0x20000000u + (uint32_t)i * 4u; }
-static int j_set_bp(uint32_t a, uint32_t t) { (void)a; (void)t; fk_enter(1); InterlockedIncrement(&g_fk_bp_set); fk_leave(); return (int)InterlockedIncrement(&s_bp_handle); }
-static int j_clr_bp(int h) { (void)h; fk_enter(1); fk_leave(); return 0; }
+static int j_set_bp(uint32_t a, uint32_t t) { (void)a; (void)t; fk_enter(1); InterlockedIncrement(&g_fk_bp_set); InterlockedIncrement(&g_fk_bp_live); fk_leave(); return (int)InterlockedIncrement(&s_bp_handle); }
+static int j_clr_bp(int h) { (void)h; fk_enter(1); InterlockedDecrement(&g_fk_bp_live); fk_leave(); return 0; }
 static int j_hw_status(void* p) { OS_JLinkHwStatus* s = (OS_JLinkHwStatus*)p; fk_enter(1); memset(s, 0, sizeof(*s)); s->VTarget = 3300; s->tres = 1; fk_leave(); return 0; }
 static int j_set_speed(int k) { (void)k; fk_enter(1); fk_leave(); return 0; }
 static int j_read_mem(uint32_t a, uint32_t n, uint8_t* d)
@@ -47,7 +49,7 @@ static int j_sel_sn(uint32_t s) { (void)s; fk_enter(0); fk_leave(); return 0; }
 static const struct { const char* n; void* f; } k_tab[] = {
     {"JLINKARM_Open", (void*)j_open}, {"JLINKARM_Close", (void*)j_close}, {"JLINKARM_IsConnected", (void*)j_is_connected},
     {"JLINKARM_ExecCommand", (void*)j_exec}, {"JLINKARM_Connect", (void*)j_connect}, {"JLINKARM_TIF_Select", (void*)j_tif},
-    {"JLINKARM_Halt", (void*)j_runctl}, {"JLINKARM_Go", (void*)j_runctl}, {"JLINKARM_Reset", (void*)j_runctl},
+    {"JLINKARM_Halt", (void*)j_halt}, {"JLINKARM_Go", (void*)j_go}, {"JLINKARM_Reset", (void*)j_runctl},
     {"JLINKARM_Step", (void*)j_runctl}, {"JLINKARM_ResetNoHalt", (void*)j_runctl}, {"JLINKARM_IsHalted", (void*)j_is_halted},
     {"JLINKARM_ReadReg", (void*)j_read_reg}, {"JLINKARM_SetBPEx", (void*)j_set_bp}, {"JLINKARM_ClrBPEx", (void*)j_clr_bp},
     {"JLINKARM_GetHWStatus", (void*)j_hw_status}, {"JLINKARM_SetSpeed", (void*)j_set_speed},

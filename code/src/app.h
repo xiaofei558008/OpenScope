@@ -71,6 +71,7 @@ typedef struct {
 #define WM_OS_WATCH_SYNC     (WM_APP + 51) /* AI → 主线程：同步单个叶变量的观测勾选 (wParam=id, lParam=on) */
 #define WM_OS_CPU_STATE      (WM_APP + 60) /* Bug4: CPU 状态工作线程 → 主线程 (lParam=heap CpsResult*，接收方 free) */
 #define WM_OS_CONNECT_DONE   (WM_APP + 61) /* 第三轮 任务4: 后台连接/Attach 完成 (lParam=OS_ConnJob*，主线程 on_connect_done 回收) */
+#define WM_OS_STEPOUT_DONE   (WM_APP + 62) /* 第四轮 任务1: 后台 StepOut 完成 (lParam=OS_CmdJob*，主线程 on_step_out_done 回收) */
 #define WM_OS_ELF_OPEN       (WM_APP + 52) /* AI/工作线程 → 主线程：同步加载 ELF (lParam=heap wchar_t*，SendMessage 同步) */
 #define WM_OS_DOCK_CMD       (WM_APP + 54) /* AI → 主线程：停靠管理命令 (lParam=OS_DockReq*，SendMessage 同步) */
 #define WM_OS_XCP_SHOW       (WM_APP + 53) /* AI → 主线程：显示/隐藏 XCP 标定页 (wParam=1/0) */

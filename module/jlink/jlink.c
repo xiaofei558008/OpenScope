@@ -54,6 +54,7 @@ static HMODULE g_hmod;
 static int mod_scan(OS_ScanReq* req);
 static int mod_connect_ex(char* err, int errlen);
 static int mod_disconnect(void);
+static void so_cancel(void);   /* 第四轮：取消进行中的 StepOut（定义在 StepOut 段） */
 
 BOOL WINAPI DllMain(HINSTANCE hinst, DWORD reason, LPVOID reserved)
 {
@@ -437,6 +438,7 @@ static int jlink_close_session(void)
 /* 用户断开：重连进行中时只置标志，由重连线程收尾（不与 Open 并发 Close） */
 static int mod_disconnect(void)
 {
+    so_cancel();
     InterlockedExchange(&g_want, 0);
     if (InterlockedCompareExchange(&g_guard.reconnecting, 0, 0) && !drv_is_owner(&g_guard)) {
         /* 连接/重连线程正在 DLL 里：不碰 connected（否则它收尾时会跳过 close 造成会话泄漏），
@@ -786,6 +788,8 @@ static int jlink_run_ctl(int cmd)
 {
     OS_JLinkApi* a = &g_ctx.api;
     int rc = OS_ERR_FAIL, no_step = 0;
+    if (cmd == OS_CMD_HALT || cmd == OS_CMD_RESET || cmd == OS_CMD_RESET_RUN)
+        so_cancel();   /* 进行中的 StepOut 停止等待（先于拿锁，StepOut 轮询期间不持锁） */
     JL_UI_ENTER();
     switch (cmd) {
     case OS_CMD_HALT:  rc = a->halt();  break;   /* 与旧实现一致：原样返回 DLL 返回值 */
@@ -813,11 +817,31 @@ static int jlink_run_ctl(int cmd)
 
 /* 读 LR，临时断点后 Go，停住后清除（不占用永久 BP 表项）。
  * 轮询停核期间不再整段持锁（原先最长 2s 持锁，采集与其它 UI 命令全被挡住）：每次轮询短暂拿锁。 */
-static int jlink_step_out(void)
+/* 第四轮 任务1：StepOut 由宿主工作线程执行（轮询 ≤2s 不再占 UI 线程）。
+ * 同一时刻只允许一个 StepOut（g_so_busy）；HALT / RESET / DISCONNECT / deinit 置 g_so_cancel，
+ * 轮询在下一次（≤10ms）检查时退出并清临时断点，返回 OS_ERR_CANCELED。 */
+static volatile LONG g_so_busy, g_so_cancel;
+static void so_cancel(void) { InterlockedExchange(&g_so_cancel, 1); }
+static int  so_cancelled(void) { return (int)InterlockedCompareExchange(&g_so_cancel, 0, 0); }
+/* deinit 用：取消并等进行中的 StepOut 离开（其收尾最多再等 500ms 锁） */
+static void so_cancel_wait(DWORD ms)
+{
+    LARGE_INTEGER f, t0, t;
+    so_cancel();
+    QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t0);
+    while (InterlockedCompareExchange(&g_so_busy, 0, 0)) {
+        QueryPerformanceCounter(&t);
+        if ((t.QuadPart - t0.QuadPart) * 1000 / f.QuadPart >= (LONGLONG)ms) break;
+        Sleep(1);
+    }
+}
+
+static int jlink_step_out_impl(void)
 {
     OS_JLinkApi* a = &g_ctx.api;
     uint32_t lr;
-    int bp = -1, i, slot = -1, halted = 0;
+    int bp = -1, i, slot = -1, halted = 0, cancelled = 0;
+    LONGLONG dl;
     JL_UI_ENTER();
     if (!a->read_reg || !a->go) { drv_unlock(&g_guard); return OS_ERR_FAIL; }
     lr = a->read_reg(14) & ~1u;
@@ -835,8 +859,10 @@ static int jlink_step_out(void)
         g_fw->log(OS_LOG_WARN, "J-Link StepOut: SetBPEx 不可用，仅 Go（请手动 Stop）");
     a->go();
     drv_unlock(&g_guard);
-    for (i = 0; i < 200 && !halted; i++) { /* ≤2s */
+    /* ≤2s：按 QPC 计时（原先 200×Sleep(10)，Windows 上 Sleep(10)≈15.6ms，实际约 3.1s） */
+    for (dl = drv_deadline(2000); !halted && drv_qpc() < dl; ) {
         Sleep(10);
+        if (so_cancelled()) { cancelled = 1; break; }   /* 用户 Stop / 断开 / 卸载 */
         if (drv_lock_ui(&g_guard) != OS_ERR_OK) {
             if (drv_is_reconnecting(&g_guard)) break;   /* 掉线重连中：放弃等待 */
             continue;
@@ -857,8 +883,18 @@ static int jlink_step_out(void)
         /* 临时断点仍登记为 temp（不进 LIST）；下次 BP 全清 / 断开 / 重连时清除 */
         g_fw->log(OS_LOG_WARN, "J-Link StepOut: 驱动忙，临时断点稍后清除");
     }
-    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link StepOut: LR=0x%08X", lr);
-    return OS_ERR_OK;
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link StepOut: LR=0x%08X%s", lr, cancelled ? "（已取消）" : "");
+    return cancelled ? OS_ERR_CANCELED : OS_ERR_OK;
+}
+
+static int jlink_step_out(void)
+{
+    int rc;
+    if (InterlockedCompareExchange(&g_so_busy, 1, 0) != 0) return OS_ERR_BUSY;   /* 已有 StepOut 在跑 */
+    InterlockedExchange(&g_so_cancel, 0);
+    rc = jlink_step_out_impl();
+    InterlockedExchange(&g_so_busy, 0);
+    return rc;
 }
 
 static int mod_command(void* ctx, int cmd, void* in, void* out)
@@ -1036,6 +1072,7 @@ static void mod_deinit(void* ctx)
     const OS_Framework* fw = g_fw;   /* 交接后 g_fw 归收尾线程所有，这里只用副本 */
     (void)ctx;
     InterlockedExchange(&g_want, 0);   /* 正在进行的连接/重连在下一个取消点放弃 */
+    so_cancel_wait(1000);              /* StepOut 轮询不持锁：先让它退出，再删锁 */
     if (!drv_guard_shutdown_or_orphan(&g_guard, 5000, jlink_final_cleanup)) {
         /* 风险1：线程卡在 JLink DLL 的单个调用里。不阻塞宿主；收尾已交接给该线程 */
         if (fw) fw->log(OS_LOG_WARN, "J-Link: 连接/重连 5s 未结束，卸载收尾已交给后台线程");

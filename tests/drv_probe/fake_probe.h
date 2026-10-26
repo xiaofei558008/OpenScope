@@ -9,6 +9,11 @@ extern volatile LONG g_fk_open, g_fk_close;         /* 会话打开/关闭次数
 extern volatile LONG g_fk_stale;           /* 无会话或 DLL 已卸载时被调用的次数（必须 0） */
 extern volatile LONG g_fk_load, g_fk_free;  /* LoadLibrary / FreeLibrary 次数 */
 extern volatile LONG g_fk_bp_set, g_fk_run_ctl;
+/* 目标运行状态（StepOut 测试）：Go 后 g_fk_run_ms 毫秒自动停住（命中断点）；0 = 立刻停（默认，旧测试语义）；-1 = 一直跑 */
+extern volatile LONG g_fk_run_ms, g_fk_bp_live;
+int  fk_halted(void);
+void fk_go(void);
+void fk_halt(void);
 #define FK_SET(v, x) InterlockedExchange(&(v), (LONG)(x))
 #define FK_GET(v)    InterlockedCompareExchange(&(v), 0, 0)
 void fk_enter(int need_session);

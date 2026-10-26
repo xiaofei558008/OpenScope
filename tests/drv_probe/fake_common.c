@@ -16,3 +16,19 @@ void fk_enter(int need_session)
 }
 void fk_leave(void) { InterlockedDecrement(&g_fk_inside); }
 void fk_nap(volatile LONG* ms) { LONG v = InterlockedCompareExchange(ms, 0, 0); if (v > 0) Sleep((DWORD)v); }
+
+/* ---- 目标运行状态 ---- */
+volatile LONG g_fk_run_ms, g_fk_bp_live;
+static volatile LONG s_running;
+static volatile LONG s_go_at;       /* QPC 毫秒（截成 32 位，差值按无符号算） */
+static LONGLONG fk_now_ms(void) { LARGE_INTEGER f, c; QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (LONGLONG)(c.QuadPart * 1000 / f.QuadPart); }
+int fk_halted(void)
+{
+    LONG run = FK_GET(g_fk_run_ms);
+    if (!InterlockedCompareExchange(&s_running, 0, 0)) return 1;
+    if (run < 0) return 0;
+    if ((LONG)((DWORD)fk_now_ms() - (DWORD)InterlockedCompareExchange(&s_go_at, 0, 0)) >= run) { InterlockedExchange(&s_running, 0); return 1; }
+    return 0;
+}
+void fk_go(void) { InterlockedExchange(&s_go_at, (LONG)(DWORD)fk_now_ms()); InterlockedExchange(&s_running, 1); InterlockedIncrement(&g_fk_run_ctl); }
+void fk_halt(void) { InterlockedExchange(&s_running, 0); InterlockedIncrement(&g_fk_run_ctl); }
