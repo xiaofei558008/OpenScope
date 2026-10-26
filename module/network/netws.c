@@ -347,8 +347,7 @@ int os_ws_accept_socket(int lsock)
     return c == INVALID_SOCKET ? -1 : (int)c;
 }
 
-/* 带超时的服务端握手；成功返回连接（超时复位为阻塞），失败关闭 socket 并返回 NULL */
-OS_WSConn* os_ws_server_upgrade(int sock, int timeout_ms)
+static OS_WSConn* ws_server_upgrade_impl(int sock, int timeout_ms, int close_on_fail)
 {
     SOCKET c = (SOCKET)sock;
     DWORD to = (DWORD)(timeout_ms > 0 ? timeout_ms : 0), zero = 0;
@@ -356,13 +355,25 @@ OS_WSConn* os_ws_server_upgrade(int sock, int timeout_ms)
     if (c == INVALID_SOCKET) return NULL;
     setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&to, sizeof(to));
     setsockopt(c, SOL_SOCKET, SO_SNDTIMEO, (const char*)&to, sizeof(to));
-    if (ws_server_handshake(c) != 0) { closesocket(c); return NULL; }
+    if (ws_server_handshake(c) != 0) { if (close_on_fail) closesocket(c); return NULL; }
     setsockopt(c, SOL_SOCKET, SO_RCVTIMEO, (const char*)&zero, sizeof(zero));
     w = (OS_WSConn*)calloc(1, sizeof(OS_WSConn));
-    if (!w) { closesocket(c); return NULL; }
+    if (!w) { if (close_on_fail) closesocket(c); return NULL; }
     w->s = c; w->is_client = 0;
     InitializeCriticalSection(&w->send_cs);
     return w;
+}
+
+/* 带超时的服务端握手；成功返回连接（超时复位为阻塞），失败关闭 socket 并返回 NULL */
+OS_WSConn* os_ws_server_upgrade(int sock, int timeout_ms)
+{
+    return ws_server_upgrade_impl(sock, timeout_ms, 1);
+}
+
+/* 同上，但失败时**不**关闭 socket（调用方先注销再关，避免别的线程对已关闭/被复用的句柄 shutdown） */
+OS_WSConn* os_ws_server_upgrade_nc(int sock, int timeout_ms)
+{
+    return ws_server_upgrade_impl(sock, timeout_ms, 0);
 }
 
 /* 同 os_ws_recv，但帧超过 cap 时丢弃其负载并返回 OS_WS_TOO_BIG（连接保持可用）；

@@ -9,6 +9,7 @@
  *
  * 新模块自动出现在 modules.list / tools.list（宿主扫描 + OS_CMD_AI_DESCRIBE）。
  */
+#include <winsock2.h>   /* 须在 windows.h（module_api.h）之前：select/shutdown/SD_BOTH */
 #include "module_api.h"
 #include "netws.h"
 #include <stdio.h>
@@ -22,6 +23,15 @@
 #define AI_MAX_PENDING  16             /* 超限后仍允许握手以回明确错误的额外连接数 */
 #define AI_HANDSHAKE_MS 5000           /* 握手超时：半开/慢速连接不再阻塞监听线程 */
 #define AI_DRAIN_MAX    (64u * 1024u * 1024u) /* 超大请求丢弃上限，超出直接断开 */
+#define AI_SLOTS        (AI_MAX_CLIENTS + AI_MAX_PENDING)
+#define AI_STOP_MS      2000           /* 第四轮：停止的总期限（监听 + 全部客户端线程并行） */
+#define AI_SELECT_MS    100            /* 监听线程 select 超时：唤醒连接失败时的兜底 */
+
+/* 线程退出：放开自己钉住的 aiapi.dll 引用（线程代码在本 DLL 里，必须用 FreeLibraryAndExitThread）。
+ * 测试可在包含前预定义为普通 return */
+#ifndef AI_THREAD_RETURN
+#define AI_THREAD_RETURN(pin, code) do { if (pin) FreeLibraryAndExitThread((pin), (code)); return (code); } while (0)
+#endif
 
 static const OS_Framework* g_fw;
 static volatile LONG g_running;
@@ -31,8 +41,12 @@ static int g_listen = -1;
 static int g_port = AI_DEFAULT_PORT;
 static CRITICAL_SECTION g_conn_cs;
 static int g_conn_cs_ready;
-static OS_WSConn* g_conns[AI_MAX_CLIENTS];
-static int g_conn_n;
+/* 第四轮：按 socket 登记所有客户端（含握手阶段）。登记/注销/停止时 shutdown 都在 g_conn_cs 内，
+ * 客户端线程先注销再 closesocket —— 停止方永远不会对已关闭（可能被复用）的句柄调用 shutdown。 */
+static int g_socks[AI_SLOTS];
+static int g_stopping;                 /* g_conn_cs 内读写：置 1 后不再登记新 socket */
+static HANDLE g_idle_ev;               /* g_clients 降到 0 时置位（手动复位） */
+static int g_stragglers;               /* 上次停止超时仍在执行请求的客户端线程数（已钉住本 DLL） */
 
 typedef struct AiClient {
     OS_WSConn*    conn;
@@ -41,37 +55,53 @@ typedef struct AiClient {
     int           listening; /* 已注册 fw log listener */
 } AiClient;
 
-static void conn_track_add(OS_WSConn* c)
+/* 登记 socket，返回槽号；正在停止/槽满返回 -1（调用方关闭 socket） */
+static int sock_slot_add(int sock)
 {
-    if (!c || !g_conn_cs_ready) return;
+    int i, r = -1;
     EnterCriticalSection(&g_conn_cs);
-    if (g_conn_n < AI_MAX_CLIENTS)
-        g_conns[g_conn_n++] = c;
-    LeaveCriticalSection(&g_conn_cs);
-}
-
-static void conn_track_del(OS_WSConn* c)
-{
-    int i;
-    if (!c || !g_conn_cs_ready) return;
-    EnterCriticalSection(&g_conn_cs);
-    for (i = 0; i < g_conn_n; i++) {
-        if (g_conns[i] == c) {
-            g_conns[i] = g_conns[--g_conn_n];
-            break;
-        }
+    if (!g_stopping) {
+        for (i = 0; i < AI_SLOTS; i++)
+            if (g_socks[i] < 0) { g_socks[i] = sock; r = i; break; }
     }
     LeaveCriticalSection(&g_conn_cs);
+    return r;
 }
 
-static void conn_shutdown_all(void)
+static void sock_slot_del(int slot)
+{
+    if (slot < 0) return;
+    EnterCriticalSection(&g_conn_cs);
+    g_socks[slot] = -1;
+    LeaveCriticalSection(&g_conn_cs);
+}
+
+/* 停止：禁止再登记，并 shutdown 全部已登记 socket，唤醒阻塞在 recv（握手或等请求）上的客户端线程 */
+static void sock_shutdown_all(void)
 {
     int i;
-    if (!g_conn_cs_ready) return;
     EnterCriticalSection(&g_conn_cs);
-    for (i = 0; i < g_conn_n; i++)
-        os_ws_shutdown(g_conns[i]);
+    g_stopping = 1;
+    for (i = 0; i < AI_SLOTS; i++)
+        if (g_socks[i] >= 0) shutdown((SOCKET)g_socks[i], SD_BOTH);
     LeaveCriticalSection(&g_conn_cs);
+}
+
+/* 计数减一；降到 0 时置位 g_idle_ev。在 g_conn_cs 内做：ai_stop 看到 0 之后再进出一次锁，
+ * 就能确定最后一个线程已经做完 SetEvent，之后才能关事件、删锁 */
+static void client_done(void)
+{
+    EnterCriticalSection(&g_conn_cs);
+    if (InterlockedDecrement(&g_clients) == 0 && g_idle_ev) SetEvent(g_idle_ev);
+    LeaveCriticalSection(&g_conn_cs);
+}
+
+static HMODULE ai_pin_self(void)
+{
+    HMODULE h = NULL;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)(void*)&ai_pin_self, &h))
+        h = NULL;
+    return h;
 }
 
 static int log_severity(int level)
@@ -393,7 +423,7 @@ static void handle_request(AiClient* cl, const char* req)
 }
 
 /* 线程参数：原始 socket + 是否超出客户端上限（g_clients 已在监听线程内原子计入） */
-typedef struct AiAccept { int sock; int over_limit; } AiAccept;
+typedef struct AiAccept { int sock; int over_limit; int slot; HMODULE pin; } AiAccept;
 
 static DWORD WINAPI client_thread(LPVOID p)
 {
@@ -402,11 +432,14 @@ static DWORD WINAPI client_thread(LPVOID p)
     AiAccept acc = *(AiAccept*)p;
     free(p);
     memset(&cl, 0, sizeof(cl));
-    /* 握手在本线程内完成并带超时（原先在监听线程同步握手，一个半开连接即可卡死所有新连接） */
-    cl.conn = os_ws_server_upgrade(acc.sock, AI_HANDSHAKE_MS);
+    /* 握手在本线程内完成并带超时（原先在监听线程同步握手，一个半开连接即可卡死所有新连接）。
+     * 失败时不在 netws 里关 socket：先注销再关 */
+    cl.conn = os_ws_server_upgrade_nc(acc.sock, AI_HANDSHAKE_MS);
     if (!cl.conn) {
-        InterlockedDecrement(&g_clients);
-        return 0;
+        sock_slot_del(acc.slot);
+        closesocket((SOCKET)acc.sock);
+        client_done();
+        AI_THREAD_RETURN(acc.pin, 0);
     }
     if (acc.over_limit) {
         char msg[256];
@@ -414,18 +447,18 @@ static DWORD WINAPI client_thread(LPVOID p)
             "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32001,"
             "\"message\":\"too many clients (max %d)\"}}", AI_MAX_CLIENTS);
         os_ws_send_text(cl.conn, msg);
+        sock_slot_del(acc.slot);
         os_ws_close(cl.conn);
-        InterlockedDecrement(&g_clients);
-        return 0;
+        client_done();
+        AI_THREAD_RETURN(acc.pin, 0);
     }
-    conn_track_add(cl.conn);
     cl.min_level = OS_LOG_DEBUG;
     buf = (uint8_t*)malloc(AI_RECV_CAP);
     if (!buf) {
-        conn_track_del(cl.conn);
+        sock_slot_del(acc.slot);
         os_ws_close(cl.conn);
-        InterlockedDecrement(&g_clients);
-        return 0;
+        client_done();
+        AI_THREAD_RETURN(acc.pin, 0);
     }
     while (InterlockedCompareExchange(&g_running, 1, 1) == 1) {
         int op = 0, n = os_ws_recv_capped(cl.conn, buf, AI_RECV_CAP - 1, &op, AI_DRAIN_MAX);
@@ -446,55 +479,82 @@ static DWORD WINAPI client_thread(LPVOID p)
     if (cl.listening && g_fw && g_fw->log_remove_listener)
         g_fw->log_remove_listener(ai_on_log, &cl);
     free(buf);
-    conn_track_del(cl.conn);
+    sock_slot_del(acc.slot);
     os_ws_close(cl.conn);
-    InterlockedDecrement(&g_clients);
-    return 0;
+    client_done();
+    AI_THREAD_RETURN(acc.pin, 0);
 }
 
+/* 监听线程：拥有监听 socket（只有它关）。select 带超时轮询 g_running；ai_stop 另外自连一次立即唤醒 */
 static DWORD WINAPI listen_thread(LPVOID p)
 {
-    (void)p;
+    HMODULE pin = (HMODULE)p;
+    int ls = g_listen;
     if (g_fw) g_fw->log(OS_LOG_INFO, "aiapi: WebSocket JSON-RPC 监听 127.0.0.1:%d", g_port);
     while (InterlockedCompareExchange(&g_running, 1, 1) == 1) {
-        int s = os_ws_accept_socket(g_listen);
+        int s, slot;
         HANDLE th;
         AiAccept* acc;
         LONG n;
+        fd_set rf;
+        struct timeval tv;
+        FD_ZERO(&rf);
+        FD_SET((SOCKET)ls, &rf);
+        tv.tv_sec = 0; tv.tv_usec = AI_SELECT_MS * 1000;
+        if (select(ls + 1, &rf, NULL, NULL, &tv) <= 0) continue;   /* 超时/EINTR：回去看 g_running */
+        s = os_ws_accept_socket(ls);
         if (s < 0) {
             if (InterlockedCompareExchange(&g_running, 1, 1) != 1) break;
             Sleep(50);
             continue;
         }
+        if (InterlockedCompareExchange(&g_running, 1, 1) != 1) { closesocket((SOCKET)s); break; }  /* 唤醒连接 */
         /* 在监听线程内原子占位，消除"线程启动后才计数"的竞态 */
         n = InterlockedIncrement(&g_clients);
         if (n > AI_MAX_CLIENTS + AI_MAX_PENDING) {
-            InterlockedDecrement(&g_clients);
+            client_done();
             closesocket((SOCKET)s);
             continue;
         }
-        acc = (AiAccept*)malloc(sizeof(AiAccept));
-        if (!acc) { InterlockedDecrement(&g_clients); closesocket((SOCKET)s); continue; }
+        slot = sock_slot_add(s);
+        acc = slot >= 0 ? (AiAccept*)malloc(sizeof(AiAccept)) : NULL;
+        if (!acc) { sock_slot_del(slot); client_done(); closesocket((SOCKET)s); continue; }
         acc->sock = s;
+        acc->slot = slot;
         acc->over_limit = (n > AI_MAX_CLIENTS);
+        acc->pin = ai_pin_self();   /* 线程结束时 FreeLibraryAndExitThread 放开：卸载不会卸掉正在执行的代码 */
         th = CreateThread(NULL, 0, client_thread, acc, 0, NULL);
-        if (th) CloseHandle(th);
+        if (th) CloseHandle(th);   /* 不需要句柄：用 g_clients + g_idle_ev 汇合 */
         else {
+            if (acc->pin) FreeLibrary(acc->pin);
             free(acc);
-            InterlockedDecrement(&g_clients);
+            sock_slot_del(slot);
+            client_done();
             closesocket((SOCKET)s);
         }
     }
-    return 0;
+    os_ws_close_listen(ls);
+    AI_THREAD_RETURN(pin, 0);
 }
 
 static int ai_start(int port)
 {
-    if (g_running) return OS_ERR_BUSY;
+    if (InterlockedCompareExchange(&g_running, 0, 0)) return OS_ERR_BUSY;
     if (!g_conn_cs_ready) {
+        int i;
         InitializeCriticalSection(&g_conn_cs);
+        for (i = 0; i < AI_SLOTS; i++) g_socks[i] = -1;
         g_conn_cs_ready = 1;
     }
+    if (g_stragglers && InterlockedCompareExchange(&g_clients, 0, 0) != 0) {
+        if (g_fw) g_fw->log(OS_LOG_ERROR, "aiapi: 上次停止时的客户端线程仍未结束，暂不重启");
+        return OS_ERR_BUSY;
+    }
+    g_stragglers = 0;
+    EnterCriticalSection(&g_conn_cs);
+    g_stopping = 0;
+    LeaveCriticalSection(&g_conn_cs);
+    if (!g_idle_ev) g_idle_ev = CreateEventW(NULL, TRUE, TRUE, NULL);
     g_port = port > 0 ? port : AI_DEFAULT_PORT;
     g_listen = os_ws_listen("127.0.0.1", g_port);
     if (g_listen < 0) {
@@ -503,7 +563,11 @@ static int ai_start(int port)
     }
     InterlockedExchange(&g_clients, 0);
     InterlockedExchange(&g_running, 1);
-    g_thread = CreateThread(NULL, 0, listen_thread, NULL, 0, NULL);
+    {
+        HMODULE pin = ai_pin_self();
+        g_thread = CreateThread(NULL, 0, listen_thread, (LPVOID)pin, 0, NULL);
+        if (!g_thread && pin) FreeLibrary(pin);
+    }
     if (!g_thread) {
         InterlockedExchange(&g_running, 0);
         os_ws_close_listen(g_listen);
@@ -513,23 +577,58 @@ static int ai_start(int port)
     return OS_ERR_OK;
 }
 
+/* 自连一次监听端口：阻塞在 select/accept 上的监听线程立即返回 */
+static void ai_wake_listener(void)
+{
+    SOCKET w = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    struct sockaddr_in a;
+    if (w == INVALID_SOCKET) return;
+    memset(&a, 0, sizeof(a));
+    a.sin_family = AF_INET;
+    a.sin_port = htons((u_short)g_port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    connect(w, (struct sockaddr*)&a, sizeof(a));   /* 失败也无妨：select 超时兜底 */
+    closesocket(w);
+}
+
+static DWORD ai_ms_left(ULONGLONG deadline)
+{
+    ULONGLONG now = GetTickCount64();
+    return now >= deadline ? 0 : (DWORD)(deadline - now);
+}
+
+/* 第四轮：停止 = 唤醒监听 + shutdown 全部客户端 socket + 一个总期限（AI_STOP_MS）内并行汇合。
+ * 原先监听等 3s、客户端再等 5s（串行，8–9s）。正在执行请求（ai_call 里）的线程无法打断：
+ * 期限到仍未结束的线程钉着本 DLL，自己执行完后放开；此时不删锁、不清 g_fw。 */
 static void ai_stop(void)
 {
-    int spin;
+    ULONGLONG deadline = GetTickCount64() + AI_STOP_MS;
+    LONG left;
+    if (!g_thread && !InterlockedCompareExchange(&g_running, 0, 0)) return;
     InterlockedExchange(&g_running, 0);
-    if (g_listen >= 0) {
-        os_ws_close_listen(g_listen);
-        g_listen = -1;
-    }
-    /* 唤醒阻塞在 recv 上的客户端，避免卸载其他模块时仍在 RPC */
-    conn_shutdown_all();
+    if (g_conn_cs_ready) sock_shutdown_all();
     if (g_thread) {
-        WaitForSingleObject(g_thread, 3000);
-        CloseHandle(g_thread);
+        ai_wake_listener();
+        if (WaitForSingleObject(g_thread, ai_ms_left(deadline)) != WAIT_OBJECT_0 && g_fw)
+            g_fw->log(OS_LOG_WARN, "aiapi: 监听线程未在期限内退出（已钉住 aiapi.dll）");
+        CloseHandle(g_thread);   /* 只关线程句柄，线程本身不受影响 */
         g_thread = NULL;
     }
-    for (spin = 0; spin < 500 && InterlockedCompareExchange(&g_clients, 0, 0) != 0; spin++)
-        Sleep(10);
+    g_listen = -1;               /* 监听 socket 由监听线程自己关闭 */
+    /* 监听线程已退出：此后 g_clients 只减不增。先复位再检查，避免错过置位 */
+    if (g_idle_ev) {
+        ResetEvent(g_idle_ev);
+        if (InterlockedCompareExchange(&g_clients, 0, 0) != 0)
+            WaitForSingleObject(g_idle_ev, ai_ms_left(deadline));
+    }
+    if (g_conn_cs_ready) {       /* 屏障：最后一个 client_done 已离开临界区 */
+        EnterCriticalSection(&g_conn_cs);
+        left = InterlockedCompareExchange(&g_clients, 0, 0);
+        LeaveCriticalSection(&g_conn_cs);
+    } else left = InterlockedCompareExchange(&g_clients, 0, 0);
+    g_stragglers = (int)left;
+    if (left > 0 && g_fw)
+        g_fw->log(OS_LOG_WARN, "aiapi: %ld 个客户端线程仍在执行请求，结束后自行退出（已钉住 aiapi.dll）", (long)left);
 }
 
 static int ai_init(const OS_Framework* fw, void** out_ctx)
@@ -555,12 +654,13 @@ static void ai_deinit(void* ctx)
 {
     (void)ctx;
     ai_stop();
+    if (g_stragglers) return;    /* 仍有线程在用 g_fw / g_conn_cs / g_idle_ev：有意保留（DLL 已被钉住） */
     g_fw = NULL;
     if (g_conn_cs_ready) {
         DeleteCriticalSection(&g_conn_cs);
         g_conn_cs_ready = 0;
-        g_conn_n = 0;
     }
+    if (g_idle_ev) { CloseHandle(g_idle_ev); g_idle_ev = NULL; }
 }
 
 static int ai_command(void* ctx, int cmd, void* in, void* out)
@@ -578,7 +678,7 @@ static int ai_command(void* ctx, int cmd, void* in, void* out)
         memset(info, 0, sizeof(*info));
         _snprintf(info->name, sizeof(info->name), "aiapi");
         _snprintf(info->version, sizeof(info->version), "1.0");
-        info->connected = g_running ? 1 : 0;
+        info->connected = InterlockedCompareExchange(&g_running, 0, 0) ? 1 : 0;
         return OS_ERR_OK;
     }
     return OS_ERR_FAIL;

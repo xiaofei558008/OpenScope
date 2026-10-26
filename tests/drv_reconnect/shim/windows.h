@@ -73,6 +73,7 @@ static inline DWORD GetEnvironmentVariableA(const char* n, char* b, DWORD cap)
 typedef struct ShimThread {
     pthread_t t; pthread_mutex_t m; pthread_cond_t cv;
     int done, closed; LPTHREAD_START_ROUTINE fn; LPVOID arg;
+    int is_event;   /* 1 = 事件（手动复位）：done 即"已置位"，与线程共用 WaitForSingleObject */
 } ShimThread;
 static inline void* shim_thread_main(void* p)
 {
@@ -107,6 +108,7 @@ static inline DWORD WaitForSingleObject(HANDLE h, DWORD ms)
 static inline BOOL CloseHandle(HANDLE h)
 {
     ShimThread* s = (ShimThread*)h; int done;
+    if (s->is_event) { pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); free(s); return TRUE; }
     pthread_mutex_lock(&s->m); done = s->done; if (!done) s->closed = 1; pthread_mutex_unlock(&s->m);
     if (done) { pthread_join(s->t, NULL); pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); free(s); }
     else pthread_detach(s->t);
@@ -160,5 +162,19 @@ static inline PVOID InterlockedExchangePointer(PVOID volatile* p, PVOID x) { ret
 static inline PVOID InterlockedCompareExchangePointer(PVOID volatile* p, PVOID x, PVOID cmp)
 { __atomic_compare_exchange_n((PVOID*)p, &cmp, x, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); return cmp; }
 /* GetModuleHandleExW / PostMessageW 由 tests/conn_async/pre_conn.h 重定向到测试假实现 */
+
+/* ---- 事件（tests/aiapi_stop：aiapi.c 的 g_idle_ev）：仅手动复位 ---- */
+static inline HANDLE CreateEventW(void* sa, BOOL manual, BOOL initial, const wchar_t* name)
+{
+    ShimThread* s = (ShimThread*)calloc(1, sizeof(*s)); (void)sa; (void)manual; (void)name;
+    if (!s) return NULL;
+    pthread_mutex_init(&s->m, NULL); pthread_cond_init(&s->cv, NULL);
+    s->is_event = 1; s->done = initial ? 1 : 0;
+    return s;
+}
+static inline BOOL SetEvent(HANDLE h)
+{ ShimThread* s = (ShimThread*)h; pthread_mutex_lock(&s->m); s->done = 1; pthread_cond_broadcast(&s->cv); pthread_mutex_unlock(&s->m); return TRUE; }
+static inline BOOL ResetEvent(HANDLE h)
+{ ShimThread* s = (ShimThread*)h; pthread_mutex_lock(&s->m); s->done = 0; pthread_mutex_unlock(&s->m); return TRUE; }
 
 #endif
