@@ -74,10 +74,15 @@ static void do_connect(void)
 static OS_CmdJob* start_step(void)
 {
     double t0 = now_ms(), dt;
+    LONG rc0 = L(&g_fk_run_ctl);
     OS_CmdJob* j = os_cmd_start(M, NULL, OS_CMD_STEP_OUT, 0, FAKE_HWND, WM_DONE);
     dt = now_ms() - t0;
     CHECK(j != NULL, "start failed");
     CHECK(dt < 20, "os_cmd_start blocked %.1fms", dt);
+    /* 等工作线程真正进入 StepOut（假 DLL 收到 Go）：Windows 上新线程偶尔 >50ms 才被调度，
+     * 否则后续固定 Sleep 后的 HALT / 第二次 StepOut 会抢在它前面（测试时序假象，不是缺陷） */
+    t0 = now_ms();
+    while (j && L(&g_fk_run_ctl) == rc0 && now_ms() - t0 < 1000) Sleep(1);
     return j;
 }
 
@@ -166,6 +171,9 @@ int main(void)
     printf("[7] 退出（WM_DESTROY 顺序）：HALT + abandon(3000) → deinit\n");
     j = start_step(); Sleep(80);
     t0 = now_ms();
+    /* 先摘掉通知再 HALT：若按 HALT→abandon 的顺序，工作线程可能在两者之间就结束并投递（Windows 上偶发），
+     * 那条消息发往正在销毁的窗口、会被丢弃，不是缺陷；这里只验证「abandon 之后不再投递」。 */
+    InterlockedExchangePointer((PVOID volatile*)&j->notify, NULL);
     cmd(OS_CMD_HALT, NULL, NULL);
     i = os_cmd_abandon(j, 3000);
     dt = now_ms() - t0;

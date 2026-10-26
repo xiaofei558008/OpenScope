@@ -64,4 +64,10 @@ HMODULE fake_LoadLibraryA(const char* p) { (void)p; InterlockedIncrement(&g_fk_l
 FARPROC fake_GetProcAddress(HMODULE h, const char* n)
 { size_t i; if (h != (HMODULE)&s_lib) return NULL; for (i = 0; i < sizeof(k_tab) / sizeof(k_tab[0]); i++) if (!strcmp(k_tab[i].n, n)) return (FARPROC)k_tab[i].f; return NULL; }
 BOOL fake_FreeLibrary(HMODULE h)
-{ if (h == (HMODULE)&s_lib) { InterlockedIncrement(&g_fk_free); InterlockedExchange(&g_fk_loaded, 0); InterlockedExchange(&g_fk_session, 0); } return TRUE; }
+{   /* 与真 DLL 一致：卸载即结束会话（jlink.c 断开时拿不到锁会跳过 Close，靠重载时 FreeLibrary 收尾） */
+    if (h == (HMODULE)&s_lib) {
+        InterlockedIncrement(&g_fk_free); InterlockedExchange(&g_fk_loaded, 0);
+        if (InterlockedExchange(&g_fk_session, 0)) InterlockedIncrement(&g_fk_close);
+        InterlockedExchange(&s_target, 0);
+    }
+    return TRUE; }
