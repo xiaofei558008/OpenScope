@@ -335,6 +335,7 @@ static int float_create(int x, int y, int w, int h)
                 GetClientRect(H->frame, &cr);
                 MoveWindow(H->host, 0, 0, cr.right, cr.bottom, FALSE);
             }
+            os_theme_window_tree(H->frame);   /* 浮动窗：暗色标题栏/控件（原来始终浅色） */
             ShowWindow(H->frame, SW_SHOWNOACTIVATE);
             return i;
         }

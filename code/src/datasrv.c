@@ -353,10 +353,29 @@ static DWORD WINAPI poll_thread(LPVOID p)
     return 0;
 }
 
+/* Bug4/C3: os_ds_stop 等待超时后采集线程可能仍卡在驱动调用里；不再 CloseHandle 后假装已停，
+ * 而是记住它，未退出前拒绝重新开始（否则两个采集线程并发读、并发写 spool/状态）。 */
+static HANDLE g_poll_stale;
+
+int os_ds_poll_busy(void)
+{
+    if (!g_poll_stale) return 0;
+    if (WaitForSingleObject(g_poll_stale, 0) == WAIT_OBJECT_0) {
+        CloseHandle(g_poll_stale);
+        g_poll_stale = NULL;
+        return 0;
+    }
+    return 1;
+}
+
 int os_ds_start(void)
 {
     int conn;
     if (g_app.acq_state == OS_ACQ_RUNNING) return 0;
+    if (os_ds_poll_busy()) {
+        os_log(OS_LOG_WARN, "上一次采集线程仍阻塞在驱动调用中（探针无响应/重连中），请稍后再开始采集");
+        return -1;
+    }
     conn = acq_is_connected();
     if (!conn) {
         if (!g_app.driver && !g_app.xcpmod)
@@ -401,8 +420,13 @@ void os_ds_stop(void)
     if (g_app.acq_state != OS_ACQ_RUNNING) return;
     g_app.stop_poll = 1;
     if (g_app.hPoll) {
-        WaitForSingleObject(g_app.hPoll, 3000);
-        CloseHandle(g_app.hPoll);
+        if (WaitForSingleObject(g_app.hPoll, 3000) == WAIT_TIMEOUT) {
+            os_log(OS_LOG_WARN, "采集线程 3 s 内未退出（驱动调用阻塞），后台继续等待其退出");
+            if (g_poll_stale) CloseHandle(g_poll_stale);
+            g_poll_stale = g_app.hPoll;
+        } else {
+            CloseHandle(g_app.hPoll);
+        }
         g_app.hPoll = NULL;
     }
     g_app.acq_state = OS_ACQ_STOPPED;

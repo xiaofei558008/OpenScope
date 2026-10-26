@@ -455,17 +455,70 @@ static void follow_pc_to_source(const OS_CpuState* st)
         os_utf8_to_wide_buf(file, local, MAX_PATH);
     if (!local[0]) return;
     g_follow_busy = 1;
-    os_src_open_file(g_app.hTab, local, line);
-    os_src_set_pc_line(local, line);
+    {
+        /* 走 os_mainwin_src_open：先校验文件存在、按 basename 回退，避免在状态回调里弹
+         * “无法打开源码文件”模态框并留下空窗口（小序审查 Bug1 次要因素） */
+        char l8[MAX_PATH];
+        os_wide_to_utf8_buf(local, l8, sizeof(l8));
+        if (os_mainwin_src_open(l8, line) == 0) os_src_set_pc_line(local, line);
+    }
     g_follow_busy = 0;
 }
 
+/* Bug4（卡死/白命令栏）根因：CPU 状态查询 OS_CMD_GET_CPU_STATE 原在 UI 线程同步执行——
+ * layout()（每次 WM_SIZE / 拖动停靠 / 调整窗口）、500 ms 定时器、CPU 控制后都会调；
+ * das 驱动要拿 g_ctx.cs（与采集线程逐变量读、断线重连 das_try_reconnect 共用），
+ * 探针慢/重连/MCD 卡住时 UI 线程整段阻塞 → 窗口不重绘（命令栏变白）、无响应。
+ * 现改为专用工作线程查询，结果 PostMessage 回主线程；查询进行中不重复排队，UI 线程永不等探针。 */
+/* WM_OS_CPU_STATE 定义见 app.h */
+typedef struct CpsResult { OS_CpuState st; int rc; OS_Module* drv; } CpsResult;
+static HANDLE g_cps_thread, g_cps_evt;
+static volatile LONG g_cps_quit, g_cps_busy, g_cps_inited;
+static CRITICAL_SECTION g_cps_cs;
+static OS_Module* g_cps_drv;
+static void* g_cps_ctx;
+static volatile LONG g_cps_count;   /* 测试/诊断：已完成的异步查询次数 */
+
+static DWORD WINAPI cps_thread_fn(LPVOID p)
+{
+    (void)p;
+    for (;;) {
+        OS_Module* drv;
+        void* ctx;
+        CpsResult* r;
+        WaitForSingleObject(g_cps_evt, INFINITE);
+        if (g_cps_quit) break;
+        EnterCriticalSection(&g_cps_cs);
+        drv = g_cps_drv; ctx = g_cps_ctx;
+        LeaveCriticalSection(&g_cps_cs);
+        r = (CpsResult*)calloc(1, sizeof(*r));
+        if (r) {
+            r->st.halted = -1; r->st.powered = -1; r->st.under_reset = -1; r->st.voltage_mv = -1;
+            r->drv = drv;
+            r->rc = (drv && drv->command) ? drv->command(ctx, OS_CMD_GET_CPU_STATE, NULL, &r->st)
+                                          : OS_ERR_NOT_CONNECTED;
+        }
+        InterlockedIncrement(&g_cps_count);
+        InterlockedExchange(&g_cps_busy, 0);
+        if (r && (g_cps_quit || !g_app.hMain || !PostMessageW(g_app.hMain, WM_OS_CPU_STATE, 0, (LPARAM)r)))
+            free(r);
+    }
+    return 0;
+}
+
+static void cps_shutdown(void)
+{
+    if (!g_cps_inited) return;
+    InterlockedExchange(&g_cps_quit, 1);
+    SetEvent(g_cps_evt);
+    /* 不无限等：探针调用卡住时也不阻塞退出 */
+    if (g_cps_thread) { WaitForSingleObject(g_cps_thread, 500); CloseHandle(g_cps_thread); g_cps_thread = NULL; }
+}
+
+static void apply_cpu_status(const OS_CpuState* stp, int rc);
+
 static void refresh_cpu_status(void)
 {
-    OS_CpuState st;
-    wchar_t w[96];
-    char label[32];
-    int rc;
     if (!g_app.hStatus) return;
     if (!g_app.connected || !g_app.driver || !g_app.driver->command || g_app.net_mode) {
         SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
@@ -473,9 +526,28 @@ static void refresh_cpu_status(void)
         os_locals_on_cpu(-1, 0, 0);
         return;
     }
-    memset(&st, 0, sizeof(st));
-    st.halted = -1; st.powered = -1; st.under_reset = -1; st.voltage_mv = -1;
-    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_CPU_STATE, NULL, &st);
+    if (!g_cps_inited) {
+        InitializeCriticalSection(&g_cps_cs);
+        g_cps_evt = CreateEventW(NULL, FALSE, FALSE, NULL);
+        g_cps_thread = g_cps_evt ? CreateThread(NULL, 0, cps_thread_fn, NULL, 0, NULL) : NULL;
+        g_cps_inited = 1;
+    }
+    EnterCriticalSection(&g_cps_cs);
+    g_cps_drv = g_app.driver; g_cps_ctx = g_app.driver_ctx;
+    LeaveCriticalSection(&g_cps_cs);
+    if (!g_cps_thread) return;   /* 无工作线程：宁可不刷新状态，也不在 UI 线程调探针 */
+    if (InterlockedCompareExchange(&g_cps_busy, 1, 0) == 0) SetEvent(g_cps_evt);
+}
+
+int os_mainwin_cps_count(void) { return (int)g_cps_count; }
+
+static void apply_cpu_status(const OS_CpuState* stp, int rc)
+{
+    OS_CpuState st = *stp;
+    wchar_t w[96];
+    char label[32];
+    if (!g_app.hStatus) return;
+    if (!g_app.connected || !g_app.driver || g_app.net_mode) return;  /* 结果到达前已断开/切网络 */
     if (rc != OS_ERR_OK) {
         SendMessageW(g_app.hStatus, SB_SETTEXTW, STATUS_PART_CPU, (LPARAM)L"CPU: -");
         return;
@@ -1002,6 +1074,7 @@ static void dock_sync_wins(void)
     }
     for (k = 0; k < DOCK_NSYS; k++)
         if (g_dock_sys[k]) { hs[n] = g_dock_sys[k]; ts[n] = g_dock_sys_title[k]; n++; }
+    for (k = 0; k < n; k++) os_theme_client_edge(hs[k]);   /* Bug3: 新建面板也按主题去白边 */
     dock_sync(hs, ts, n);
 }
 
@@ -4518,6 +4591,14 @@ static LRESULT CALLBACK tab_theme_proc(HWND h, UINT msg, WPARAM wParam, LPARAM l
 void os_mainwin_apply_theme(void)
 {
     int i, k;
+    /* Bug3: 暗色下面板/树/日志/右侧区的 3D 客户区边框（浅色上沿白条）去掉，浅色恢复 */
+    os_theme_client_edge(g_app.hRight);
+    os_theme_client_edge(g_app.hTree);
+    os_theme_client_edge(g_app.hSrcTree);
+    os_theme_client_edge(g_app.hLog);
+    for (i = 0; i < g_app.win_count; i++)
+        for (k = 0; k < g_app.wins[i].group_count; k++)
+            os_theme_client_edge(g_app.wins[i].group[k]);
     if (g_dock_on) dock_apply_theme();
     if (g_app.hTree && IsWindow(g_app.hTree)) {
         SendMessageW(g_app.hTree, TVM_SETBKCOLOR, 0, os_theme(TH_TREE_BG));
@@ -5046,6 +5127,14 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         if (target && target != hwnd && IsChild(hwnd, target))
             return SendMessageW(target, WM_MOUSEWHEEL, wParam, lParam);
         break; /* 主窗口自身 → 默认处理 */
+    }
+    case WM_OS_CPU_STATE: {
+        CpsResult* r = (CpsResult*)lParam;
+        if (r) {
+            if (r->drv == g_app.driver) apply_cpu_status(&r->st, r->rc);
+            free(r);
+        }
+        return 0;
     }
     case WM_OS_SAMPLES:
         os_ds_drain();
@@ -5615,6 +5704,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         KillTimer(hwnd, 1);
         KillTimer(hwnd, 2);
         KillTimer(hwnd, 3);
+        KillTimer(hwnd, 4);
+        cps_shutdown();
         g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */
         g_tab_edit_idx = -1;
         os_ds_stop();
@@ -5682,7 +5773,7 @@ void os_mainwin_register(void)
     wc.lpfnWndProc = right_panel_proc;
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hbrBackground = NULL; /* Bug2/3: 背景只由主题 WM_ERASEBKGND 绘制（类画刷 BTNFACE 在暗色下露白） */
     wc.lpszClassName = g_right_class;
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));

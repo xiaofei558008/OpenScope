@@ -53,5 +53,8 @@ void os_theme_menu_end(void);
 void os_theme_window_tree(HWND root);
 /* 给任意 HWND（含 combo 下拉 list）打 AllowDarkMode + DarkMode_Explorer */
 void os_theme_hwnd_dark(HWND hwnd);
+/* Bug3: 暗色下去掉 WS_EX_CLIENTEDGE（系统 3D 凹边用浅色 COLOR_3DHILIGHT/BTNFACE 画，面板上沿露白条）；
+ * 浅色恢复。记住窗口原本是否带边框，可重复调用。 */
+void os_theme_client_edge(HWND hwnd);
 
 #endif

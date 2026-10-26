@@ -286,6 +286,24 @@ static void flush_menu_themes(void)
     if (flush_menu) flush_menu();
 }
 
+void os_theme_client_edge(HWND hwnd)
+{
+    static const wchar_t* k_prop = L"OS_HadClientEdge";
+    LONG_PTR ex;
+    int want;
+    if (!hwnd || !IsWindow(hwnd)) return;
+    ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (!GetPropW(hwnd, k_prop)) {
+        if (!(ex & WS_EX_CLIENTEDGE)) return;      /* 原本无边框：不管 */
+        SetPropW(hwnd, k_prop, (HANDLE)1);
+    }
+    want = g_dark ? 0 : 1;
+    if (((ex & WS_EX_CLIENTEDGE) != 0) == want) return;
+    ex = want ? (ex | WS_EX_CLIENTEDGE) : (ex & ~(LONG_PTR)WS_EX_CLIENTEDGE);
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+    SetWindowPos(hwnd, NULL, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
 void os_theme_hwnd_dark(HWND hwnd)
 {
     static OS_Theme_AllowDarkModeForWindow allow_dark;
