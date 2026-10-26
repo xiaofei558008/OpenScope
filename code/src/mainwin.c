@@ -24,6 +24,7 @@
 #include "a2l_import.h"
 #include "workspace.h"
 #include "xcpsym.h"
+#include "conn_async.h"
 #include <commctrl.h>
 #include <commdlg.h>
 #include <stdio.h>
@@ -203,6 +204,8 @@ static LRESULT theme_ctlcolor(HDC hdc, int edit);
 static void ctrl_dark_theme(HWND h);
 /* AD-13: 当前驱动名（定义在连接配置段，cmd_connect 前向引用） */
 static const char* drv_name(void);
+/* 第三轮 任务4：进行中的后台连接/Attach（NULL = 无）。只在主线程读写 */
+static OS_ConnJob* g_conn_job;
 
 static const wchar_t* g_main_class = L"OpenScopeMain";
 static const wchar_t* g_right_class = L"OSRightPanel";
@@ -619,11 +622,12 @@ void os_mainwin_update_buttons(void)
         OS_Project* ap = os_ws_active();
         int probe_ok = (ap && ap->kind == OS_PROJ_PROBE && conn);
         int any = os_ds_any_connected();
-        ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay &&
+        int connecting = g_conn_job != NULL;   /* 后台连接中：连接/Attach 置灰，断开 = 取消 */
+        ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay && !connecting &&
             (!ap || ap->kind == OS_PROJ_PROBE));
-        ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay &&
+        ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay && !connecting &&
             (!ap || ap->kind == OS_PROJ_PROBE));
-        ENB(IDC_BTN_DISCON, conn || (ap && ap->kind == OS_PROJ_XCP && g_app.xcp_connected));
+        ENB(IDC_BTN_DISCON, conn || connecting || (ap && ap->kind == OS_PROJ_XCP && g_app.xcp_connected));
         /* Flash/CPU 仅对探针 Project */
         ENB(IDC_BTN_CPU_RUN, probe_ok && !replay);
         ENB(IDC_BTN_CPU_STOP, probe_ok && !replay);
@@ -2058,13 +2062,33 @@ static void connect_pending_tick(void)
     if (a) cmd_attach(); else cmd_connect();
 }
 
+/* 第三轮 任务4：CONNECT/Attach 在工作线程执行，结果经 WM_OS_CONNECT_DONE 回到主线程 */
+static int conn_busy_ignore(void)
+{
+    if (!g_conn_job) return 0;
+    set_status(0, L"正在连接…");
+    return 1;   /* 重复点击（或快捷键/AI 重入）直接忽略 */
+}
+static void conn_job_start(int attach, const OS_ConnectCfg* cfg)
+{
+    g_conn_job = os_conn_start(g_app.driver, g_app.driver_ctx, cfg, attach,
+                               os_modmgr_driver_index(), g_app.hMain, WM_OS_CONNECT_DONE);
+    if (!g_conn_job) {
+        os_log(OS_LOG_ERROR, "%s失败：无法创建连接线程", attach ? "Attach " : "连接");
+        set_status(0, attach ? L"Attach 失败" : L"连接失败");
+    } else {
+        set_status(0, attach ? L"正在 Attach…" : L"正在连接…");
+    }
+    os_mainwin_update_buttons();
+}
+
 static void cmd_connect(void)
 {
-    int rc, c = 0;
-    OS_DriverInfo info;
     OS_ConnectCfg cfg;
     LRESULT ifi, emu, dci;
-    OS_Project* apr = os_ws_active();
+    OS_Project* apr;
+    if (conn_busy_ignore()) return;
+    apr = os_ws_active();
     /* 对准活动 Project 的探针驱动（多 MCU 并行） */
     if (apr && apr->kind == OS_PROJ_PROBE && apr->driver_index >= 0)
         os_modmgr_select_driver(apr->driver_index);
@@ -2118,7 +2142,15 @@ static void cmd_connect(void)
             _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
         }
     }
-    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    conn_job_start(0, &cfg);
+}
+
+/* 连接完成（主线程）：原 cmd_connect 同步调用之后的部分 */
+static void connect_done(OS_ConnJob* job)
+{
+    int rc = job->rc, c = job->connected;
+    const OS_DriverInfo* pinfo = &job->info;
+    int same = os_modmgr_driver_index() == job->driver_index;   /* 期间用户可能切了 Project/驱动 */
     if (connect_again(0, rc)) return;
     if (rc != OS_ERR_OK) {
         set_status(0, L"连接失败");
@@ -2126,14 +2158,11 @@ static void cmd_connect(void)
         os_mainwin_update_buttons();
         return;
     }
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
-    g_app.connected = c;
-    memset(&info, 0, sizeof(info));
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
+    if (same) g_app.connected = c;
     {
         OS_Project* pr = os_ws_active();
-        int di = os_modmgr_driver_index();
-        if (pr && pr->kind == OS_PROJ_PROBE) {
+        int di = job->driver_index;
+        if (same && pr && pr->kind == OS_PROJ_PROBE) {
             pr->connected = c;
             pr->driver_index = di;
         } else {
@@ -2149,8 +2178,8 @@ static void cmd_connect(void)
         }
     }
     os_log(OS_LOG_INFO, "已连接: %s（%s, %s DLL %s, HW %d, FW %d）",
-           info.emulator[0] ? info.emulator : "?", info.name, drv_name(), info.dll_version,
-           info.hw_version, info.fw_version);
+           pinfo->emulator[0] ? pinfo->emulator : "?", pinfo->name, same ? drv_name() : "?", pinfo->dll_version,
+           pinfo->hw_version, pinfo->fw_version);
     refresh_status();
     os_mainwin_update_buttons();
 }
@@ -2161,10 +2190,9 @@ static void cmd_start_acq(void); /* fwd */
 static void cmd_attach(void)
 {
     /* 复用连接：attach=1 非侵入，成功后若有监视则开采集 */
-    int rc, c = 0;
-    OS_DriverInfo info;
     OS_ConnectCfg cfg;
     LRESULT ifi, emu, dci;
+    if (conn_busy_ignore()) return;
     if (g_app.net_mode) {
         MessageBoxW(g_app.hMain, L"网络通道不支持 Attach", L"Attach", MB_OK | MB_ICONINFORMATION);
         return;
@@ -2198,22 +2226,51 @@ static void cmd_attach(void)
         os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
         _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
     } else _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
-    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
+    conn_job_start(1, &cfg);
+}
+
+/* Attach 完成（主线程）：原 cmd_attach 同步调用之后的部分 */
+static void attach_done(OS_ConnJob* job)
+{
+    int rc = job->rc;
+    int same = os_modmgr_driver_index() == job->driver_index;
     if (connect_again(1, rc)) return;
     if (rc != OS_ERR_OK) {
         os_log(OS_LOG_ERROR, "Attach 失败 rc=%d", rc);
         os_mainwin_update_buttons();
         return;
     }
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
-    g_app.connected = c;
-    memset(&info, 0, sizeof(info));
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
-    os_log(OS_LOG_INFO, "Attach 成功: %s", info.emulator[0] ? info.emulator : "?");
+    if (same) g_app.connected = job->connected;
+    os_log(OS_LOG_INFO, "Attach 成功: %s", job->info.emulator[0] ? job->info.emulator : "?");
     refresh_status();
     os_mainwin_update_buttons();
-    if (g_app.connected && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
+    if (same && g_app.connected && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
         cmd_start_acq();
+}
+
+/* WM_OS_CONNECT_DONE */
+static void on_connect_done(OS_ConnJob* job)
+{
+    int rc;
+    if (!job) return;
+    if (job != g_conn_job) {            /* 不应发生（退出时 abandon 的 job 不再投递）；只回收 */
+        os_conn_finish(job, 1000);
+        return;
+    }
+    g_conn_job = NULL;
+    rc = os_conn_settle(job);           /* 最后一刻被取消但已连上 → 这里补 DISCONNECT */
+    if (rc == OS_ERR_CANCELED) {
+        os_log(OS_LOG_INFO, "%s已取消", job->attach ? "Attach " : "连接");
+        set_status(0, L"已取消连接");
+        refresh_status();
+        os_mainwin_update_buttons();
+    } else if (job->attach) {
+        attach_done(job);
+    } else {
+        connect_done(job);
+    }
+    if (!os_conn_finish(job, 2000))     /* 线程投递后只剩 FreeLibrary(pin)+return，正常立即结束 */
+        os_log(OS_LOG_WARN, "连接线程 2s 未结束（已忽略）");
 }
 
 static void cmd_cpu_ctrl(int cmd, const wchar_t* ok_msg)
@@ -2240,6 +2297,17 @@ static void cmd_disconnect(void)
     OS_Module* mod = NULL;
     void* ctx = NULL;
     int still = 0, i;
+    if (g_conn_pend >= 0) {             /* 等待重连结束的自动重试也一并取消 */
+        KillTimer(g_app.hMain, CONN_PEND_TIMER);
+        g_conn_pend = -1;
+    }
+    if (g_conn_job) {
+        /* 连接中点断开 = 取消：置标志，下面照常发 DISCONNECT（驱动在取消点返回 CANCELED）。
+         * 完成消息稍后到达，由 on_connect_done 收尾 */
+        os_conn_cancel(g_conn_job);
+        g_conn_job->drv->command(g_conn_job->ctx, OS_CMD_DISCONNECT, NULL, NULL); /* 期间切了 Project 也打到正确的驱动 */
+        os_log(OS_LOG_INFO, "正在取消连接…");
+    }
     if (apr && apr->kind == OS_PROJ_XCP) {
         if (g_app.xcpmod && g_app.xcpmod->command)
             g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
@@ -5178,6 +5246,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             return SendMessageW(target, WM_MOUSEWHEEL, wParam, lParam);
         break; /* 主窗口自身 → 默认处理 */
     }
+    case WM_OS_CONNECT_DONE:
+        on_connect_done((OS_ConnJob*)lParam);
+        return 0;
     case WM_OS_CPU_STATE: {
         CpsResult* r = (CpsResult*)lParam;
         if (r) {
@@ -5758,6 +5829,16 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         KillTimer(hwnd, 4);
         KillTimer(hwnd, 6);
         KillTimer(hwnd, CONN_PEND_TIMER);
+        if (g_conn_job) {
+            /* 任务4：退出时仍在连接 → 取消 + DISCONNECT，最多等 5s；仍卡在厂商 DLL 里则放弃该 job
+             * （线程钉住驱动 DLL，os_modmgr_shutdown 的 FreeLibrary 不会卸掉其代码） */
+            OS_ConnJob* j = g_conn_job;
+            g_conn_job = NULL;
+            os_conn_cancel(j);
+            j->drv->command(j->ctx, OS_CMD_DISCONNECT, NULL, NULL);
+            if (!os_conn_abandon(j, 5000))
+                os_log(OS_LOG_WARN, "退出：连接线程 5s 未结束（驱动 DLL 已钉住，进程退出时回收）");
+        }
         cps_shutdown();
         g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */
         g_tab_edit_idx = -1;

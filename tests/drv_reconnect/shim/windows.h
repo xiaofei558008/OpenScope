@@ -153,4 +153,12 @@ typedef struct { HANDLE hProcess, hThread; } PROCESS_INFORMATION;
 static inline BOOL CreateProcessW(LPCWSTR a, LPWSTR c, void* p, void* t, BOOL i, DWORD f, void* e, LPCWSTR d, STARTUPINFOW* si, PROCESS_INFORMATION* pi)
 { (void)a; (void)c; (void)p; (void)t; (void)i; (void)f; (void)e; (void)d; (void)si; (void)pi; return FALSE; }
 static inline BOOL GetExitCodeProcess(HANDLE h, DWORD* c) { (void)h; *c = 1; return TRUE; }
+/* ---- tests/conn_async（code/src/conn_async.c）额外需要 ---- */
+typedef void* PVOID;
+#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 0x4
+static inline PVOID InterlockedExchangePointer(PVOID volatile* p, PVOID x) { return __atomic_exchange_n((PVOID*)p, x, __ATOMIC_SEQ_CST); }
+static inline PVOID InterlockedCompareExchangePointer(PVOID volatile* p, PVOID x, PVOID cmp)
+{ __atomic_compare_exchange_n((PVOID*)p, &cmp, x, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST); return cmp; }
+/* GetModuleHandleExW / PostMessageW 由 tests/conn_async/pre_conn.h 重定向到测试假实现 */
+
 #endif
