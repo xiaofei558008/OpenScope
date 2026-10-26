@@ -83,7 +83,13 @@ static void sock_shutdown_all(void)
     EnterCriticalSection(&g_conn_cs);
     g_stopping = 1;
     for (i = 0; i < AI_SLOTS; i++)
-        if (g_socks[i] >= 0) shutdown((SOCKET)g_socks[i], SD_BOTH);
+        if (g_socks[i] >= 0) {
+            shutdown((SOCKET)g_socks[i], SD_BOTH);
+#ifdef _WIN32
+            /* Windows：shutdown 不会唤醒其它线程里阻塞的 recv（要等对端 FIN）；取消该 socket 上的 I/O 才会立即返回 */
+            CancelIoEx((HANDLE)(UINT_PTR)g_socks[i], NULL);
+#endif
+        }
     LeaveCriticalSection(&g_conn_cs);
 }
 
