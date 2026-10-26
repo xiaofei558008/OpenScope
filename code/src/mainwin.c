@@ -209,7 +209,11 @@ static const char* drv_name(void);
 static OS_ConnJob* g_conn_job;
 /* 第三轮遗留项：后台连接中不允许刷新仿真器列表 / 切换驱动（job 持有 drv+ctx；将来驱动热重载时 ctx 可能失效）。
  * 主线程读写 g_conn_job；AI 线程只读指针做判断（误差最多一条消息）。 */
-int os_mainwin_connecting(void) { return *(OS_ConnJob* volatile*)&g_conn_job != NULL; }
+int os_mainwin_connecting(void)
+{
+    /* 第四轮 任务2：AI 客户端的连接（os_conn_connect_sync，AI 线程）也算"连接中" */
+    return *(OS_ConnJob* volatile*)&g_conn_job != NULL || os_conn_owner() != OS_CONN_OWNER_NONE;
+}
 /* 第四轮 任务1：进行中的后台 StepOut（NULL = 无）。只在主线程读写 */
 static OS_CmdJob* g_step_job;
 
@@ -628,7 +632,7 @@ void os_mainwin_update_buttons(void)
         OS_Project* ap = os_ws_active();
         int probe_ok = (ap && ap->kind == OS_PROJ_PROBE && conn);
         int any = os_ds_any_connected();
-        int connecting = g_conn_job != NULL;   /* 后台连接中：连接/Attach 置灰，断开 = 取消 */
+        int connecting = os_mainwin_connecting();   /* 后台连接中（UI 或 AI 发起）：连接/Attach 置灰，断开 = 取消 */
         ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay && !connecting &&
             (!ap || ap->kind == OS_PROJ_PROBE));
         ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay && !connecting &&
@@ -2074,16 +2078,30 @@ static void connect_pending_tick(void)
 /* 第三轮 任务4：CONNECT/Attach 在工作线程执行，结果经 WM_OS_CONNECT_DONE 回到主线程 */
 static int conn_busy_ignore(void)
 {
-    if (!g_conn_job) return 0;
-    set_status(0, L"正在连接…");
-    return 1;   /* 重复点击（或快捷键/AI 重入）直接忽略 */
+    if (g_conn_job) {
+        set_status(0, L"正在连接…");
+        return 1;   /* 重复点击（或快捷键重入）直接忽略 */
+    }
+    if (os_conn_owner() == OS_CONN_OWNER_AI) {   /* 第四轮：AI 客户端正在连接 */
+        os_log(OS_LOG_INFO, "AI 客户端正在连接探针，本次点击已忽略（可点「断开」取消）");
+        set_status(0, L"AI 客户端正在连接…");
+        return 1;
+    }
+    return 0;
 }
 static void conn_job_start(int attach, const OS_ConnectCfg* cfg)
 {
+    if (!os_conn_claim(OS_CONN_OWNER_UI)) {      /* 第四轮：与 AI 客户端的连接互斥（不等待） */
+        conn_busy_ignore();
+        os_mainwin_update_buttons();
+        return;
+    }
     os_modmgr_auto_alias_pre(os_modmgr_driver_index(), cfg->device);   /* 日志前缀别名：连接前先按器件名 */
     g_conn_job = os_conn_start(g_app.driver, g_app.driver_ctx, cfg, attach,
                                os_modmgr_driver_index(), g_app.hMain, WM_OS_CONNECT_DONE);
+    os_conn_set_active(g_conn_job);              /* AI 的 disconnect 可取消它 */
     if (!g_conn_job) {
+        os_conn_release(OS_CONN_OWNER_UI);
         os_log(OS_LOG_ERROR, "%s失败：无法创建连接线程", attach ? "Attach " : "连接");
         set_status(0, attach ? L"Attach 失败" : L"连接失败");
     } else {
@@ -2268,7 +2286,9 @@ static void on_connect_done(OS_ConnJob* job)
         return;
     }
     g_conn_job = NULL;
+    os_conn_set_active(NULL);           /* 先注销（AI 线程不会再碰 job），再放开互斥 */
     rc = os_conn_settle(job);           /* 最后一刻被取消但已连上 → 这里补 DISCONNECT */
+    os_conn_release(OS_CONN_OWNER_UI);  /* connect_again 的自动重试会重新 claim */
     if (rc == OS_ERR_OK)                /* 日志来源前缀：按芯片推导目标别名（tc3x/stm32g4…；用户值优先） */
         os_modmgr_auto_alias(job->driver_index, job->cfg.device, job->info.emulator);
     if (rc == OS_ERR_CANCELED) {
@@ -2369,6 +2389,11 @@ static void cmd_disconnect(void)
     if (g_conn_pend >= 0) {             /* 等待重连结束的自动重试也一并取消 */
         KillTimer(g_app.hMain, CONN_PEND_TIMER);
         g_conn_pend = -1;
+    }
+    if (!g_conn_job && os_conn_owner() == OS_CONN_OWNER_AI) {
+        /* 第四轮：AI 客户端正在连接 → 取消它（AI 线程收到 CANCELED 回给客户端）；下面照常发 DISCONNECT */
+        os_conn_cancel_active();
+        os_log(OS_LOG_INFO, "正在取消 AI 客户端发起的连接…");
     }
     if (g_conn_job) {
         /* 连接中点断开 = 取消：置标志，下面照常发 DISCONNECT（驱动在取消点返回 CANCELED）。
@@ -2721,7 +2746,12 @@ static int conn_busy_refuse(const char* what)
         set_status(0, L"正在步出…（完成或取消后再操作）");
         return 1;
     }
-    if (!g_conn_job) return 0;
+    if (!g_conn_job) {
+        if (os_conn_owner() != OS_CONN_OWNER_AI) return 0;
+        os_log(OS_LOG_INFO, "AI 客户端正在连接，暂不能%s（可先点「断开」取消）", what);
+        set_status(0, L"AI 客户端正在连接…（完成或取消后再操作）");
+        return 1;
+    }
     os_log(OS_LOG_INFO, "正在%s，暂不能%s（可先点「断开」取消）", g_conn_job->attach ? " Attach" : "连接", what);
     set_status(0, L"正在连接…（完成或取消后再操作）");
     return 1;
@@ -5934,10 +5964,16 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
              * （线程钉住驱动 DLL，os_modmgr_shutdown 的 FreeLibrary 不会卸掉其代码） */
             OS_ConnJob* j = g_conn_job;
             g_conn_job = NULL;
+            os_conn_set_active(NULL);
             os_conn_cancel(j);
             j->drv->command(j->ctx, OS_CMD_DISCONNECT, NULL, NULL);
             if (!os_conn_abandon(j, 5000))
                 os_log(OS_LOG_WARN, "退出：连接线程 5s 未结束（驱动 DLL 已钉住，进程退出时回收）");
+        }
+        if (os_conn_owner() == OS_CONN_OWNER_AI && g_app.driver && g_app.driver->command) {
+            /* 第四轮：AI 线程的连接在途 → 取消 + DISCONNECT；AI 线程随后返回，aiapi 卸载时汇合（≤2s） */
+            os_conn_cancel_active();
+            g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);
         }
         cps_shutdown();
         g_tab_edit = NULL; /* 就地编辑框随主窗口销毁，避免消息循环读到悬空句柄 */

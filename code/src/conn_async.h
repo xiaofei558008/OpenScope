@@ -53,4 +53,32 @@ int  os_conn_finish(OS_ConnJob* job, DWORD ms);
  * 返回 1 = 已结束并释放。 */
 int  os_conn_abandon(OS_ConnJob* job, DWORD ms);
 
+/* ---- 第四轮 任务2：UI 与 AI 客户端的连接互斥 ----
+ * 进程内同一时刻只允许一个 CONNECT/Attach 在途（不论来自 UI 还是 AI 线程）。
+ *  - os_conn_claim(owner)：拿到返回 1；已被占用返回 0（调用方回 AGAIN / 忽略点击，不等待）。
+ *  - os_conn_set_active(job)：登记在途 job，供另一方取消（UI 断开 → 取消 AI 连接，AI disconnect → 取消 UI 连接）。
+ *  - os_conn_cancel_active()：取消在途 job（并让 AI 的 AGAIN 重试循环停止）。调用方随后照常发 DISCONNECT。
+ * 所有函数可在任意线程调用。 */
+#define OS_CONN_OWNER_NONE 0
+#define OS_CONN_OWNER_UI   1
+#define OS_CONN_OWNER_AI   2
+int  os_conn_claim(int owner);
+void os_conn_release(int owner);
+int  os_conn_owner(void);
+void os_conn_set_active(OS_ConnJob* job);
+int  os_conn_cancel_active(void);   /* 返回 1 = 确有在途连接被取消 */
+
+typedef struct OS_ConnResult {
+    int rc;
+    int connected;
+    OS_DriverInfo info;
+    int busy_owner;        /* rc==OS_ERR_AGAIN 且因互斥被拒时 = 占用方，否则 0 */
+} OS_ConnResult;
+
+/* AI 线程用的阻塞连接：claim → 工作线程 CONNECT（钉住 DLL、可被取消）→ 等结果 → release。
+ * 驱动后台重连（AGAIN）时每 250ms 重试，最多 again_wait_ms；期间被取消立即返回 OS_ERR_CANCELED。
+ * 不向任何窗口发消息（不会与 UI 线程 SendMessage 互等）。返回 res->rc。 */
+int  os_conn_connect_sync(int owner, const OS_Module* drv, void* ctx, const OS_ConnectCfg* cfg,
+                          int attach, int driver_index, DWORD again_wait_ms, OS_ConnResult* res);
+
 #endif

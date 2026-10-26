@@ -93,3 +93,82 @@ int os_conn_abandon(OS_ConnJob* job, DWORD ms)
     InterlockedExchangePointer((PVOID volatile*)&job->notify, NULL);
     return os_conn_finish(job, ms);
 }
+
+/* ---------------- 第四轮 任务2：UI / AI 连接互斥 ---------------- */
+static volatile LONG g_owner;          /* OS_CONN_OWNER_* */
+static volatile LONG g_slot_cancel;    /* 本次占用期间被取消（含 AGAIN 重试等待中） */
+static volatile LONG g_act_lock;       /* 保护 g_active 的极短自旋锁（无需初始化） */
+static OS_ConnJob* g_active;
+
+static void act_lock(void)   { while (InterlockedCompareExchange(&g_act_lock, 1, 0) != 0) SwitchToThread(); }
+static void act_unlock(void) { InterlockedExchange(&g_act_lock, 0); }
+
+int os_conn_claim(int owner)
+{
+    if (InterlockedCompareExchange(&g_owner, owner, OS_CONN_OWNER_NONE) != OS_CONN_OWNER_NONE) return 0;
+    InterlockedExchange(&g_slot_cancel, 0);
+    return 1;
+}
+
+void os_conn_release(int owner)
+{
+    InterlockedCompareExchange(&g_owner, OS_CONN_OWNER_NONE, owner);
+}
+
+int os_conn_owner(void) { return (int)InterlockedCompareExchange(&g_owner, 0, 0); }
+
+void os_conn_set_active(OS_ConnJob* job)
+{
+    act_lock();
+    g_active = job;
+    if (job && InterlockedCompareExchange(&g_slot_cancel, 0, 0)) os_conn_cancel(job);   /* 登记前已被取消 */
+    act_unlock();
+}
+
+int os_conn_cancel_active(void)
+{
+    int any;
+    act_lock();
+    any = os_conn_owner() != OS_CONN_OWNER_NONE;
+    if (any) InterlockedExchange(&g_slot_cancel, 1);
+    if (g_active) os_conn_cancel(g_active);
+    act_unlock();
+    return any;
+}
+
+int os_conn_connect_sync(int owner, const OS_Module* drv, void* ctx, const OS_ConnectCfg* cfg,
+                         int attach, int driver_index, DWORD again_wait_ms, OS_ConnResult* res)
+{
+    ULONGLONG t0;
+    memset(res, 0, sizeof(*res));
+    if (!os_conn_claim(owner)) {
+        res->rc = OS_ERR_AGAIN;
+        res->busy_owner = os_conn_owner();
+        return res->rc;
+    }
+    t0 = GetTickCount64();
+    for (;;) {
+        OS_ConnJob* j = os_conn_start(drv, ctx, cfg, attach, driver_index, NULL, 0);
+        if (!j) { res->rc = OS_ERR_FAIL; break; }
+        os_conn_set_active(j);
+        WaitForSingleObject(j->thread, INFINITE);   /* 可取消：断开 → 驱动取消点 → 线程返回 */
+        act_lock();                                 /* 先注销再读/释放：另一方不会再碰 j */
+        g_active = NULL;
+        act_unlock();
+        os_conn_settle(j);                          /* 最后一刻被取消但已连上 → 补 DISCONNECT */
+        res->rc = j->rc;
+        res->connected = j->connected;
+        res->info = j->info;
+        os_conn_finish(j, INFINITE);
+        if (res->rc != OS_ERR_AGAIN) break;
+        if (InterlockedCompareExchange(&g_slot_cancel, 0, 0)) { res->rc = OS_ERR_CANCELED; break; }
+        if (GetTickCount64() - t0 >= again_wait_ms) break;
+        {   /* 等 250ms 再试；分片等待，被取消时 ≤10ms 内返回 */
+            ULONGLONG w = GetTickCount64();
+            while (GetTickCount64() - w < 250 && !InterlockedCompareExchange(&g_slot_cancel, 0, 0)) Sleep(10);
+        }
+        if (InterlockedCompareExchange(&g_slot_cancel, 0, 0)) { res->rc = OS_ERR_CANCELED; break; }
+    }
+    os_conn_release(owner);
+    return res->rc;
+}

@@ -13,6 +13,7 @@
 #include "version.h"
 #include "elf.h"
 #include "srcwin.h"
+#include "conn_async.h"
 #include "a2l_export.h"
 #include "xcpsym.h"
 #include "workspace.h"
@@ -443,6 +444,7 @@ static int method_connect(const char* params, char* out, int cap)
 {
     OS_ConnectCfg cfg;
     OS_DriverInfo info;
+    OS_ConnResult cres;
     int rc, c = 0;
     char device[128], serial[64];
     if (!g_app.driver || !g_app.driver->command)
@@ -477,24 +479,35 @@ static int method_connect(const char* params, char* out, int cap)
             _snprintf(cfg.serial, sizeof(cfg.serial), "%s", serial);
     }
     g_app.speed_khz = cfg.speed_khz;
-    os_modmgr_auto_alias_pre(os_modmgr_driver_index(), cfg.device);   /* 日志前缀别名：连接前先按器件名 */
-    rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
-    {   /* 驱动后台重连中（OS_ERR_AGAIN）：本函数在 AI 工作线程，等重连结束再连，最多 15 s；不报 connect failed */
-        DWORD t0 = GetTickCount();
-        while (rc == OS_ERR_AGAIN && GetTickCount() - t0 < 15000) {
-            Sleep(250);
-            rc = g_app.driver->command(g_app.driver_ctx, OS_CMD_CONNECT, &cfg, NULL);
-        }
+    /* 第四轮 任务2：经 conn_async 与 UI 连接互斥。已有连接在途（UI 或另一个 AI 客户端）→ 立即回 AGAIN，
+     * 不排队；CONNECT 在工作线程执行（钉住驱动 DLL），UI 点「断开」可取消（回 CANCELED）。
+     * 驱动后台重连（AGAIN）时每 250ms 重试，最多 15 s。本线程不向 UI 发 SendMessage。 */
+    {
+        int di = os_modmgr_driver_index(), busy;
+        const OS_Module* drv = g_app.driver;
+        void* dctx = g_app.driver_ctx;
+        busy = os_conn_owner();
+        if (busy != OS_CONN_OWNER_NONE)
+            return ai_fail(out, cap, OS_ERR_AGAIN, busy == OS_CONN_OWNER_UI
+                           ? "connect already in progress (UI), retry later"
+                           : "connect already in progress (another client), retry later");
+        os_modmgr_auto_alias_pre(di, cfg.device);   /* 日志前缀别名：连接前先按器件名 */
+        os_mainwin_request_ui_sync();               /* 工具栏：连接/Attach 置灰（PostMessage） */
+        rc = os_conn_connect_sync(OS_CONN_OWNER_AI, drv, dctx, &cfg, cfg.attach, di, 15000, &cres);
+        os_mainwin_request_ui_sync();
+        if (rc == OS_ERR_AGAIN && cres.busy_owner != OS_CONN_OWNER_NONE)
+            return ai_fail(out, cap, rc, "connect already in progress, retry later");
     }
     if (rc == OS_ERR_AGAIN)
         return ai_fail(out, cap, rc, "driver is reconnecting in background, retry later");
+    if (rc == OS_ERR_CANCELED)
+        return ai_fail(out, cap, rc, "connect canceled (disconnect requested)");
     if (rc != OS_ERR_OK)
         return ai_fail(out, cap, rc, "connect failed");
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+    c = cres.connected;
+    info = cres.info;
     g_app.connected = c;
     ai_sync_ws_connected(c);
-    memset(&info, 0, sizeof(info));
-    g_app.driver->command(g_app.driver_ctx, OS_CMD_GET_INFO, NULL, &info);
     os_modmgr_auto_alias(os_modmgr_driver_index(), cfg.device, info.emulator);   /* 日志前缀别名 */
     os_mainwin_request_ui_sync();
     /* Attach 且有监视变量时自动开采集 */
@@ -508,6 +521,7 @@ static int method_connect(const char* params, char* out, int cap)
 
 static int method_disconnect(char* out, int cap)
 {
+    os_conn_cancel_active();   /* 第四轮：取消在途的连接（UI 或其他 AI 客户端发起），下面照常 DISCONNECT */
     if (g_app.acq_state == OS_ACQ_RUNNING) os_ds_stop();
     if (g_app.driver && g_app.driver->command)
         g_app.driver->command(g_app.driver_ctx, OS_CMD_DISCONNECT, NULL, NULL);

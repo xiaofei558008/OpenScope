@@ -4,3 +4,8 @@ cd /d %~dp0
 cl /nologo /utf-8 /W4 /Zi /I. /I..\..\code\src /FIpre_conn.h test_conn_async.c ..\..\code\src\conn_async.c /Fe:test_conn_async.exe
 if errorlevel 1 exit /b 1
 test_conn_async.exe
+if errorlevel 1 exit /b 1
+rem 第四轮：AI 线程连接 vs UI 连接
+cl /nologo /utf-8 /W4 /Zi /I. /I..\..\code\src /FIpre_conn.h test_conn_race.c ..\..\code\src\conn_async.c /Fe:test_conn_race.exe
+if errorlevel 1 exit /b 1
+test_conn_race.exe
