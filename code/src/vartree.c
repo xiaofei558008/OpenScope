@@ -449,6 +449,8 @@ static int tree_select_recursive(HWND tree, HTREEITEM h, const wchar_t* target)
     return 0;
 }
 
+static HTREEITEM tree_find_by_leaf_id(HWND tree, HTREEITEM h, int leaf_id);
+
 int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name)
 {
     char name[512];
@@ -459,6 +461,17 @@ int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name)
     if (!hTree || !leaf_name || !leaf_name[0]) return -1;
     os_wide_to_utf8_buf(leaf_name, name, sizeof(name));
     id = os_vartree_find_by_name(name);
+    if (id < 0) {
+        /* 多 Project 后叶名可能带 "Project::" 前缀：按 "::名" 后缀再找一次 */
+        int i;
+        size_t nl = strlen(name);
+        for (i = 0; i < g_app.leaf_count && id < 0; i++) {
+            const char* ln = g_app.leaves[i].name;
+            size_t ll = strlen(ln);
+            if (ll > nl + 2 && strcmp(ln + ll - nl, name) == 0 && ln[ll - nl - 1] == ':' && ln[ll - nl - 2] == ':')
+                id = i;
+        }
+    }
     os_log(OS_LOG_DEBUG, "select_leaf: name='%s' find=%d", name, id);
     if (id < 0) return -1;
     L = &g_app.leaves[id];
@@ -468,6 +481,17 @@ int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name)
     os_log(OS_LOG_DEBUG, "select_leaf: root=%p", (void*)h);
     while (h) {
         if (tree_select_recursive(hTree, h, target)) return 0;
+        h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)h);
+    }
+    /* 树节点文本格式变化（类型/前缀等）时文本前缀匹配会失败：按叶 id（lParam）定位 */
+    h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+    while (h) {
+        HTREEITEM f = tree_find_by_leaf_id(hTree, h, id);
+        if (f) {
+            SendMessageW(hTree, TVM_EXPAND, TVE_EXPAND, (LPARAM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_PARENT, (LPARAM)f));
+            SendMessageW(hTree, TVM_SELECTITEM, TVGN_CARET, (LPARAM)f);
+            return 0;
+        }
         h = (HTREEITEM)SendMessageW(hTree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)h);
     }
     return -1;

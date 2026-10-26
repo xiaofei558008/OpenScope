@@ -130,6 +130,9 @@ try {
     Write-Output "num cmd alive=$(-not $proc.HasExited)"
     Start-Sleep -Milliseconds 500
     $tab = Find-ChildByClass $main "SysTabControl32"
+    # Terminator 式停靠（默认，OPENSCOPE_DOCK=0 回退旧 tab）：tab 控件隐藏，窗口作为停靠面板同时可见
+    $dock = -not [OsWinUi]::IsWindowVisible($tab)
+    Write-Output "dock mode=$dock"
     Write-Output "tab found alive=$(-not $proc.HasExited)"
     $ntab = [OsWinUi]::SendMessage($tab, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()  # TCM_GETITEMCOUNT
     Write-Output "tabcount=$ntab alive=$(-not $proc.HasExited)"
@@ -138,7 +141,11 @@ try {
     $chart = Find-ChildByClass $main "OSChartWin"
     $num = Find-ChildByClass $main "OSNumWin"
     Check ($chart -ne [IntPtr]::Zero -and $num -ne [IntPtr]::Zero) "波形/数值窗口均已创建"
-    Check ([OsWinUi]::IsWindowVisible($num) -and -not [OsWinUi]::IsWindowVisible($chart)) "同一时刻只显示当前 Tab 窗口"
+    if ($dock) {
+        Check ([OsWinUi]::IsWindowVisible($num) -and [OsWinUi]::IsWindowVisible($chart)) "停靠模式：波形/数值面板同时可见"
+    } else {
+        Check ([OsWinUi]::IsWindowVisible($num) -and -not [OsWinUi]::IsWindowVisible($chart)) "同一时刻只显示当前 Tab 窗口"
+    }
 
     # 树右键“添加到…”命令
     Send-Cmd $main 2305   # IDM_TREE_ADD_CHART
@@ -150,6 +157,16 @@ try {
     }
     Check ($added -ge 2) "两个窗口均收到添加变量（日志 $added 条）"
 
+    if ($dock) {
+        # 停靠模式：面板关闭 = 停靠管理器 close_panel → WM_OS_WIN_CLOSED(WM_APP+5, wParam=HWND)
+        [OsWinUi]::PostMessage($main, 0x8005, $num, [IntPtr]0) | Out-Null
+        Start-Sleep -Milliseconds 400
+        Check (-not [OsWinUi]::IsWindowVisible($num)) "停靠模式：关闭数值面板"
+        Check ([OsWinUi]::IsWindowVisible($chart)) "停靠模式：波形面板仍可见"
+        [OsWinUi]::PostMessage($main, 0x8005, $chart, [IntPtr]0) | Out-Null
+        Start-Sleep -Milliseconds 400
+        Check (-not [OsWinUi]::IsWindowVisible($chart)) "停靠模式：关闭波形面板"
+    } else {
     # 切换 Tab：用方向键（WM_KEYDOWN），Tab 控件在进程内处理并触发 TCN_SELCHANGE
     function Select-Tab([int]$Idx, [IntPtr]$TabHwnd) {
         $cur = [OsWinUi]::SendMessage($TabHwnd, 0x130B, [IntPtr]0, [IntPtr]0).ToInt64()  # TCM_GETCURSEL
@@ -187,6 +204,7 @@ try {
     Start-Sleep -Milliseconds 300
     $ntab3 = [OsWinUi]::SendMessage($tab, 0x1304, [IntPtr]0, [IntPtr]0).ToInt64()
     Check ($ntab3 -eq 0) "波形窗口 × 关闭后 Tab 数量 = 0（实际 $ntab3）"
+    }
 
     Check (-not $proc.HasExited) "进程未闪退"
     Write-Output "--- 日志关键行 ---"

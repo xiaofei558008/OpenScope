@@ -102,6 +102,14 @@ try {
 
     # N5：MCU 型号下拉
     $devCombo = [OsChartUi]::GetDlgItem($main, 2101)
+    if ($devCombo -eq [IntPtr]::Zero) {
+        # 可停靠命令栏（OSDockBar）上线后，工具栏控件的父窗口是命令栏而不是主窗口
+        $script:bars = @()
+        $cbB = { param($h,$l) $sb = New-Object System.Text.StringBuilder 64; [OsChartUi]::GetClassName($h,$sb,64) | Out-Null
+                 if ($sb.ToString() -eq "OSDockBar") { $script:bars += $h }; return $true }
+        [OsChartUi]::EnumChildWindows($main, $cbB, [IntPtr]::Zero) | Out-Null
+        foreach ($bh in $script:bars) { $c = [OsChartUi]::GetDlgItem($bh, 2101); if ($c -ne [IntPtr]::Zero) { $devCombo = $c; break } }
+    }
     Check ($devCombo -ne [IntPtr]::Zero) "MCU 型号下拉存在 (ID 2101)"
     if ($devCombo -ne [IntPtr]::Zero) {
         $dcnt = [OsChartUi]::SendMessage($devCombo, 0x146, [IntPtr]0, [IntPtr]0).ToInt64()  # CB_GETCOUNT
