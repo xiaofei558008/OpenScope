@@ -38,7 +38,19 @@ static int s_read(unsigned int a, unsigned char** p, unsigned int n)
     fk_leave();
     return r;
 }
-static int s_write(unsigned int a, char* d, unsigned int n) { (void)a; (void)d; (void)n; fk_enter(1); fk_leave(); return 0; }
+/* 第五轮：跟踪 FPB 比较器（0xE0002008 + 4*i）：g_fk_bp_live = 非零比较器个数（断开前必须清零） */
+static volatile LONG s_comp[8];
+static int s_write(unsigned int a, char* d, unsigned int n)
+{
+    fk_enter(1);
+    if (n == 4 && a >= 0xE0002008u && a < 0xE0002008u + 8u * 4u) {
+        LONG v = (LONG)((unsigned char)d[0] | ((unsigned char)d[1] << 8) | ((unsigned char)d[2] << 16) | ((unsigned)(unsigned char)d[3] << 24));
+        LONG was = InterlockedExchange(&s_comp[(a - 0xE0002008u) / 4u], v);
+        if (!was && v) InterlockedIncrement(&g_fk_bp_live);
+        else if (was && !v) InterlockedDecrement(&g_fk_bp_live);
+    }
+    fk_leave(); return 0;
+}
 static int s_reset(int m) { (void)m; fk_enter(1); InterlockedIncrement(&g_fk_run_ctl); fk_leave(); return 0; }
 static int s_execute(unsigned int a) { (void)a; fk_enter(1); fk_leave(); return 0; }
 static OS_StLinkGenInf* s_gen(void) { fk_enter(1); memset(&s_gi, 0, sizeof(s_gi)); strcpy(s_gi.name, "STM32F4FAKE"); strcpy(s_gi.cpu, "Cortex-M4"); fk_leave(); return &s_gi; }

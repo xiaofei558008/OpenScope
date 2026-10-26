@@ -40,6 +40,7 @@ typedef struct StLinkCtx {
 static StLinkCtx g_ctx;
 /* Bug4：后台重连守卫（同 jlink/das）：重连不在调用线程、不持 g_ctx.cs；UI 命令限时拿锁 → OS_ERR_AGAIN */
 static OS_DrvGuard g_guard;
+static OS_DrvDefer g_defer;   /* 第五轮：断开时锁被占 → 延迟关闭 */
 static volatile LONG g_want;
 #define ST_CONN()       (InterlockedCompareExchange(&g_ctx.connected, 0, 0) != 0)
 #define ST_SET_CONN(v)  InterlockedExchange(&g_ctx.connected, (LONG)(v))
@@ -338,6 +339,7 @@ static int mod_connect_mode_once(int conn_mode, int rst_mode, int speed_cap_khz,
                   want_khz, mode_name, g_ctx.cfg.probe_index,
                   g_ctx.cfg.serial[0] ? g_ctx.cfg.serial : "(空)");
     }
+    drv_defer_run(&g_defer);   /* 第五轮：上次断开延后的 disconnect 先做完（本路径处于独占区） */
     /* 已连接时先断开旧会话再重连，避免 CubeProgrammer 内部会话叠加 */
     if (ST_CONN()) {
         __try { g_ctx.api.disconnect(); } __except (EXCEPTION_EXECUTE_HANDLER) {}
@@ -930,15 +932,47 @@ static int mod_scan(OS_ScanReq* req)
     return OS_ERR_OK;
 }
 
+/* 第五轮：断开时锁被占 → 延迟断开（见 drv_guard.h drv_defer_*）。
+ * 持锁/独占区内调用：按仍保留的 g_fpb 直接经厂商 API 清 FPB 比较器（mod_write 要求已连接，不能用），
+ * 再 disconnect。不清 FPB 就断开，目标脱离调试器后命中比较器会进 HardFault。 */
+static void stlink_deferred_close(void)
+{
+    static const uint8_t zero[4] = {0, 0, 0, 0};
+    static const uint8_t ctrl_off[4] = {2, 0, 0, 0};   /* KEY, disable unit */
+    int i, any = 0;
+    if (!g_ctx.api.h || ST_CONN()) return;
+    if (g_ctx.api.write_memory) {
+        for (i = 0; i < STLINK_FPB_MAX; i++)
+            if (g_fpb[i].addr) {
+                any = 1;
+                g_ctx.api.write_memory((unsigned int)(STLINK_FPB_COMP0 + (uint32_t)i * 4u), (char*)zero, 4);
+            }
+        if (any) g_ctx.api.write_memory((unsigned int)STLINK_FPB_CTRL, (char*)ctrl_off, 4);
+    }
+    memset(g_fpb, 0, sizeof(g_fpb));
+    if (g_ctx.api.disconnect) g_ctx.api.disconnect();
+    if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 延迟断开：会话已关闭");
+}
+
 static int stlink_close_session(void)
 {
     int i;
     if (g_ctx.api.h && ST_CONN()) {
-        for (i = 0; i < STLINK_FPB_MAX; i++)
-            if (g_fpb[i].addr) stlink_fpb_free_slot(i);
+        /* 第五轮：FPB 清除与 disconnect 都放进同一次持锁（原先 FPB 清除在锁外、逐次 io_lock，
+         * 采集读占锁时会 AGAIN 失败却照样清空 g_fpb，比较器残留）。锁被占 → 整体延后。 */
         if (TryEnterCriticalSection(&g_ctx.cs)) {
+            for (i = 0; i < STLINK_FPB_MAX; i++)
+                if (g_fpb[i].addr) stlink_fpb_free_slot(i);
             if (g_ctx.api.h && ST_CONN()) g_ctx.api.disconnect();
             LeaveCriticalSection(&g_ctx.cs);
+        } else {
+            ST_SET_CONN(0);              /* g_fpb 保留给延迟关闭线程 */
+            drv_defer_request(&g_defer);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 断开：驱动忙（读进行中），disconnect 延后到锁释放");
+            InterlockedExchange(&g_ctx.voltage_mv, -1);
+            memset(&g_ctx.info, 0, sizeof(g_ctx.info));
+            if (g_fw) g_fw->log(OS_LOG_INFO, "ST-Link 已断开");
+            return OS_ERR_OK;
         }
     }
     memset(g_fpb, 0, sizeof(g_fpb));
@@ -1294,6 +1328,10 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
         if (fw && fw->log) fw->log(OS_LOG_ERROR, "stlink 模块: 上次卸载的后台收尾仍未结束，请稍后再加载");
         return OS_ERR_AGAIN;
     }
+    if (InterlockedCompareExchange(&g_defer.running, 0, 0)) {
+        if (fw && fw->log) fw->log(OS_LOG_ERROR, "stlink 模块: 上次的延迟断开线程仍在运行，请稍后再加载");
+        return OS_ERR_AGAIN;
+    }
     g_fw = fw;
     memset(g_fpb, 0, sizeof(g_fpb));
     ST_SET_CONN(0);
@@ -1301,6 +1339,7 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     g_ctx.probe_count = 0;
     InitializeCriticalSection(&g_ctx.cs);
     drv_guard_init(&g_guard, &g_ctx.cs, stlink_reconnect_worker, OS_STLINK_RECONNECT_MIN_MS);
+    drv_defer_init(&g_defer, &g_guard, stlink_deferred_close);
     memset(&g_ctx.cfg, 0, sizeof(g_ctx.cfg));
     g_ctx.cfg.iface = OS_IF_SWD;
     g_ctx.cfg.speed_khz = 4000;
@@ -1321,6 +1360,9 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
 /* 最终清理（最后一个使用者调用：deinit 同步，或卸载交接后由最后离开独占区的线程） */
 static void stlink_final_cleanup(void)
 {
+    if (!drv_defer_stop(&g_defer, 2000) && g_fw)
+        g_fw->log(OS_LOG_WARN, "ST-Link 卸载：延迟断开线程 2s 未退出");
+    drv_defer_run(&g_defer);
     stlink_close_session();
     os_stlink_unbind(&g_ctx.api);
     DeleteCriticalSection(&g_ctx.cs);

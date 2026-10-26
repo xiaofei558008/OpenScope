@@ -109,9 +109,11 @@ static inline BOOL CloseHandle(HANDLE h)
 {
     ShimThread* s = (ShimThread*)h; int done;
     if (s->is_event) { pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); free(s); return TRUE; }
-    pthread_mutex_lock(&s->m); done = s->done; if (!done) s->closed = 1; pthread_mutex_unlock(&s->m);
-    if (done) { pthread_join(s->t, NULL); pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); free(s); }
-    else pthread_detach(s->t);
+    pthread_t t;
+    /* 第五轮：t 在锁内取出——closed=1 之后线程随时可能自行 free(s)，解锁后不能再读 s->t（TSan 报过） */
+    pthread_mutex_lock(&s->m); done = s->done; t = s->t; if (!done) s->closed = 1; pthread_mutex_unlock(&s->m);
+    if (done) { pthread_join(t, NULL); pthread_mutex_destroy(&s->m); pthread_cond_destroy(&s->cv); free(s); }
+    else pthread_detach(t);
     return TRUE;
 }
 /* LoadLibrary 系列由测试的 fake_*.c 提供（经 pre*.h 重定向） */

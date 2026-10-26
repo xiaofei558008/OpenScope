@@ -219,6 +219,52 @@ int main(void)
     rc = cmd(OS_CMD_CONNECT, &cfg, NULL); CHECK(rc == OS_ERR_OK, "connect after cancel rc=%d", rc);
     cmd(OS_CMD_DISCONNECT, NULL, NULL);
 
+    printf("[H] 第五轮：采集读占锁（300ms）时断开 → Close 延后到锁释放，不泄漏会话、不清空断点就断开\n");
+    {
+        OS_BpReq br; LONG cl0, fr0, bp0; ULONGLONG td;
+        rc = cmd(OS_CMD_CONNECT, &cfg, NULL); CHECK(rc == OS_ERR_OK, "H connect rc=%d", rc);
+        bp0 = FK_GET(g_fk_bp_live);
+        memset(&br, 0, sizeof(br)); br.address = 0x08000200u;
+        rc = cmd(OS_CMD_BP_SET, &br, NULL); CHECK(rc == OS_ERR_OK, "H bp set rc=%d", rc);
+        CHECK(FK_GET(g_fk_bp_live) == bp0 + 1, "H bp not live (%ld)", (long)FK_GET(g_fk_bp_live));
+        FK_SET(g_fk_read_delay_ms, 300);
+        InterlockedExchange(&g_stop_acq, 0);
+        th = CreateThread(NULL, 0, acq_thread, (LPVOID)(intptr_t)4096, 0, NULL);
+        Sleep(60);                                   /* 读已在 DLL 内持锁 */
+        cl0 = FK_GET(g_fk_close); fr0 = FK_GET(g_fk_free);
+        t0 = now_ms();
+        rc = cmd(OS_CMD_DISCONNECT, NULL, NULL);
+        td = now_ms() - t0;
+        CHECK(rc == OS_ERR_OK && (long)td <= g_max_ms, "H disconnect rc=%d took %llums", rc, (unsigned long long)td);
+        CHECK(FK_GET(g_fk_close) == cl0, "H Close ran concurrently with in-flight read");
+        while (FK_GET(g_fk_close) == cl0 && now_ms() - t0 < 2000) Sleep(1);
+        printf("    断开 %llums 返回；Close 在 %llums 后执行（读 300ms），FreeLibrary 变化 %ld，残留断点 %ld\n",
+               (unsigned long long)td, (unsigned long long)(now_ms() - t0), (long)(FK_GET(g_fk_free) - fr0),
+               (long)(FK_GET(g_fk_bp_live) - bp0));
+        CHECK(FK_GET(g_fk_close) == cl0 + 1, "H deferred Close did not run");
+        CHECK(FK_GET(g_fk_free) == fr0, "H session ended by FreeLibrary instead of Close");
+        CHECK(FK_GET(g_fk_bp_live) == bp0, "H breakpoint left in target after deferred close");
+        CHECK((long)(now_ms() - t0) < 1000, "H deferred close too late");
+        InterlockedExchange(&g_stop_acq, 1); WaitForSingleObject(th, INFINITE); CloseHandle(th);
+        FK_SET(g_fk_read_delay_ms, 0);
+        /* 延迟期间立刻重新连接：由连接路径（独占）先执行 Close，再开新会话 */
+        rc = cmd(OS_CMD_CONNECT, &cfg, NULL); CHECK(rc == OS_ERR_OK, "H reconnect rc=%d", rc);
+        FK_SET(g_fk_read_delay_ms, 300);
+        InterlockedExchange(&g_stop_acq, 0);
+        th = CreateThread(NULL, 0, acq_thread, (LPVOID)(intptr_t)4096, 0, NULL);
+        Sleep(60);
+        cl0 = FK_GET(g_fk_close);
+        cmd(OS_CMD_DISCONNECT, NULL, NULL);
+        InterlockedExchange(&g_stop_acq, 1);
+        rc = cmd(OS_CMD_CONNECT, &cfg, NULL);       /* 等读返回（独占排空）→ 先关旧会话 */
+        CHECK(rc == OS_ERR_OK, "H connect during deferred close rc=%d", rc);
+        CHECK(FK_GET(g_fk_close) == cl0 + 1, "H old session not closed before new open (close %ld)", (long)(FK_GET(g_fk_close) - cl0));
+        WaitForSingleObject(th, INFINITE); CloseHandle(th);
+        FK_SET(g_fk_read_delay_ms, 0);
+        cmd(OS_CMD_DISCONNECT, NULL, NULL);
+        CHECK(SESS_BALANCED(), "H session leak (open=%ld close=%ld)", (long)FK_GET(g_fk_open), (long)FK_GET(g_fk_close));
+    }
+
     printf("[G] 卸载交接：CONNECT 卡 6000ms 时 deinit\n");
     {
         LONG fl0;

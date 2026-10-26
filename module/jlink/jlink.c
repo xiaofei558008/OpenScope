@@ -43,6 +43,7 @@ static JLinkCtx g_ctx;
 /* Bug4：后台重连守卫。重连（DLL 重载 + Open + Connect，可达数秒）只在后台线程、且不持 g_ctx.cs 执行；
  * UI 命令限时拿锁，重连中 / 50ms 拿不到锁 → OS_ERR_AGAIN。 */
 static OS_DrvGuard g_guard;
+static OS_DrvDefer g_defer;   /* 第五轮：断开时锁被占 → 延迟关闭 */
 #define JL_CONN()       (InterlockedCompareExchange(&g_ctx.connected, 0, 0) != 0)
 #define JL_SET_CONN(v)  InterlockedExchange(&g_ctx.connected, (LONG)(v))
 #define JL_WANT()       (InterlockedCompareExchange(&g_want, 0, 0) != 0)
@@ -178,6 +179,7 @@ static int jlink_reload(void)
         if (g_fw) g_fw->log(OS_LOG_WARN, "J-Link 连接: J-Link 读取疑似卡死，跳过 DLL 重载");
         return OS_ERR_FAIL;
     }
+    drv_defer_run(&g_defer);     /* 第五轮：上次断开延后的 Close 先在旧 DLL 上做完，再卸载 */
     JL_SET_CONN(0);
     os_jlink_unbind(&g_ctx.api);
     rc = os_jlink_bind(&g_ctx.api, err, sizeof(err));
@@ -408,6 +410,22 @@ static int mod_connect_ex(char* err, int errlen)
     return rc;
 }
 
+/* 第五轮：断开时锁被占 → 延迟 Close（见 drv_guard.h drv_defer_*） */
+static int g_pend_bp[JLINK_BP_MAX];   /* 延迟关闭时待清的 DLL 断点句柄（-1 = 无） */
+
+/* 持锁或独占区内由 drv_defer_run 调用：清断点 + Close。新会话已建立则不碰（连接路径会先 run） */
+static void jlink_deferred_close(void)
+{
+    OS_JLinkApi* a = &g_ctx.api;
+    int i;
+    if (!a->h || JL_CONN()) return;
+    if (a->clr_bp_ex)
+        for (i = 0; i < JLINK_BP_MAX; i++)
+            if (g_pend_bp[i] >= 0) a->clr_bp_ex(g_pend_bp[i]);
+    if (a->close) a->close();
+    if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 延迟关闭：会话已关闭");
+}
+
 static int jlink_close_session(void)
 {
     OS_JLinkApi* a = &g_ctx.api;
@@ -416,7 +434,9 @@ static int jlink_close_session(void)
         /* Bug16：close 与 in-flight 读互斥——采集中点击断开时，采集线程可能正卡在
          * JLINKARM_ReadMem 内；并发 close 会损坏 DLL 会话（Open 返回垃圾值/内部 AV）。
          * 用 TryEnter 不阻塞 UI：若读正在执行（锁被占）则跳过 close，交给下一次连接前的
-         * 整库重载清理（jlink_reload 持锁等读返回后才 FreeLibrary，同样安全）。 */
+         * 整库重载清理（jlink_reload 持锁等读返回后才 FreeLibrary，同样安全）。
+         * 第五轮：锁被占时不再“跳过”——登记延迟关闭：后台线程等读返回拿到锁后清断点 + Close；
+         * 若先有人进独占区（重新连接 → jlink_reload / 卸载 → final_cleanup），由它先执行。 */
         if (TryEnterCriticalSection(&g_ctx.cs)) {
             if (a->clr_bp_ex) {
                 for (i = 0; i < JLINK_BP_MAX; i++) {
@@ -426,6 +446,12 @@ static int jlink_close_session(void)
             }
             if (a->h && JL_CONN()) a->close();
             LeaveCriticalSection(&g_ctx.cs);
+        } else {
+            for (i = 0; i < JLINK_BP_MAX; i++)
+                g_pend_bp[i] = (g_bp[i].addr && g_bp[i].handle >= 0) ? g_bp[i].handle : -1;
+            JL_SET_CONN(0);              /* 先标断开：持锁的读返回后不再发起新的厂商调用 */
+            drv_defer_request(&g_defer);
+            if (g_fw) g_fw->log(OS_LOG_INFO, "J-Link 断开：驱动忙（读进行中），Close 延后到锁释放");
         }
     }
     memset(g_bp, 0, sizeof(g_bp));
@@ -1040,6 +1066,10 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
         if (fw && fw->log) fw->log(OS_LOG_ERROR, "jlink 模块: 上次卸载的后台收尾仍未结束，请稍后再加载");
         return OS_ERR_AGAIN;
     }
+    if (InterlockedCompareExchange(&g_defer.running, 0, 0)) {
+        if (fw && fw->log) fw->log(OS_LOG_ERROR, "jlink 模块: 上次的延迟关闭线程仍在运行，请稍后再加载");
+        return OS_ERR_AGAIN;
+    }
     g_fw = fw;
     memset(g_bp, 0, sizeof(g_bp));
     JL_SET_CONN(0);
@@ -1047,6 +1077,7 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
     g_ctx.dll_used = 0;
     InitializeCriticalSection(&g_ctx.cs);
     drv_guard_init(&g_guard, &g_ctx.cs, jlink_reconnect_worker, OS_JLINK_RECONNECT_MIN_MS);
+    drv_defer_init(&g_defer, &g_guard, jlink_deferred_close);
     memset(&g_ctx.cfg, 0, sizeof(g_ctx.cfg));
     g_ctx.cfg.iface = OS_IF_SWD;
     g_ctx.cfg.speed_khz = 4000;
@@ -1063,6 +1094,10 @@ static int mod_init(const OS_Framework* fw, void** out_ctx)
 /* 最终清理（最后一个使用者调用：deinit 同步，或卸载交接后由最后离开独占区的线程） */
 static void jlink_final_cleanup(void)
 {
+    /* 第五轮：先让延迟关闭线程退出（最多 2s），再在独占下执行尚未完成的 Close */
+    if (!drv_defer_stop(&g_defer, 2000) && g_fw)
+        g_fw->log(OS_LOG_WARN, "J-Link 卸载：延迟关闭线程 2s 未退出");
+    drv_defer_run(&g_defer);
     jlink_close_session();
     os_jlink_unbind(&g_ctx.api);
     DeleteCriticalSection(&g_ctx.cs);

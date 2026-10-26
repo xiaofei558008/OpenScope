@@ -320,4 +320,74 @@ DRV_FN int drv_guard_shutdown_or_orphan(OS_DrvGuard* g, DWORD wait_ms, void (*cl
     return 0;
 }
 
+/* ===== 第五轮：断开时拿不到锁 → 延迟关闭厂商会话（而不是泄漏到下次重载/卸载） =====
+ * 场景：采集线程正卡在厂商读函数里（持锁），UI 点断开。此时不能并发 Close（Bug16：会损坏会话），
+ * 也不能阻塞 UI。做法：登记 pending，由一个短命后台线程等锁（drv_lock_timed，尊重独占区）后
+ * 执行 close_fn；若期间有人以独占身份先到（重连/重新连接/卸载），由它调用 drv_defer_run 先关。
+ * close_fn 在持锁或独占区内调用，只在 pending 被本次取走时执行一次。 */
+typedef struct OS_DrvDefer {
+    OS_DrvGuard*   g;
+    void         (*close_fn)(void);
+    volatile LONG  pending;
+    volatile LONG  running;   /* 后台关闭线程存活 */
+    volatile LONG  quit;      /* 卸载：让后台线程放弃等待 */
+} OS_DrvDefer;
+
+DRV_FN void drv_defer_init(OS_DrvDefer* d, OS_DrvGuard* g, void (*close_fn)(void))
+{
+    d->g = g; d->close_fn = close_fn;
+    InterlockedExchange(&d->pending, 0);
+    InterlockedExchange(&d->quit, 0);
+}
+
+DRV_FN int drv_defer_pending(OS_DrvDefer* d) { return InterlockedCompareExchange(&d->pending, 0, 0) != 0; }
+
+/* 调用方须持锁或处于独占区 */
+DRV_FN void drv_defer_run(OS_DrvDefer* d)
+{
+    if (InterlockedExchange(&d->pending, 0) && d->close_fn) d->close_fn();
+}
+
+DRV_FN DWORD WINAPI drv_defer_thread(LPVOID p)
+{
+    OS_DrvDefer* d = (OS_DrvDefer*)p;
+#ifdef _WIN32
+    HMODULE pin = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCWSTR)(void*)&drv_defer_thread, &pin);
+#endif
+    while (drv_defer_pending(d) && !InterlockedCompareExchange(&d->quit, 0, 0)) {
+        if (drv_lock_timed(d->g, 20) == OS_ERR_OK) {
+            drv_defer_run(d);
+            drv_unlock(d->g);
+            break;
+        }
+        Sleep(5);   /* 独占区（重连/连接）进行中：它会自己 drv_defer_run */
+    }
+    InterlockedExchange(&d->running, 0);
+#ifdef _WIN32
+    if (pin) FreeLibraryAndExitThread(pin, 0);
+#endif
+    return 0;
+}
+
+/* 登记延迟关闭并确保后台线程在跑；立即返回。线程创建失败时 pending 保留，由下次独占者执行 */
+DRV_FN void drv_defer_request(OS_DrvDefer* d)
+{
+    HANDLE h;
+    InterlockedExchange(&d->pending, 1);
+    if (InterlockedCompareExchange(&d->running, 1, 0) != 0) return;
+    h = CreateThread(NULL, 0, drv_defer_thread, d, 0, NULL);
+    if (h) CloseHandle(h);
+    else InterlockedExchange(&d->running, 0);
+}
+
+/* 卸载：让后台线程退出（最多 wait_ms）；返回 1 = 已退出。之后调用方（独占）自行 drv_defer_run */
+DRV_FN int drv_defer_stop(OS_DrvDefer* d, DWORD wait_ms)
+{
+    LONGLONG dl = drv_deadline(wait_ms);
+    InterlockedExchange(&d->quit, 1);
+    while (InterlockedCompareExchange(&d->running, 0, 0) && drv_qpc() < dl) Sleep(1);
+    return !InterlockedCompareExchange(&d->running, 0, 0);
+}
+
 #endif /* OS_DRV_GUARD_H */
