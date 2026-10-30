@@ -231,7 +231,7 @@ static int daq_running(const XcpSlave* s)
 static void refresh_session(XcpSlave* s)
 {
     if (daq_running(s)) s->session = (uint8_t)(s->session | XCP_SS_DAQ_RUNNING);
-    else s->session = (uint8_t)(s->session & (uint8_t)~XCP_SS_DAQ_RUNNING);
+    else s->session = (uint8_t)(s->session & (0xFFu ^ XCP_SS_DAQ_RUNNING));
 }
 
 static int push_dto(XcpSlave* s, const uint8_t* p, int n)
@@ -260,9 +260,14 @@ int xcp_slave_pop_dto(XcpSlave* s, uint8_t* dst, int cap)
 static int read_mem(XcpSlave* s, uint8_t* dst, int n)
 {
     if (s->mta_id) {
+        /* 标识串按 AG 边界补零：AG2/4 时主机按元素上传 ceil(len/AG) 个元素（13 B → 14/16 B） */
         int idn = (int)strlen(s->id);
-        if (s->mta > (uint32_t)idn || n > idn - (int)s->mta) return -1;
-        memcpy(dst, s->id + s->mta, (size_t)n);
+        int padded = (idn + s->ag - 1) / s->ag * s->ag;
+        if (padded > (int)sizeof(s->id)) return -1;
+        if (s->mta > (uint32_t)padded || n > padded - (int)s->mta) return -1;
+        memset(dst, 0, (size_t)n);
+        if (s->mta < (uint32_t)idn)
+            memcpy(dst, s->id + s->mta, (size_t)(idn - (int)s->mta < n ? idn - (int)s->mta : n));
         s->mta += (uint32_t)n;
         return 0;
     }

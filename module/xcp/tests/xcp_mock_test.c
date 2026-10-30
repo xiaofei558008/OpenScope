@@ -365,7 +365,7 @@ static void test_format(void)
     EXPECT(OK() && p[0x100] == 0xAA && p[0x103] == 0xDD, "AG2 DOWNLOAD 2 元素");
     TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x20, 0x00, 0x01, 0x00);
     TX(XCP_CMD_BUILD_CHECKSUM, 0, 0, 0, 0, 0, 0, 2);                   /* 2 个 WORD，BE */
-    EXPECT(OK() && R[7] == (uint8_t)(0xAA + 0xBB + 0xCC + 0xDD) && R[6] == 0x03, "BUILD_CHECKSUM：元素单位 + BE 结果");
+    EXPECT(OK() && R[7] == ((0xAA + 0xBB + 0xCC + 0xDD) & 0xFF) && R[6] == 0x03, "BUILD_CHECKSUM：元素单位 + BE 结果");
     TX(XCP_CMD_GET_DAQ_PROCESSOR_INFO);
     EXPECT(OK() && R[2] == 0 && R[3] == XCP_MAX_DAQ, "PROCESSOR_INFO MAX_DAQ 按 BE");
     TX(XCP_CMD_FREE_DAQ);
@@ -439,6 +439,44 @@ static void test_wrong_key_clears(void)
     TX(XCP_CMD_UNLOCK, 4, 0xEE, 0xDD, 0xCC, 0xBB);
 }
 
+/* 0004：GET_ID + UPLOAD 在 AG1/2/4 × Intel/Motorola 下，标识串按 AG 补零 */
+static void test_get_id_ag(void)
+{
+    static const int ags[3] = { 1, 2, 4 };
+    int a, bo, rl, idn = (int)strlen(XCP_ID_TEXT);
+    XcpMock* save = M;
+    for (bo = 0; bo < 2; bo++)
+        for (a = 0; a < 3; a++) {
+            int ag = ags[a], elems = (idn + ag - 1) / ag, len;
+            char what[80];
+            XcpMock* m2 = xcp_mock_create(0x20000000, 4096);
+            uint8_t c[2];
+            M = m2;
+            xcp_slave_set_format(xcp_mock_slave(m2), bo, ag);
+            TX(XCP_CMD_CONNECT, 0);
+            TX(XCP_CMD_GET_ID, 0);
+            len = bo ? (R[4] << 24 | R[5] << 16 | R[6] << 8 | R[7]) : (int)xcp_rd32(R + 4);
+            snprintf(what, sizeof what, "GET_ID 长度=13 字节（AG%d %s）", ag, bo ? "Motorola" : "Intel");
+            EXPECT(OK() && rl == 8 && len == idn, what);
+            c[0] = XCP_CMD_UPLOAD; c[1] = (uint8_t)elems;
+            rl = tx(c, 2);
+            snprintf(what, sizeof what, "UPLOAD %d 元素 = %d 字节，补零（AG%d %s）", elems, elems * ag, ag, bo ? "Motorola" : "Intel");
+            EXPECT(OK() && rl == ag + elems * ag && memcmp(R + ag, XCP_ID_TEXT, (size_t)idn) == 0 &&
+                   (elems * ag == idn || R[ag + idn] == 0) && R[ag + elems * ag - 1] == (elems * ag == idn ? 'P' : 0), what);
+            rl = tx(c, 2);
+            snprintf(what, sizeof what, "读过补零边界 → OUT_OF_RANGE（AG%d）", ag);
+            EXPECT(ERR(XCP_ERR_OUT_OF_RANGE), what);
+            /* 分两段读：先 1 元素再余下 */
+            TX(XCP_CMD_GET_ID, 0);
+            c[1] = 1; rl = tx(c, 2);
+            EXPECT(OK() && R[ag] == 'O', "分段读首元素");
+            c[1] = (uint8_t)(elems - 1); rl = tx(c, 2);
+            EXPECT(OK() && rl == ag + (elems - 1) * ag, "分段读余下元素");
+            xcp_mock_destroy(m2);
+        }
+    M = save;
+}
+
 int main(void)
 {
     M = xcp_mock_create(0x20000000, 4096);
@@ -450,6 +488,7 @@ int main(void)
     test_block_upload();
     test_format();
     test_wrong_key_clears();
+    test_get_id_ag();
     xcp_mock_destroy(M);
     printf("xcp_mock_test: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
