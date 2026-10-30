@@ -23,6 +23,7 @@ typedef struct XcpMaster {
     uint8_t  max_cto;      /* CONNECT 原值（<=255） */
     uint16_t max_dto;      /* CONNECT 原值 */
     uint8_t  resource;
+    int      last_rc;      /* 最近一次会话层返回码（XCP_E_*），区分超时/断链 */
     int      last_err;     /* 从机 ERR 码，0 表示无 */
     /* 第 2 轮新增（内部） */
     uint8_t  byte_order;

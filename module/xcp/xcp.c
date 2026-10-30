@@ -241,11 +241,16 @@ static int mod_connect(const OS_ConnectCfg* cfg)
     }
     rc = xcp_master_connect(&g_ctx.master);
     if (rc != 0) {
-        xlog(OS_LOG_ERROR, "XCP CONNECT 失败 rc=%d err=%d", rc, g_ctx.master.last_err);
+        int tmo = rc == -1 && g_ctx.master.last_rc == XCP_E_TIMEOUT;
+        if (tmo)
+            xlog(OS_LOG_ERROR, "XCP CONNECT 超时：从机无应答（%s %s）", is_udp ? "udp" : tr->name, opts);
+        else
+            xlog(OS_LOG_ERROR, "XCP CONNECT 失败 rc=%d err=0x%02X sess=%d", rc, g_ctx.master.last_err,
+                 g_ctx.master.last_rc);
         xcp_master_free(&g_ctx.master);
         if (link && tr->close) tr->close(link);
         LeaveCriticalSection(&g_ctx.cs);
-        return OS_ERR_FAIL;
+        return tmo ? OS_ERR_TIMEOUT : OS_ERR_FAIL;
     }
     g_ctx.tr = tr;
     g_ctx.link = link;

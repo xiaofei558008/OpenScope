@@ -99,6 +99,7 @@ static void on_daq(void* user, const uint8_t* p, int n)
 /* ------------------------------------------------ 公共 */
 static int map_rc(XcpMaster* m, int rc)
 {
+    m->last_rc = rc;
     if (rc == XCP_OK) { m->last_err = 0; return 0; }
     if (XCP_IS_SLAVE_ERR(rc)) { m->last_err = XCP_SLAVE_CODE(rc); return -2; }
     m->last_err = 0;

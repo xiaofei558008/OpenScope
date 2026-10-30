@@ -39,7 +39,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CRT_SECURE_NO_WARNINGS;OPENSCOPE_MODULE_BUILD;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -55,7 +55,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
+      <WarningLevel>Level4</WarningLevel>
       <SDLCheck>false</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CRT_SECURE_NO_WARNINGS;OPENSCOPE_MODULE_BUILD;_UNICODE;UNICODE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>

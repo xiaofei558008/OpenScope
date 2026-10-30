@@ -126,6 +126,27 @@ int main(void)
     STEP("connect refused", rc, rc == OS_ERR_NO_DEVICE);
 
 #ifdef XCP_NEW
+    {   /* CONNECT 无应答 → OS_ERR_TIMEOUT（原为 OS_ERR_FAIL，日志 rc=-1 err=0），TCP 与 UDP */
+        int k;
+        for (k = 0; k < 2; k++) {
+            FakeSlave* ft; FakeCfg ct = c; int pt; uint64_t t0;
+            ct.udp = k;
+            ft = fake_start(&ct, &pt);
+            fake_drop(ft, XCP_CMD_CONNECT, 1000);
+            snprintf(cc.device, sizeof(cc.device), k ? "udp" : "tcp");
+            snprintf(cc.serial, sizeof(cc.serial), "127.0.0.1:%d", pt);
+            t0 = xcp_now_ms();
+            rc = cmd(m, OS_CMD_CONNECT, &cc, NULL);
+            printf("INFO connect timeout %s took %u ms\n", k ? "udp" : "tcp", (unsigned)(xcp_now_ms() - t0));
+            STEP(k ? "NEW connect timeout udp" : "NEW connect timeout tcp", rc, rc == OS_ERR_TIMEOUT && is_conn(m) == 0);
+            fake_drop(ft, XCP_CMD_CONNECT, 0);
+            rc = cmd(m, OS_CMD_CONNECT, &cc, NULL);
+            STEP(k ? "NEW connect after timeout udp" : "NEW connect after timeout tcp", rc, rc == 0);
+            cmd(m, OS_CMD_DISCONNECT, NULL, NULL);
+            fake_stop(ft);
+        }
+        snprintf(cc.device, sizeof(cc.device), "tcp");
+    }
     {
         FakeSlave* fu; FakeCfg cu = c; int pu;
         cu.udp = 1; cu.max_cto = 255; cu.max_dto = 1400; cu.block = 1;
