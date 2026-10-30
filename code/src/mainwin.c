@@ -5661,6 +5661,12 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         switch (LOWORD(wParam)) {
         case IDC_BTN_OPEN: cmd_open_elf(); break;
+        case IDM_CONN_TOGGLE: /* UI P1: single connect/disconnect toggle */
+            if (OS_APP_CONNECTED()) cmd_disconnect(); else cmd_connect();
+            break;
+        case IDM_CMD_PALETTE:
+            os_log(OS_LOG_INFO, "Command palette (Ctrl+Shift+P) not implemented yet");
+            break;
         case IDC_BTN_CONNECT: cmd_connect(); break;
         case IDC_BTN_ATTACH: cmd_attach(); break;
         case IDC_BTN_DISCON: cmd_disconnect(); break;

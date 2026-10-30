@@ -15,6 +15,11 @@ typedef enum {
     TI_STEP_OUT,
     TI_STEP_OVER,
     TI_BP,
+    /* UI P1: new icons (icons-paths.md) */
+    TI_HALT,
+    TI_RUN_TO_CURSOR,
+    TI_CONNECT,
+    TI_DISCONNECT,
     TI_COUNT
 } OS_ToolIcon;
 
@@ -25,5 +30,11 @@ int  os_toolicon_draw(const DRAWITEMSTRUCT* dis);
 /* 创建带图标的调试按钮（owner-draw），tooltip 用 tip */
 HWND os_toolicon_create_btn(HWND parent, int ctrl_id, int x, int y, int w, int h,
                             const wchar_t* tip);
+
+/* UI P1: GDI+ antialiased glyph (24-grid, DPI-scaled by rc size).
+ * state: 0 normal, 1 hover, 2 disabled. Returns 0 if GDI+ unavailable. */
+int  os_toolicon_paint(HDC hdc, RECT rc, int icon, int state);
+/* spec color of an icon (normal state) */
+COLORREF os_toolicon_color(int icon);
 
 #endif
