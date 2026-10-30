@@ -1,6 +1,7 @@
 /* XCP 主机协议核心：会话 + RX 线程 + 命令引擎。参见 xcp_session.h。 */
 #include "xcp_session.h"
 #include "xcp_proto.h"
+#include "xcp_checksum.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -29,6 +30,8 @@ struct XcpSession {
     int      pend_cap, pend_len;
     int      pend_frames, pend_got, pend_strip;
     uint8_t  pend_err;
+    uint8_t  pend_errpkt[8];   /* 完整 ERR 包（BUILD_CHECKSUM/DOWNLOAD_NEXT 带附加参数） */
+    int      pend_errlen;
 
     XcpConnInfo info;          /* st 保护 */
     xcp_atomic_t connected;
@@ -36,6 +39,13 @@ struct XcpSession {
     xcp_atomic_t stopping;
     int need_synch;            /* cmd_lock 保护：上次失败后链路可能失步 */
     int last_err;              /* cmd_lock 保护 */
+    uint8_t last_errpkt[8];    /* cmd_lock 保护 */
+    int last_errlen;
+    XcpSeedKeyFn sk_fn;        /* cmd_lock 保护 */
+    void* sk_user;
+    int in_unlock;             /* 防止解锁流程中再次自动解锁 */
+    XcpCommModeInfo cmi;       /* cmd_lock 保护 */
+    int cmi_valid;
 
     xcp_atomic_t n_res, n_err, n_ev, n_serv, n_daq, n_stray;
     xcp_atomic_t n_tmo, n_synch, n_retry, n_busy, n_pending;
@@ -104,6 +114,9 @@ const char* xcp_strerror(int rc)
     case XCP_E_CLOSED: return "session closing";
     case XCP_E_WOULDBLOCK: return "command from RX callback";
     case XCP_E_NOMEM: return "out of memory";
+    case XCP_E_UNSUPPORTED: return "unsupported / no callback";
+    case XCP_E_MISMATCH: return "checksum mismatch";
+    case XCP_E_SEEDKEY: return "seed&key callback failed";
     default: return "error";
     }
 }
@@ -134,8 +147,13 @@ static void on_cto_response(XcpSession* s, const uint8_t* p, int n)
         } else {
             xcp_atomic_add(&s->n_stray, 1); /* 被超时放弃的命令的迟到应答 */
         }
+    } else if (is_err && n >= 2 && p[1] == XCP_ERR_CMD_SYNCH) {
+        /* ERR_CMD_SYNCH 只可能是 SYNCH 的应答：在途命令不是 SYNCH，必是早先超时 SYNCH 的迟到应答，丢弃 */
+        xcp_atomic_add(&s->n_stray, 1);
     } else if (is_err) {
         s->pend_err = n >= 2 ? p[1] : XCP_ERR_GENERIC;
+        s->pend_errlen = n < 8 ? n : 8;
+        memcpy(s->pend_errpkt, p, (size_t)s->pend_errlen);
         s->pend_state = PR_ERR;
     } else if (s->pend_frames <= 1 && s->pend_strip == 0) {
         int c = n < s->pend_cap ? n : s->pend_cap;
@@ -291,11 +309,13 @@ void xcp_session_stats(XcpSession* s, XcpSessionStats* o)
 }
 
 /* ------------------------------------------------------------------ 命令引擎 */
-/* 一次收发（不含重试）。返回 XCP_OK / XCP_E_TIMEOUT / XCP_E_LINK / XCP_E_CLOSED / XCP_E_SLAVE(x) */
-static int exchange(XcpSession* s, const uint8_t* cmd, int len, uint8_t* buf, int cap,
-                    int* out_len, int frames, int strip, int tmo_ms, int synch)
+/* 一次收发（不含重试）。npk>1 为主机块模式：连续发送 npk 个包（间隔 min_st_100us），
+ * 只等最后一个包的应答；从机中途回 ERR 时立即停止发送。计时从最后一个包发出后开始。
+ * 返回 XCP_OK / XCP_E_TIMEOUT / XCP_E_LINK / XCP_E_CLOSED / XCP_E_SLAVE(x) */
+static int exchange_multi(XcpSession* s, const uint8_t* const* pk, const int* pl, int npk, int min_st_100us,
+                          uint8_t* buf, int cap, int* out_len, int frames, int strip, int tmo_ms, int synch)
 {
-    int rc, state;
+    int rc = 0, state, i;
     if (xcp_atomic_load(&s->stopping)) return XCP_E_CLOSED;
     if (xcp_atomic_load(&s->link_dead)) return XCP_E_LINK;
     xcp_mutex_lock(&s->st);
@@ -305,6 +325,7 @@ static int exchange(XcpSession* s, const uint8_t* cmd, int len, uint8_t* buf, in
     s->pend_buf = buf;
     s->pend_cap = cap;
     s->pend_len = 0;
+    s->pend_errlen = 0;
     s->pend_frames = frames < 1 ? 1 : frames;
     s->pend_got = 0;
     s->pend_strip = strip;
@@ -312,9 +333,21 @@ static int exchange(XcpSession* s, const uint8_t* cmd, int len, uint8_t* buf, in
     s->pend_deadline = xcp_now_ms() + (uint64_t)tmo_ms; /* 发送前开始计时，避免极快应答竞争 */
     xcp_mutex_unlock(&s->st);
 
-    rc = xcp_tl_send(s->tl, cmd, len);
+    for (i = 0; i < npk; i++) {
+        if (i > 0) {
+            int early;
+            if (min_st_100us > 0) xcp_sleep_ms((min_st_100us + 9) / 10); /* 向上取整到 ms */
+            xcp_mutex_lock(&s->st);
+            early = s->pend_state != PR_NONE;
+            xcp_mutex_unlock(&s->st);
+            if (early) break; /* 从机已回 ERR：不再发后续包 */
+        }
+        rc = xcp_tl_send(s->tl, pk[i], pl[i]);
+        if (rc != 0) break;
+    }
 
     xcp_mutex_lock(&s->st);
+    if (npk > 1) s->pend_deadline = xcp_now_ms() + (uint64_t)tmo_ms;
     if (rc != 0 && s->pend_state == PR_NONE) s->pend_state = PR_LINK;
     while (s->pend_state == PR_NONE) {
         uint64_t now = xcp_now_ms();
@@ -327,12 +360,22 @@ static int exchange(XcpSession* s, const uint8_t* cmd, int len, uint8_t* buf, in
     s->pend_buf = NULL;
     rc = XCP_E_TIMEOUT;
     if (state == PR_RES) rc = XCP_OK;
-    else if (state == PR_ERR) { rc = XCP_E_SLAVE(s->pend_err); }
+    else if (state == PR_ERR) {
+        rc = XCP_E_SLAVE(s->pend_err);
+        s->last_errlen = s->pend_errlen;
+        memcpy(s->last_errpkt, s->pend_errpkt, (size_t)s->pend_errlen);
+    }
     else if (state == PR_LINK) rc = XCP_E_LINK;
     else if (state == PR_CLOSED) rc = XCP_E_CLOSED;
     xcp_mutex_unlock(&s->st);
     if (rc == XCP_E_LINK && xcp_atomic_load(&s->stopping)) rc = XCP_E_CLOSED;
     return rc;
+}
+
+static int exchange(XcpSession* s, const uint8_t* cmd, int len, uint8_t* buf, int cap,
+                    int* out_len, int frames, int strip, int tmo_ms, int synch)
+{
+    return exchange_multi(s, &cmd, &len, 1, 0, buf, cap, out_len, frames, strip, tmo_ms, synch);
 }
 
 static int default_tmo_index(uint8_t cmd, const uint8_t* p, int len)
@@ -375,10 +418,25 @@ static int synch_locked(XcpSession* s)
     return rc;
 }
 
-static int exec_locked(XcpSession* s, const uint8_t* cmd, int len, uint8_t* rsp, int cap,
-                       int* rsp_len, const XcpCmdOpts* opts)
+static int unlock_locked(XcpSession* s, uint8_t resource);
+
+/* 命令所属的受保护资源（ERR_ACCESS_LOCKED 时自动解锁用）；0 = 未知 */
+static uint8_t cmd_resource(uint8_t c)
 {
+    if ((c >= XCP_CMD_COPY_CAL_PAGE && c <= XCP_CMD_DOWNLOAD)) return XCP_RES_CAL_PAG; /* 0xE4..0xF0 */
+    if ((c >= XCP_CMD_ALLOC_ODT_ENTRY && c <= XCP_CMD_CLEAR_DAQ_LIST) || c == XCP_CMD_WRITE_DAQ_MULTIPLE)
+        return XCP_RES_DAQ;
+    if (c >= XCP_CMD_PROGRAM_VERIFY && c <= XCP_CMD_PROGRAM_START) return XCP_RES_PGM;
+    return 0;
+}
+
+static int exec_multi_locked(XcpSession* s, const uint8_t* const* pk, const int* pl, int npk, int min_st,
+                             uint8_t* rsp, int cap, int* rsp_len, const XcpCmdOpts* opts)
+{
+    const uint8_t* cmd = pk[0];
+    int len = pl[0];
     uint8_t code = cmd[0];
+    int n_locked = 0;
     int tmo_idx = (opts && opts->tmo_index >= 1 && opts->tmo_index <= 7) ? opts->tmo_index
                                                                           : default_tmo_index(code, cmd, len);
     int tmo = s->cfg.tmo.t[tmo_idx];
@@ -394,7 +452,7 @@ static int exec_locked(XcpSession* s, const uint8_t* cmd, int len, uint8_t* rsp,
         s->need_synch = 0; /* ERR_CMD_UNKNOWN 等：从机仍在应答，视为同步 */
     }
     for (;;) {
-        rc = exchange(s, cmd, len, rsp, cap, &rl, frames, strip, tmo, 0);
+        rc = exchange_multi(s, pk, pl, npk, min_st, rsp, cap, &rl, frames, strip, tmo, 0);
         if (rc == XCP_OK) {
             if (rsp_len) *rsp_len = rl;
             s->last_err = 0;
@@ -429,6 +487,21 @@ static int exec_locked(XcpSession* s, const uint8_t* cmd, int len, uint8_t* rsp,
             xcp_sleep_ms(s->cfg.tmo.t[7]);
             continue;
         }
+        if (s->last_err == XCP_ERR_ACCESS_LOCKED && s->sk_fn && !s->in_unlock && n_locked < 2) {
+            /* 表 218：ERR_ACCESS_LOCKED -> 预动作 Unlock slave -> repeat 2 times */
+            uint8_t res = cmd_resource(code);
+            int urc;
+            n_locked++;
+            if (res) urc = unlock_locked(s, res);
+            else urc = XCP_E_SLAVE(XCP_ERR_ACCESS_LOCKED);
+            if (urc != XCP_OK) return rc;
+            if (opts && opts->pre) {
+                urc = opts->pre(s, opts->pre_user);
+                if (urc != XCP_OK) return urc;
+            }
+            xcp_atomic_add(&s->n_retry, 1);
+            continue;
+        }
         if (s->last_err == XCP_ERR_RES_TEMP_NOT_ACC) {
             if (++n_tna > s->cfg.temp_na_retries) return rc;
             xcp_atomic_add(&s->n_retry, 1);
@@ -437,6 +510,12 @@ static int exec_locked(XcpSession* s, const uint8_t* cmd, int len, uint8_t* rsp,
         }
         return rc; /* 其余错误交调用方（显示错误 / 换参数 / Seed&Key 等） */
     }
+}
+
+static int exec_locked(XcpSession* s, const uint8_t* cmd, int len, uint8_t* rsp, int cap,
+                       int* rsp_len, const XcpCmdOpts* opts)
+{
+    return exec_multi_locked(s, &cmd, &len, 1, 0, rsp, cap, rsp_len, opts);
 }
 
 static int enter(XcpSession* s)
@@ -462,6 +541,8 @@ int xcp_command(XcpSession* s, const uint8_t* cmd, int len,
 }
 
 /* ------------------------------------------------------------------ 标准命令 */
+static int comm_mode_locked(XcpSession* s);
+
 int xcp_connect(XcpSession* s, uint8_t mode, XcpConnInfo* out)
 {
     uint8_t cmd[2], rsp[SMALL_RSP];
@@ -499,6 +580,9 @@ int xcp_connect(XcpSession* s, uint8_t mode, XcpConnInfo* out)
         xcp_mutex_unlock(&s->st);
         xcp_atomic_store(&s->connected, 1);
         s->need_synch = 0;
+        s->cmi_valid = 0;
+        memset(&s->cmi, 0, sizeof(s->cmi));
+        if (ci.optional) (void)comm_mode_locked(s); /* 取 MAX_BS/MIN_ST；失败则按无主机块模式 */
         if (out) *out = ci;
     }
 done:
@@ -535,20 +619,30 @@ int xcp_get_status(XcpSession* s, XcpStatus* out)
     return XCP_OK;
 }
 
-int xcp_get_comm_mode_info(XcpSession* s, XcpCommModeInfo* out)
+static int comm_mode_locked(XcpSession* s)
 {
     uint8_t c = XCP_CMD_GET_COMM_MODE_INFO, rsp[SMALL_RSP];
-    int n = 0, rc = xcp_command(s, &c, 1, rsp, (int)sizeof(rsp), &n, NULL);
+    int n = 0, rc = exec_locked(s, &c, 1, rsp, (int)sizeof(rsp), &n, NULL);
     if (rc != XCP_OK) return rc;
-    if (n < 8) return XCP_E_PROTO;
-    if (out) {
-        out->optional = rsp[2];
-        out->max_bs = rsp[4];
-        out->min_st = rsp[5];
-        out->queue_size = rsp[6];
-        out->driver_version = rsp[7];
-    }
+    if (n < 7) return XCP_E_PROTO; /* 规范 8 字节；兼容旧从机少 DRIVER_VERSION 的 7 字节 */
+    memset(&s->cmi, 0, sizeof(s->cmi));
+    s->cmi.optional = rsp[2];
+    s->cmi.max_bs = rsp[4];
+    s->cmi.min_st = rsp[5];
+    s->cmi.queue_size = rsp[6];
+    s->cmi.driver_version = n >= 8 ? rsp[7] : 0;
+    s->cmi_valid = 1;
     return XCP_OK;
+}
+
+int xcp_get_comm_mode_info(XcpSession* s, XcpCommModeInfo* out)
+{
+    int rc = enter(s);
+    if (rc) return rc;
+    rc = comm_mode_locked(s);
+    if (rc == XCP_OK && out) *out = s->cmi;
+    leave(s);
+    return rc;
 }
 
 static int set_mta_locked(XcpSession* s, uint8_t ext, uint32_t addr)
@@ -712,5 +806,406 @@ int xcp_get_id(XcpSession* s, uint8_t type, XcpId* out)
     }
     if (rc != XCP_OK) xcp_id_free(out);
     leave(s);
+    return rc;
+}
+
+/* ================================================================== 第 2 轮 */
+int xcp_session_comm_mode(XcpSession* s, XcpCommModeInfo* out)
+{
+    int v;
+    xcp_mutex_lock(&s->cmd_lock);
+    v = s->cmi_valid;
+    if (v && out) *out = s->cmi;
+    xcp_mutex_unlock(&s->cmd_lock);
+    return v;
+}
+
+int xcp_session_last_err_packet(XcpSession* s, uint8_t* out8)
+{
+    int n;
+    xcp_mutex_lock(&s->cmd_lock);
+    n = s->last_errlen;
+    if (out8 && n > 0) memcpy(out8, s->last_errpkt, (size_t)n);
+    xcp_mutex_unlock(&s->cmd_lock);
+    return n;
+}
+
+static int dl_off(uint32_t ag) { return ag < 2 ? 2 : (int)ag; } /* DOWNLOAD/NEXT 数据起始位置 */
+
+/* 写一块（<=255 元素）：npk>1 即主机块模式。mp 为本块起始地址（预动作 SET_MTA 用）。 */
+static int download_chunk_locked(XcpSession* s, MtaPre* mp, const uint8_t* src, uint32_t n, int block)
+{
+    XcpConnInfo ci = s->info;
+    uint32_t ag = ci.ag, off = (uint32_t)dl_off(ag), per = (ci.max_cto - off) / ag;
+    uint32_t npk = block ? (n + per - 1) / per : 1, i, sent = 0;
+    int min_st = block && s->cmi_valid ? s->cmi.min_st : 0;
+    int rc = XCP_E_PROTO, attempt;
+    uint8_t* mem;
+    const uint8_t** pk;
+    int* pl;
+    XcpCmdOpts o;
+    if (per == 0 || n == 0 || n > 255 || (!block && n > per)) return XCP_E_ARG;
+    mem = (uint8_t*)calloc(npk, ci.max_cto);
+    pk = (const uint8_t**)malloc(npk * sizeof(*pk));
+    pl = (int*)malloc(npk * sizeof(*pl));
+    if (!mem || !pk || !pl) { free(mem); free(pk); free(pl); return XCP_E_NOMEM; }
+    for (i = 0; i < npk; i++) {
+        uint8_t* p = mem + (size_t)i * ci.max_cto;
+        uint32_t c = n - sent;
+        if (c > per) c = per;
+        p[0] = i == 0 ? XCP_CMD_DOWNLOAD : XCP_CMD_DOWNLOAD_NEXT;
+        p[1] = (uint8_t)(n - sent); /* 剩余元素数（DOWNLOAD 为总数） */
+        memcpy(p + off, src + (size_t)sent * ag, (size_t)c * ag);
+        pk[i] = p;
+        pl[i] = (int)(off + c * ag);
+        sent += c;
+    }
+    memset(&o, 0, sizeof(o));
+    o.pre = pre_set_mta;
+    o.pre_user = mp;
+    for (attempt = 0; attempt < 3; attempt++) {
+        rc = exec_multi_locked(s, pk, pl, (int)npk, min_st, NULL, 0, NULL, &o);
+        if (XCP_IS_SLAVE_ERR(rc) && npk > 1) {
+            /* 块中途出错时，已在路上的 DOWNLOAD_NEXT 还会各自引出 ERR：先 SYNCH 把它们排空 */
+            int sr = synch_locked(s);
+            if (sr == XCP_E_TIMEOUT || sr == XCP_E_LINK || sr == XCP_E_CLOSED) { rc = sr; break; }
+        }
+        /* 表 218 DOWNLOAD_NEXT：ERR_SEQUENCE -> SET_MTA -> repeat 2 times */
+        if (rc == XCP_E_SLAVE(XCP_ERR_SEQUENCE) && npk > 1 && attempt < 2) {
+            xcp_atomic_add(&s->n_retry, 1);
+            rc = set_mta_locked(s, mp->ext, mp->addr);
+            if (rc != XCP_OK) break;
+            continue;
+        }
+        break;
+    }
+    free(mem); free(pk); free(pl);
+    return rc;
+}
+
+static int download_impl(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n, const void* src, int allow_block)
+{
+    const uint8_t* in = (const uint8_t*)src;
+    uint32_t done = 0, per, maxc, ag;
+    int rc, block;
+    MtaPre mp;
+    XcpConnInfo ci;
+    if (!src && n) return XCP_E_ARG;
+    rc = enter(s);
+    if (rc) return rc;
+    ci = s->info;
+    ag = ci.ag;
+    if (!xcp_atomic_load(&s->connected)) { rc = XCP_E_NOTCONN; goto out; }
+    per = (ci.max_cto - (uint32_t)dl_off(ag)) / ag;
+    block = allow_block && s->cmi_valid && (s->cmi.optional & 0x01) && s->cmi.max_bs >= 2;
+    maxc = block ? per * s->cmi.max_bs : per;
+    if (maxc > 255) maxc = 255;
+    if (per == 0) { rc = XCP_E_PROTO; goto out; }
+    mp.ext = ext;
+    mp.addr = addr;
+    rc = set_mta_locked(s, ext, addr);
+    while (rc == XCP_OK && done < n) {
+        uint32_t c = n - done;
+        if (c > maxc) c = maxc;
+        rc = download_chunk_locked(s, &mp, in + (size_t)done * ag, c, block && c > per);
+        done += c;
+        mp.addr += c;
+    }
+out:
+    leave(s);
+    return rc;
+}
+
+int xcp_download(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n, const void* src)
+{
+    return download_impl(s, ext, addr, n, src, 1);
+}
+
+int xcp_download_noblock(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n, const void* src)
+{
+    return download_impl(s, ext, addr, n, src, 0);
+}
+
+int xcp_download_max_elems(XcpSession* s)
+{
+    XcpConnInfo ci;
+    xcp_session_info(s, &ci);
+    return ci.max_cto / ci.ag - 1;
+}
+
+int xcp_download_max(XcpSession* s, uint8_t ext, uint32_t addr, const void* src)
+{
+    uint8_t pkt[256];
+    int rc, n;
+    MtaPre mp;
+    XcpCmdOpts o;
+    XcpConnInfo ci;
+    if (!src) return XCP_E_ARG;
+    rc = enter(s);
+    if (rc) return rc;
+    ci = s->info;
+    if (!xcp_atomic_load(&s->connected)) { rc = XCP_E_NOTCONN; goto out; }
+    n = ci.max_cto / ci.ag - 1;
+    memset(pkt, 0, sizeof(pkt));
+    pkt[0] = XCP_CMD_DOWNLOAD_MAX;
+    memcpy(pkt + ci.ag, src, (size_t)n * ci.ag);
+    mp.ext = ext;
+    mp.addr = addr;
+    memset(&o, 0, sizeof(o));
+    o.pre = pre_set_mta;
+    o.pre_user = &mp;
+    rc = set_mta_locked(s, ext, addr);
+    if (rc == XCP_OK) rc = exec_locked(s, pkt, (int)(ci.ag + (uint32_t)n * ci.ag), NULL, 0, NULL, &o);
+out:
+    leave(s);
+    return rc;
+}
+
+int xcp_short_download(XcpSession* s, uint8_t ext, uint32_t addr, uint8_t n, const void* src)
+{
+    uint8_t pkt[256];
+    int rc;
+    XcpConnInfo ci;
+    if (!src && n) return XCP_E_ARG;
+    rc = enter(s);
+    if (rc) return rc;
+    ci = s->info;
+    if (!xcp_atomic_load(&s->connected)) { rc = XCP_E_NOTCONN; goto out; }
+    if (ci.max_cto < 8 || (uint32_t)n * ci.ag > (uint32_t)ci.max_cto - 8u) { rc = XCP_E_ARG; goto out; }
+    pkt[0] = XCP_CMD_SHORT_DOWNLOAD;
+    pkt[1] = n;
+    pkt[2] = 0;
+    pkt[3] = ext;
+    xcp_s_wr32(s, pkt + 4, addr);
+    if (n) memcpy(pkt + 8, src, (size_t)n * ci.ag);
+    rc = exec_locked(s, pkt, 8 + (int)((uint32_t)n * ci.ag), NULL, 0, NULL, NULL);
+out:
+    leave(s);
+    return rc;
+}
+
+int xcp_modify_bits(XcpSession* s, uint8_t ext, uint32_t addr, uint8_t shift, uint16_t and_mask, uint16_t xor_mask)
+{
+    uint8_t pkt[6];
+    int rc;
+    MtaPre mp;
+    XcpCmdOpts o;
+    if (shift > 31) return XCP_E_ARG;
+    rc = enter(s);
+    if (rc) return rc;
+    if (!xcp_atomic_load(&s->connected)) { rc = XCP_E_NOTCONN; goto out; }
+    pkt[0] = XCP_CMD_MODIFY_BITS;
+    pkt[1] = shift;
+    xcp_s_wr16(s, pkt + 2, and_mask);
+    xcp_s_wr16(s, pkt + 4, xor_mask);
+    mp.ext = ext;
+    mp.addr = addr;
+    memset(&o, 0, sizeof(o));
+    o.pre = pre_set_mta;
+    o.pre_user = &mp;
+    rc = set_mta_locked(s, ext, addr);
+    if (rc == XCP_OK) rc = exec_locked(s, pkt, 6, NULL, 0, NULL, &o);
+out:
+    leave(s);
+    return rc;
+}
+
+static int checksum_locked(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n,
+                           uint8_t* type, uint32_t* sum, uint32_t* max_block)
+{
+    uint8_t pkt[8], rsp[SMALL_RSP];
+    int rc, got = 0;
+    MtaPre mp;
+    XcpCmdOpts o;
+    if (max_block) *max_block = 0;
+    pkt[0] = XCP_CMD_BUILD_CHECKSUM;
+    pkt[1] = pkt[2] = pkt[3] = 0;
+    xcp_s_wr32(s, pkt + 4, n);
+    mp.ext = ext;
+    mp.addr = addr;
+    memset(&o, 0, sizeof(o));
+    o.tmo_index = 2;
+    o.pre = pre_set_mta;
+    o.pre_user = &mp;
+    rc = set_mta_locked(s, ext, addr);
+    if (rc != XCP_OK) return rc;
+    rc = exec_locked(s, pkt, 8, rsp, (int)sizeof(rsp), &got, &o);
+    if (rc == XCP_E_SLAVE(XCP_ERR_OUT_OF_RANGE)) {
+        if (max_block && s->last_errlen >= 8) *max_block = xcp_s_rd32(s, s->last_errpkt + 4);
+        return rc;
+    }
+    if (rc != XCP_OK) return rc;
+    if (got < 8) return XCP_E_PROTO;
+    if (type) *type = rsp[1];
+    if (sum) *sum = xcp_s_rd32(s, rsp + 4);
+    return XCP_OK;
+}
+
+int xcp_build_checksum(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n,
+                       uint8_t* type, uint32_t* sum, uint32_t* max_block)
+{
+    int rc = enter(s);
+    if (rc) return rc;
+    if (!xcp_atomic_load(&s->connected)) rc = XCP_E_NOTCONN;
+    else rc = checksum_locked(s, ext, addr, n, type, sum, max_block);
+    leave(s);
+    return rc;
+}
+
+int xcp_checksum_verify(XcpSession* s, uint8_t ext, uint32_t addr, const void* data, uint32_t n,
+                        XcpUserChecksumFn ufn, void* uuser, XcpChecksumResult* res)
+{
+    const uint8_t* d = (const uint8_t*)data;
+    uint32_t off = 0, block = n, ag, maxb = 0;
+    int rc, shrunk = 0;
+    XcpChecksumResult r;
+    if (!data || n == 0) return XCP_E_ARG;
+    memset(&r, 0, sizeof(r));
+    rc = enter(s);
+    if (rc) return rc;
+    ag = s->info.ag;
+    if (!xcp_atomic_load(&s->connected)) { rc = XCP_E_NOTCONN; goto out; }
+    while (off < n) {
+        uint32_t c = n - off, local = 0, sum = 0;
+        uint8_t type = 0;
+        if (c > block) c = block;
+        rc = checksum_locked(s, ext, addr + off, c, &type, &sum, &maxb);
+        if (rc == XCP_E_SLAVE(XCP_ERR_OUT_OF_RANGE) && maxb > 0 && maxb < c && !shrunk) {
+            /* 表 217：ERR_OUT_OF_RANGE -> 换参数重试。块按 4 字节对齐，保证 ADD_2x/ADD_44 也合法 */
+            uint32_t a = 4u / ag ? 4u / ag : 1u;
+            block = (maxb / a) * a;
+            if (block == 0) block = maxb;
+            shrunk = 1;
+            xcp_atomic_add(&s->n_retry, 1);
+            continue;
+        }
+        if (rc != XCP_OK) goto out;
+        r.type = type;
+        r.blocks++;
+        r.block_elems = block;
+        if (type == XCP_CKS_USER_DEFINED) {
+            if (!ufn) { rc = XCP_E_UNSUPPORTED; goto out; }
+            if (ufn(uuser, d + (size_t)off * ag, c * ag, &local) != 0) { rc = XCP_E_UNSUPPORTED; goto out; }
+        } else if (xcp_checksum_compute(type, d + (size_t)off * ag, c * ag, s->info.byte_order, &local) != 0) {
+            rc = XCP_E_PROTO;
+            goto out;
+        }
+        if (local != sum) {
+            r.bad_offset = off;
+            r.slave_sum = sum;
+            r.local_sum = local;
+            rc = XCP_E_MISMATCH;
+            goto out;
+        }
+        r.slave_sum = sum;
+        r.local_sum = local;
+        off += c;
+    }
+    rc = XCP_OK;
+out:
+    if (res) *res = r;
+    leave(s);
+    return rc;
+}
+
+void xcp_set_seed_key(XcpSession* s, XcpSeedKeyFn fn, void* user)
+{
+    xcp_mutex_lock(&s->cmd_lock);
+    s->sk_fn = fn;
+    s->sk_user = user;
+    xcp_mutex_unlock(&s->cmd_lock);
+}
+
+static int unlock_locked(XcpSession* s, uint8_t resource)
+{
+    uint8_t seed[256], key[256], pkt[256], rsp[SMALL_RSP];
+    int rc = XCP_E_PROTO, attempt;
+    uint32_t mc = s->info.max_cto;
+    if (!s->sk_fn) return XCP_E_UNSUPPORTED;
+    s->in_unlock = 1;
+    for (attempt = 0; attempt < 3; attempt++) {
+        int n = 0, L, got, part, klen = 255, rem, off, kr;
+        /* GET_SEED(mode 0, resource) */
+        pkt[0] = XCP_CMD_GET_SEED; pkt[1] = 0; pkt[2] = resource;
+        rc = exec_locked(s, pkt, 3, rsp, (int)sizeof(rsp), &n, NULL);
+        if (rc != XCP_OK) break;
+        if (n < 2) { rc = XCP_E_PROTO; break; }
+        L = rsp[1];
+        if (L == 0) { rc = XCP_OK; break; } /* 未保护 */
+        part = L;
+        if (part > (int)mc - 2) part = (int)mc - 2;
+        if (part > n - 2) part = n - 2;
+        if (part <= 0) { rc = XCP_E_PROTO; break; }
+        memcpy(seed, rsp + 2, (size_t)part);
+        got = part;
+        while (got < L) { /* GET_SEED(mode 1) 取剩余 */
+            pkt[1] = 1; pkt[2] = 0;
+            rc = exec_locked(s, pkt, 3, rsp, (int)sizeof(rsp), &n, NULL);
+            if (rc != XCP_OK) break;
+            if (n < 3 || rsp[1] != L - got) { rc = XCP_E_PROTO; break; }
+            part = rsp[1];
+            if (part > (int)mc - 2) part = (int)mc - 2;
+            if (part > n - 2) part = n - 2;
+            memcpy(seed + got, rsp + 2, (size_t)part);
+            got += part;
+        }
+        if (rc != XCP_OK) break;
+        kr = s->sk_fn(s->sk_user, resource, seed, L, key, &klen);
+        if (kr != 0 || klen <= 0 || klen > 255) { rc = XCP_E_SEEDKEY; break; }
+        /* UNLOCK(剩余长度, key 段) */
+        rem = klen; off = 0;
+        while (rem > 0) {
+            part = rem;
+            if (part > (int)mc - 2) part = (int)mc - 2;
+            pkt[0] = XCP_CMD_UNLOCK;
+            pkt[1] = (uint8_t)rem;
+            memcpy(pkt + 2, key + off, (size_t)part);
+            rc = exec_locked(s, pkt, 2 + part, rsp, (int)sizeof(rsp), &n, NULL);
+            if (rc != XCP_OK) break;
+            off += part;
+            rem -= part;
+        }
+        if (rc == XCP_E_SLAVE(XCP_ERR_SEQUENCE) && attempt < 2) { /* 表 217：预动作 GET_SEED，repeat 2 */
+            xcp_atomic_add(&s->n_retry, 1);
+            continue;
+        }
+        if (rc == XCP_E_SLAVE(XCP_ERR_ACCESS_LOCKED)) {
+            xcp_atomic_store(&s->connected, 0); /* 规范：key 错误后从机进入断开状态 */
+            break;
+        }
+        if (rc == XCP_OK && n >= 2 && (rsp[1] & resource)) rc = XCP_E_SLAVE(XCP_ERR_ACCESS_LOCKED);
+        break;
+    }
+    s->in_unlock = 0;
+    return rc;
+}
+
+int xcp_unlock(XcpSession* s, uint8_t resource)
+{
+    int rc;
+    if (resource != XCP_RES_CAL_PAG && resource != XCP_RES_DAQ &&
+        resource != XCP_RES_STIM && resource != XCP_RES_PGM) return XCP_E_ARG;
+    rc = enter(s);
+    if (rc) return rc;
+    if (!xcp_atomic_load(&s->connected)) rc = XCP_E_NOTCONN;
+    else rc = unlock_locked(s, resource);
+    leave(s);
+    return rc;
+}
+
+int xcp_unlock_all(XcpSession* s, uint8_t* prot_out)
+{
+    static const uint8_t res[4] = { XCP_RES_CAL_PAG, XCP_RES_DAQ, XCP_RES_STIM, XCP_RES_PGM };
+    XcpStatus st;
+    int rc, i;
+    rc = xcp_get_status(s, &st);
+    if (rc != XCP_OK) return rc;
+    for (i = 0; i < 4; i++) {
+        if (!(st.protection & res[i])) continue;
+        rc = xcp_unlock(s, res[i]);
+        if (rc != XCP_OK) return rc;
+    }
+    rc = xcp_get_status(s, &st);
+    if (rc == XCP_OK && prot_out) *prot_out = st.protection;
     return rc;
 }

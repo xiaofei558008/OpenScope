@@ -52,7 +52,15 @@ void xcp_thread_join(xcp_thread_t* t)
 }
 int xcp_thread_is_self(const xcp_thread_t* t) { return t->h && GetCurrentThreadId() == t->id; }
 
-uint64_t xcp_now_ms(void) { return (uint64_t)GetTickCount64(); }
+/* QPC：不受 15.6 ms 系统节拍粒度影响（GetTickCount64 会） */
+uint64_t xcp_now_ms(void)
+{
+    static LARGE_INTEGER f; /* 频率开机后不变；并发首次写入同值，无害 */
+    LARGE_INTEGER c;
+    if (f.QuadPart == 0) QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (uint64_t)(c.QuadPart / f.QuadPart) * 1000u + (uint64_t)(c.QuadPart % f.QuadPart) * 1000u / (uint64_t)f.QuadPart;
+}
 void xcp_sleep_ms(int ms) { Sleep(ms > 0 ? (DWORD)ms : 0); }
 
 static xcp_atomic_t g_wsa_refs;

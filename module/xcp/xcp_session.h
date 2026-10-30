@@ -28,6 +28,9 @@
 #define XCP_E_CLOSED       (-6)   /* 会话正在销毁 */
 #define XCP_E_WOULDBLOCK   (-7)   /* 在 RX 线程（回调）里调用了命令 */
 #define XCP_E_NOMEM        (-8)
+#define XCP_E_UNSUPPORTED  (-9)   /* 未提供回调（Seed&Key / USER_DEFINED 校验）等 */
+#define XCP_E_MISMATCH     (-10)  /* 校验和与本地计算不一致 */
+#define XCP_E_SEEDKEY      (-11)  /* Seed&Key 回调计算失败 */
 #define XCP_E_SLAVE_BASE    0x100
 #define XCP_E_SLAVE(code)  (XCP_E_SLAVE_BASE | (int)(code))
 #define XCP_IS_SLAVE_ERR(r) ((r) >= XCP_E_SLAVE_BASE && (r) <= XCP_E_SLAVE_BASE + 0xFF)
@@ -150,6 +153,57 @@ int xcp_set_mta(XcpSession* s, uint8_t ext, uint32_t addr);
 int xcp_upload(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n, void* dst);   /* SET_MTA + UPLOAD（块模式时多帧） */
 int xcp_upload_at_mta(XcpSession* s, uint32_t n, void* dst);                      /* 从当前 MTA，无 SET_MTA 预动作 */
 int xcp_short_upload(XcpSession* s, uint8_t ext, uint32_t addr, uint8_t n, void* dst);
+
+/* ---- 第 2 轮：标定写入 / 块模式 / 位操作 / 校验和 / Seed&Key ---- */
+
+/* 缓存的 GET_COMM_MODE_INFO（CONNECT 时若 OPTIONAL=1 自动读取）；无效返回 0 */
+int xcp_session_comm_mode(XcpSession* s, XcpCommModeInfo* out);
+/* 最近一次从机 ERR 包（含 PID，最多 8 字节）；返回长度 */
+int xcp_session_last_err_packet(XcpSession* s, uint8_t* out8);
+
+/* SET_MTA + DOWNLOAD。n 为 AG 元素个数。
+ * 从机支持主机块模式（GET_COMM_MODE_INFO.MASTER_BLOCK_MODE 且 MAX_BS>=2）时
+ * 用 DOWNLOAD + DOWNLOAD_NEXT*，每块 <= min(MAX_BS*每帧元素, 255)，帧间隔 >= MIN_ST；
+ * 否则每帧一个 DOWNLOAD。超时：SYNCH + SET_MTA + 重发整块（2 次）；
+ * DOWNLOAD_NEXT 的 ERR_SEQUENCE：SET_MTA + 重发整块（2 次）。 */
+int xcp_download(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n, const void* src);
+/* 强制不用块模式（用于对比/兼容） */
+int xcp_download_noblock(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n, const void* src);
+/* SET_MTA + DOWNLOAD_MAX：固定写 xcp_download_max_elems() 个元素 */
+int xcp_download_max_elems(XcpSession* s);
+int xcp_download_max(XcpSession* s, uint8_t ext, uint32_t addr, const void* src);
+/* SHORT_DOWNLOAD：n <= (MAX_CTO-8)/AG */
+int xcp_short_download(XcpSession* s, uint8_t ext, uint32_t addr, uint8_t n, const void* src);
+/* SET_MTA + MODIFY_BITS：A = (A & ~((~MA)<<S)) ^ (MX<<S)，A 为 MTA 处 32 位 */
+int xcp_modify_bits(XcpSession* s, uint8_t ext, uint32_t addr, uint8_t shift, uint16_t and_mask, uint16_t xor_mask);
+
+/* SET_MTA + BUILD_CHECKSUM(n 元素)，超时 t2。ERR_OUT_OF_RANGE 时 *max_block 返回从机允许的最大块（元素），否则 0。 */
+int xcp_build_checksum(XcpSession* s, uint8_t ext, uint32_t addr, uint32_t n,
+                       uint8_t* type, uint32_t* sum, uint32_t* max_block);
+/* USER_DEFINED 校验的外部计算（对应 A2L 指定的 checksum DLL；本轮只给回调） */
+typedef int (*XcpUserChecksumFn)(void* user, const uint8_t* data, uint32_t len, uint32_t* out);
+typedef struct XcpChecksumResult {
+    uint8_t  type;
+    uint32_t blocks;        /* 实际分成的块数 */
+    uint32_t block_elems;   /* 使用的块大小（元素） */
+    uint32_t bad_offset;    /* 不一致时：块起始元素偏移 */
+    uint32_t slave_sum, local_sum;
+} XcpChecksumResult;
+/* 用 BUILD_CHECKSUM 验证从机内存 == data（n 元素）。整段被拒（OUT_OF_RANGE+最大块）时按最大块切分重试。
+ * 返回 0 一致；XCP_E_MISMATCH 不一致；USER_DEFINED 且无 ufn 返回 XCP_E_UNSUPPORTED。 */
+int xcp_checksum_verify(XcpSession* s, uint8_t ext, uint32_t addr, const void* data, uint32_t n,
+                        XcpUserChecksumFn ufn, void* uuser, XcpChecksumResult* res);
+
+/* Seed&Key（只有回调接口；外部 DLL 加载器待 Tom 确认）。
+ * 回调：由 seed 计算 key；*key_len 进入时为容量（255），返回实际长度；返回 0 成功。 */
+typedef int (*XcpSeedKeyFn)(void* user, uint8_t resource, const uint8_t* seed, int seed_len,
+                            uint8_t* key, int* key_len);
+void xcp_set_seed_key(XcpSession* s, XcpSeedKeyFn fn, void* user);
+/* GET_SEED(0/1 多段) + UNLOCK(多段) 解锁单个资源（XCP_RES_*）。资源未保护时直接返回 0。
+ * 设置了回调后，命令遇到 ERR_ACCESS_LOCKED 会自动解锁对应资源并重试（最多 2 次）。 */
+int xcp_unlock(XcpSession* s, uint8_t resource);
+/* 按 GET_STATUS 的保护位逐个解锁；*prot_out 返回最终保护状态 */
+int xcp_unlock_all(XcpSession* s, uint8_t* prot_out);
 
 /* 按会话字节序编解码 */
 uint16_t xcp_s_rd16(const XcpSession* s, const uint8_t* p);

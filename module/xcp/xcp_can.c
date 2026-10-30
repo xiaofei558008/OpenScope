@@ -1,6 +1,8 @@
 #include "xcp_transport.h"
 #include "xcp_can.h"
 
+#include <stddef.h>
+
 /* CAN 后端仍为空壳；接口与 XcpTransport 对齐，便于接入周立功/Kvaser。 */
 
 static int can_scan(char names[][64], int cap)

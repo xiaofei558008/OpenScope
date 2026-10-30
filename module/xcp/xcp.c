@@ -1,11 +1,16 @@
 /* XCP 模块：与探针（J-Link/ST-Link）、网络模块并行。
  * 能力 OS_CAP_XCP，不占用仿真器下拉。
- * 传输经 XcpTransport：serial / can / tcp（物理层无关）。 */
+ * 传输经 XcpTransport：serial / can / tcp（物理层无关）。
+ * 第 2 轮：协议层改走 XcpSession（独立 RX 线程、PID 分流、超时/SYNCH/重试），
+ *   tcp 改用 XCP-on-Ethernet 实现 xcp_eth.c，并接受 device="udp"；对外接口与行为不变。 */
+#include "xcp_tl.h"        /* 先于 module_api.h：winsock2 必须在 windows.h 之前 */
+#include "xcp_session.h"
 #include "xcp_transport.h"
 #include "module_api.h"
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct XcpCtx {
@@ -16,6 +21,7 @@ typedef struct XcpCtx {
     int connected;
     OS_DriverInfo info;
     char last_opts[128];
+    char trname[16];   /* 当前传输名（tcp/udp/serial），fill_info 用 */
 } XcpCtx;
 
 typedef struct TrMap {
@@ -65,9 +71,9 @@ static void fill_info(void)
     _snprintf(g_ctx.info.name, sizeof(g_ctx.info.name), "xcp");
     _snprintf(g_ctx.info.version, sizeof(g_ctx.info.version), "1.28.0");
     _snprintf(g_ctx.info.dll_version, sizeof(g_ctx.info.dll_version), "1.5");
-    if (g_ctx.connected && g_ctx.tr)
+    if (g_ctx.connected && g_ctx.trname[0])
         _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator),
-                  "XCP/%s %s", g_ctx.tr->name, g_ctx.last_opts);
+                  "XCP/%s %s", g_ctx.trname, g_ctx.last_opts);
     else
         _snprintf(g_ctx.info.emulator, sizeof(g_ctx.info.emulator), "未连接");
     g_ctx.info.connected = g_ctx.connected;
@@ -76,6 +82,8 @@ static void fill_info(void)
 /* 传输故障时直接丢链路，不发 DISCONNECT（避免再阻塞/二次失败）。调用方须已持锁。 */
 static void drop_link_unlocked(void)
 {
+    /* 先停会话（join RX 线程，它还在用 link），再关底层句柄 */
+    xcp_master_free(&g_ctx.master);
     if (g_ctx.tr && g_ctx.tr->close && g_ctx.link)
         g_ctx.tr->close(g_ctx.link);
     g_ctx.link = NULL;
@@ -83,6 +91,34 @@ static void drop_link_unlocked(void)
     g_ctx.connected = 0;
     g_ctx.master.connected = 0;
     g_ctx.last_opts[0] = 0;
+    g_ctx.trname[0] = 0;
+}
+
+/* 会话 RX 线程发现链路断开后，下一次命令路径上回收（调用方须已持锁） */
+static void reap_dead_link_unlocked(void)
+{
+    if (g_ctx.connected && !xcp_master_link_ok(&g_ctx.master)) {
+        xlog(OS_LOG_WARN, "XCP 链路已断开（RX 线程检测）");
+        drop_link_unlocked();
+    }
+}
+
+static void split_host_port(const char* opts, char* host, int cap, int* port)
+{
+    const char* c = opts ? strrchr(opts, ':') : NULL;
+    *port = 5555;
+    if (!opts || !opts[0]) { _snprintf(host, cap, "127.0.0.1"); return; }
+    if (c) {
+        size_t n = (size_t)(c - opts);
+        if (n >= (size_t)cap) n = (size_t)cap - 1;
+        memcpy(host, opts, n);
+        host[n] = 0;
+        *port = atoi(c + 1);
+        if (*port <= 0) *port = 5555;
+    } else {
+        _snprintf(host, cap, "%s", opts);
+    }
+    if (!host[0]) _snprintf(host, cap, "127.0.0.1");
 }
 
 static int mod_scan(OS_ScanReq* req)
@@ -134,12 +170,16 @@ static int mod_connect(const OS_ConnectCfg* cfg)
     XcpIo io;
     void* link = NULL;
     char opts[160];
-    int idx, rc, baud;
+    int idx, rc, baud, is_udp = 0, is_eth;
     EnterCriticalSection(&g_ctx.cs);
+    if (g_ctx.connected) reap_dead_link_unlocked();
     if (g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_OK; }
 
     opts[0] = 0;
-    if (cfg && cfg->device[0])
+    if (cfg && strcmp(cfg->device, "udp") == 0) {
+        is_udp = 1;
+        tr = xcp_transport_by_name("tcp"); /* 借用 tcp 的扫描名/选项解析；实际走 UDP */
+    } else if (cfg && cfg->device[0])
         tr = xcp_transport_by_name(cfg->device);
     if (!tr && cfg && cfg->probe_index >= 0 && cfg->probe_index < g_map_n)
         tr = g_map[cfg->probe_index].tr;
@@ -170,34 +210,51 @@ static int mod_connect(const OS_ConnectCfg* cfg)
         opts[0] = 0;
     }
 
-    xlog(OS_LOG_INFO, "XCP 连接: transport=%s opts='%s'", tr->name, opts);
-    rc = tr->open(&link, idx, opts[0] ? opts : NULL);
-    if (rc != 0 || !link) {
-        xlog(OS_LOG_ERROR, "XCP 打开传输失败 (%s)", tr->name);
-        LeaveCriticalSection(&g_ctx.cs);
-        return OS_ERR_NO_DEVICE;
+    is_eth = is_udp || strcmp(tr->name, "tcp") == 0;
+    xlog(OS_LOG_INFO, "XCP 连接: transport=%s opts='%s'", is_udp ? "udp" : tr->name, opts);
+    if (is_eth) {
+        char host[64];
+        int port;
+        XcpTl* tl;
+        split_host_port(opts, host, sizeof(host), &port);
+        tl = is_udp ? xcp_tl_udp_open(host, port, NULL) : xcp_tl_tcp_open(host, port, 2000, NULL);
+        if (!tl) {
+            xlog(OS_LOG_ERROR, "XCP 打开传输失败 (%s %s:%d)", is_udp ? "udp" : "tcp", host, port);
+            LeaveCriticalSection(&g_ctx.cs);
+            return OS_ERR_NO_DEVICE;
+        }
+        xcp_master_init_tl(&g_ctx.master, tl);
+    } else {
+        rc = tr->open(&link, idx, opts[0] ? opts : NULL);
+        if (rc != 0 || !link) {
+            xlog(OS_LOG_ERROR, "XCP 打开传输失败 (%s)", tr->name);
+            LeaveCriticalSection(&g_ctx.cs);
+            return OS_ERR_NO_DEVICE;
+        }
+        tr->bind(link, &io);
+        if (!io.send || !io.recv) {
+            if (tr->close) tr->close(link);
+            LeaveCriticalSection(&g_ctx.cs);
+            return OS_ERR_FAIL;
+        }
+        xcp_master_init(&g_ctx.master, &io);
     }
-    tr->bind(link, &io);
-    if (!io.send || !io.recv) {
-        if (tr->close) tr->close(link);
-        LeaveCriticalSection(&g_ctx.cs);
-        return OS_ERR_FAIL;
-    }
-    xcp_master_init(&g_ctx.master, &io);
     rc = xcp_master_connect(&g_ctx.master);
     if (rc != 0) {
         xlog(OS_LOG_ERROR, "XCP CONNECT 失败 rc=%d err=%d", rc, g_ctx.master.last_err);
-        if (tr->close) tr->close(link);
+        xcp_master_free(&g_ctx.master);
+        if (link && tr->close) tr->close(link);
         LeaveCriticalSection(&g_ctx.cs);
         return OS_ERR_FAIL;
     }
     g_ctx.tr = tr;
     g_ctx.link = link;
     g_ctx.connected = 1;
+    _snprintf(g_ctx.trname, sizeof(g_ctx.trname), "%s", is_udp ? "udp" : tr->name);
     _snprintf(g_ctx.last_opts, sizeof(g_ctx.last_opts), "%s", opts);
     LeaveCriticalSection(&g_ctx.cs);
-    xlog(OS_LOG_INFO, "XCP 已连接 %s resource=0x%02X max_cto=%u",
-         tr->name, g_ctx.master.resource, g_ctx.master.max_cto);
+    xlog(OS_LOG_INFO, "XCP 已连接 %s resource=0x%02X max_cto=%u max_dto=%u",
+         g_ctx.trname, g_ctx.master.resource, g_ctx.master.max_cto, g_ctx.master.max_dto);
     return OS_ERR_OK;
 }
 
@@ -207,6 +264,7 @@ static int mod_read(OS_MemReq* req)
     if (!req || !req->data || req->size == 0) return OS_ERR_INVALID_ARG;
     if (req->size > 4096) return OS_ERR_INVALID_ARG;
     EnterCriticalSection(&g_ctx.cs);
+    reap_dead_link_unlocked();
     if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     rc = xcp_master_upload(&g_ctx.master, (uint32_t)req->address, req->data, (int)req->size);
     /* -1 传输/帧错误：链路已不可信，立即丢弃；-2 从机 ERR 可保留会话 */
@@ -228,6 +286,7 @@ static int mod_write(OS_MemReq* req)
     if (!req || !req->data || req->size == 0) return OS_ERR_INVALID_ARG;
     if (req->size > 4096) return OS_ERR_INVALID_ARG;
     EnterCriticalSection(&g_ctx.cs);
+    reap_dead_link_unlocked();
     if (!g_ctx.connected) { LeaveCriticalSection(&g_ctx.cs); return OS_ERR_NOT_CONNECTED; }
     rc = xcp_master_download(&g_ctx.master, (uint32_t)req->address, req->data, (int)req->size);
     if (rc == -1) {
@@ -272,6 +331,7 @@ static int mod_command(void* ctx, int cmd, void* in, void* out)
     case OS_CMD_DISCONNECT: rc = mod_disconnect(); break;
     case OS_CMD_IS_CONNECTED:
         EnterCriticalSection(&g_ctx.cs);
+        reap_dead_link_unlocked();
         connected = g_ctx.connected ? 1 : 0;
         LeaveCriticalSection(&g_ctx.cs);
         if (out) *(int*)out = connected;

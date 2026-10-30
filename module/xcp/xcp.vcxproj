@@ -84,6 +84,7 @@
     <ClCompile Include="xcp_plat.c" />
     <ClCompile Include="xcp_eth.c" />
     <ClCompile Include="xcp_session.c" />
+    <ClCompile Include="xcp_checksum.c" />
     <ClInclude Include="xcp_proto.h" />
     <ClInclude Include="xcp_slave.h" />
     <ClInclude Include="xcp_master.h" />
@@ -92,6 +93,7 @@
     <ClInclude Include="xcp_plat.h" />
     <ClInclude Include="xcp_tl.h" />
     <ClInclude Include="xcp_session.h" />
+    <ClInclude Include="xcp_checksum.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

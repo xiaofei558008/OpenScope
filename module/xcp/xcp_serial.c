@@ -11,11 +11,15 @@
 #include <string.h>
 #include <windows.h>
 
+#define SER_RB (2 * (0xFFFF + 2))
+
 typedef struct SerCtx {
     HANDLE h;
     char   port[32];
     int    baud;
-    CRITICAL_SECTION cs;
+    CRITICAL_SECTION cs;   /* 只保护发送；接收只有会话 RX 线程一个读者 */
+    uint8_t* rb;           /* 接收缓冲：超时不丢半帧，下次继续拼 */
+    int    rlen;
 } SerCtx;
 
 static int parse_opts(const char* opts, char* port, int port_cap, int* baud)
@@ -73,9 +77,10 @@ static int ser_apply_dcb(HANDLE h, int baud)
     dcb.fRtsControl = RTS_CONTROL_ENABLE;
     if (!SetCommState(h, &dcb)) return -1;
     memset(&to, 0, sizeof(to));
-    to.ReadIntervalTimeout = 20;
-    to.ReadTotalTimeoutConstant = 200;
-    to.ReadTotalTimeoutMultiplier = 2;
+    /* MAXDWORD/MAXDWORD/N：有字节立即返回，否则最多等 N ms（便于 RX 线程按切片轮询、及时退出） */
+    to.ReadIntervalTimeout = MAXDWORD;
+    to.ReadTotalTimeoutMultiplier = MAXDWORD;
+    to.ReadTotalTimeoutConstant = 20;
     to.WriteTotalTimeoutConstant = 200;
     to.WriteTotalTimeoutMultiplier = 2;
     SetCommTimeouts(h, &to);
@@ -113,6 +118,8 @@ static int ser_open(void** out, int index, const char* opts)
     PurgeComm(h, PURGE_RXCLEAR | PURGE_TXCLEAR);
     s = (SerCtx*)calloc(1, sizeof(SerCtx));
     if (!s) { CloseHandle(h); return -1; }
+    s->rb = (uint8_t*)malloc(SER_RB);
+    if (!s->rb) { CloseHandle(h); free(s); return -1; }
     s->h = h;
     s->baud = baud;
     _snprintf(s->port, sizeof(s->port), "COM%d", i);
@@ -127,6 +134,7 @@ static void ser_close(void* ctx)
     if (!s) return;
     if (s->h != INVALID_HANDLE_VALUE) CloseHandle(s->h);
     DeleteCriticalSection(&s->cs);
+    free(s->rb);
     free(s);
 }
 
@@ -140,37 +148,6 @@ static int ser_write_all(HANDLE h, const uint8_t* p, int n)
         off += (int)wr;
     }
     return 0;
-}
-
-static int ser_read_exact(HANDLE h, uint8_t* p, int n, int timeout_ms)
-{
-    int off = 0;
-    DWORD t0 = GetTickCount();
-    while (off < n) {
-        DWORD rd = 0;
-        if ((int)(GetTickCount() - t0) > timeout_ms) return -1;
-        if (!ReadFile(h, p + off, (DWORD)(n - off), &rd, NULL))
-            return -1;
-        if (rd == 0) {
-            Sleep(1);
-            continue;
-        }
-        off += (int)rd;
-    }
-    return 0;
-}
-
-/* 收到的帧大于调用方缓冲：读走丢弃，保持后续帧边界不撕裂 */
-static void ser_discard(HANDLE h, int n, int timeout_ms)
-{
-    uint8_t tmp[64];
-    DWORD t0 = GetTickCount();
-    while (n > 0) {
-        int chunk = n > (int)sizeof(tmp) ? (int)sizeof(tmp) : n;
-        if (ser_read_exact(h, tmp, chunk, timeout_ms) != 0) return;
-        n -= chunk;
-        if ((int)(GetTickCount() - t0) > timeout_ms * 2) return;
-    }
 }
 
 static int ser_send(void* ctx, const uint8_t* data, int len)
@@ -188,26 +165,39 @@ static int ser_send(void* ctx, const uint8_t* data, int len)
     return rc == 0 ? len : -1;
 }
 
+/* 帧 [u16 LE len][payload]。半帧保留在 rb 里，下一次调用继续，不会因超时撕裂流。
+ * 返回 >0 帧长；-1 超时/无完整帧/出错（旧接口不区分）。超长帧整体跳过。 */
 static int ser_recv(void* ctx, uint8_t* data, int cap, int timeout_ms)
 {
     SerCtx* s = (SerCtx*)ctx;
-    uint8_t hdr[2];
-    int len, rc;
+    DWORD t0 = GetTickCount();
     if (!s || !data || cap <= 0) return -1;
-    if (timeout_ms <= 0) timeout_ms = 500;
-    EnterCriticalSection(&s->cs);
-    rc = ser_read_exact(s->h, hdr, 2, timeout_ms);
-    if (rc != 0) { LeaveCriticalSection(&s->cs); return -1; }
-    len = (int)hdr[0] | ((int)hdr[1] << 8);
-    if (len <= 0) { LeaveCriticalSection(&s->cs); return -1; }
-    if (len > cap) {
-        ser_discard(s->h, len, timeout_ms);
-        LeaveCriticalSection(&s->cs);
-        return -1;
+    if (timeout_ms <= 0) timeout_ms = 1;
+    for (;;) {
+        DWORD rd = 0;
+        if (s->rlen >= 2) {
+            int len = (int)s->rb[0] | ((int)s->rb[1] << 8);
+            if (len == 0) { /* 非法：丢 2 字节重新同步 */
+                memmove(s->rb, s->rb + 2, (size_t)(s->rlen - 2));
+                s->rlen -= 2;
+                continue;
+            }
+            if (s->rlen >= 2 + len) {
+                int ok = len <= cap;
+                if (ok) memcpy(data, s->rb + 2, (size_t)len);
+                memmove(s->rb, s->rb + 2 + len, (size_t)(s->rlen - 2 - len));
+                s->rlen -= 2 + len;
+                if (ok) return len;
+                continue;
+            }
+        }
+        if ((int)(GetTickCount() - t0) >= timeout_ms) return -1;
+        if (!ReadFile(s->h, s->rb + s->rlen, (DWORD)(SER_RB - s->rlen), &rd, NULL)) {
+            Sleep(5); /* 设备拔出等：避免空转，由上层超时处理 */
+            return -1;
+        }
+        s->rlen += (int)rd;
     }
-    rc = ser_read_exact(s->h, data, len, timeout_ms);
-    LeaveCriticalSection(&s->cs);
-    return rc == 0 ? len : -1;
 }
 
 static void ser_bind(void* ctx, XcpIo* io)

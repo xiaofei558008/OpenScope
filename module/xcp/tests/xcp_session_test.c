@@ -2,9 +2,14 @@
 #include "../xcp_session.h"
 #include "../xcp_proto.h"
 #include "xcp_fake_slave.h"
+#include "../xcp_checksum.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#  include <windows.h>
+#  include <mmsystem.h> /* timeBeginPeriod：链接 winmm */
+#endif
 
 static int g_fail, g_checks;
 #define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; printf("  FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -139,6 +144,37 @@ static void t_synch_retry(int udp)
     rig_down(&r);
 }
 
+/* 4b. 迟到的 ERR_CMD_SYNCH 不得配给非 SYNCH 命令（小程第二轮 Windows 4/5 失败的回归） */
+static void inj_synch(void* a) { static const uint8_t p[2] = { XCP_PID_ERR, XCP_ERR_CMD_SYNCH }; xcp_sleep_ms(30); fake_inject((FakeSlave*)a, p, 2); }
+static void t_late_synch(int udp)
+{
+    Rig r; FakeCfg c = base_cfg(udp); XcpStatus st; XcpSessionStats s0, s1; xcp_thread_t th;
+    CHECK_RC(rig_up(&r, &c, 300), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    /* 确定性注入：GET_STATUS 在途（从机 120ms 后答）时插入一个 ERR_CMD_SYNCH */
+    xcp_session_stats(r.s, &s0);
+    fake_delay(r.f, XCP_CMD_GET_STATUS, 120, 1);
+    CHECK(xcp_thread_start(&th, inj_synch, r.f) == 0);
+    CHECK_RC(xcp_get_status(r.s, &st), XCP_OK);
+    xcp_thread_join(&th);
+    CHECK(st.session_cfg_id == 0x1234);
+    xcp_session_stats(r.s, &s1);
+    CHECK(s1.rx_stray == s0.rx_stray + 1);
+    CHECK(s1.timeouts == s0.timeouts);
+    rig_down(&r);
+    /* 真实场景：GET_STATUS 丢失 → SYNCH 首次迟到（超 t1）→ 重发 SYNCH → 两个 ERR_CMD_SYNCH，
+       多出来的一个在重试的 GET_STATUS 在途时到达 */
+    CHECK_RC(rig_up(&r, &c, 100), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    fake_drop(r.f, XCP_CMD_GET_STATUS, 1);
+    fake_delay(r.f, XCP_CMD_SYNCH, 150, 1);
+    fake_delay(r.f, XCP_CMD_GET_STATUS, 100, 1); /* 让重试的 GET_STATUS 在途窗口覆盖迟到应答 */
+    CHECK_RC(xcp_get_status(r.s, &st), XCP_OK);
+    CHECK(st.session_cfg_id == 0x1234);
+    CHECK_RC(xcp_get_status(r.s, &st), XCP_OK);
+    rig_down(&r);
+}
+
 /* 5. ERR 处理：BUSY 等 t7 重试；RES_TEMP_NOT_ACC 重试；OUT_OF_RANGE 直接返回；BUSY 超上限返回 */
 static void t_err(int udp)
 {
@@ -167,12 +203,14 @@ static void t_err(int udp)
 static void t_cmd_pending(int udp)
 {
     Rig r; FakeCfg c = base_cfg(udp); XcpStatus st; XcpSessionStats ss;
-    CHECK_RC(rig_up(&r, &c, 120), 0);
+    /* t1=250、每 100ms 一个 PENDING：余量 150ms，远大于 Windows 15.6ms 计时粒度 */
+    CHECK_RC(rig_up(&r, &c, 250), 0);
     CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
-    fake_pending(r.f, XCP_CMD_GET_STATUS, 300, 1);
+    fake_pending(r.f, XCP_CMD_GET_STATUS, 600, 1);
     CHECK_RC(xcp_get_status(r.s, &st), XCP_OK);
     xcp_session_stats(r.s, &ss);
-    CHECK(ss.timeouts == 0 && ss.cmd_pending >= 2);
+    CHECK(ss.timeouts == 0);
+    CHECK(ss.cmd_pending >= 3); /* 理论 5 个；粒度/调度抖动下至少 3 个必然在应答前到达 */
     CHECK(fake_count(r.f, XCP_CMD_GET_STATUS) == 1);
     rig_down(&r);
 }
@@ -383,10 +421,231 @@ static void t_no_slave(void)
     xcp_session_destroy(s);
 }
 
+
+/* ======================================================= 第 2 轮 */
+static FakeCfg cal_cfg(int udp, int ag, int bo)
+{
+    FakeCfg c = base_cfg(udp);
+    c.protection = 0; c.ag = ag; c.byte_order = bo; c.max_cto = 8 * (ag == 4 ? 2 : 1); c.max_dto = 64;
+    return c;
+}
+
+/* R2-1 DOWNLOAD：主机块模式（MAX_BS/MIN_ST）与非块模式，AG1/2/4 × 字节序 */
+static void t_download(int udp, int ag, int bo, int block)
+{
+    Rig r; FakeCfg c = cal_cfg(udp, ag, bo); uint8_t src[1200], back[1200]; int i, nb = 1200;
+    XcpCommModeInfo cm; XcpSessionStats ss;
+    c.no_master_block = !block; c.max_bs = 4; c.min_st = 10; /* 1 ms */
+    CHECK_RC(rig_up(&r, &c, 300), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    CHECK(xcp_session_comm_mode(r.s, &cm) == 1 && cm.max_bs == 4 && cm.min_st == 10 && (cm.optional & 1) == (block ? 1 : 0));
+    for (i = 0; i < nb; i++) src[i] = (uint8_t)(i * 31 + 7);
+    CHECK_RC(xcp_download(r.s, 0, 0x20, (uint32_t)(nb / ag), src), XCP_OK);
+    fake_get_mem(r.f, 0x20u * (uint32_t)ag, back, nb);
+    CHECK(memcmp(src, back, (size_t)nb) == 0);
+    if (block) {
+        CHECK(fake_max_block_frames(r.f) > 1 && fake_max_block_frames(r.f) <= 4);
+        /* MIN_ST=1ms 在主机发送侧保证；从机侧到达时间有调度抖动，按 50% 判定（无突发即可） */
+        CHECK(fake_min_gap_us(r.f) >= 500);
+    } else {
+        CHECK(fake_max_block_frames(r.f) == 1 && fake_count(r.f, XCP_CMD_DOWNLOAD_NEXT) == 0);
+    }
+    xcp_session_stats(r.s, &ss);
+    CHECK(ss.timeouts == 0);
+    rig_down(&r);
+}
+
+/* R2-2 块传输丢帧 -> ERR_SEQUENCE -> SET_MTA + 重发整块；以及块中超时 -> SYNCH + SET_MTA */
+static void t_download_recovery(int udp)
+{
+    Rig r; FakeCfg c = cal_cfg(udp, 1, 0); uint8_t src[300], back[300]; int i;
+    XcpSessionStats ss;
+    c.max_bs = 8; c.min_st = -1;
+    CHECK_RC(rig_up(&r, &c, 150), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    for (i = 0; i < 300; i++) src[i] = (uint8_t)(255 - i);
+    fake_lose_next(r.f, 2);
+    CHECK_RC(xcp_download(r.s, 0, 0x100, 300, src), XCP_OK);
+    fake_get_mem(r.f, 0x100, back, 300);
+    CHECK(memcmp(src, back, 300) == 0);
+    xcp_session_stats(r.s, &ss);
+    CHECK(ss.retries >= 1);
+    CHECK(fake_count(r.f, XCP_CMD_SET_MTA) >= 2);
+    /* 块的第一帧丢失 -> 后续 NEXT 引出 ERR_SEQUENCE -> SYNCH 排空 + SET_MTA + 重发 */
+    for (i = 0; i < 300; i++) src[i] = (uint8_t)(i ^ 0x5A);
+    fake_drop(r.f, XCP_CMD_DOWNLOAD, 1);
+    CHECK_RC(xcp_download(r.s, 0, 0x100, 300, src), XCP_OK);
+    fake_get_mem(r.f, 0x100, back, 300);
+    CHECK(memcmp(src, back, 300) == 0);
+    xcp_session_stats(r.s, &ss);
+    CHECK(ss.synchs >= 1 && ss.timeouts == 0);
+    /* 块的最后一帧丢失 -> 从机一直等 -> 超时 -> SYNCH + SET_MTA + 重发 */
+    for (i = 0; i < 300; i++) src[i] = (uint8_t)(i ^ 0xA5);
+    fake_lose_next(r.f, 7); /* MAX_BS=8：第一块 1 个 DOWNLOAD + 7 个 NEXT */
+    CHECK_RC(xcp_download(r.s, 0, 0x100, 300, src), XCP_OK);
+    fake_get_mem(r.f, 0x100, back, 300);
+    CHECK(memcmp(src, back, 300) == 0);
+    xcp_session_stats(r.s, &ss);
+    CHECK(ss.synchs >= 2 && ss.timeouts == 1);
+    rig_down(&r);
+}
+
+/* R2-3 DOWNLOAD_MAX / SHORT_DOWNLOAD / 不用块模式 */
+static void t_download_variants(int udp, int ag, int bo)
+{
+    Rig r; FakeCfg c = cal_cfg(udp, ag, bo); uint8_t src[256], back[256]; int i, nm;
+    c.max_cto = 64;
+    CHECK_RC(rig_up(&r, &c, 300), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    for (i = 0; i < 256; i++) src[i] = (uint8_t)(i * 5 + 1);
+    nm = xcp_download_max_elems(r.s);
+    CHECK(nm == 64 / ag - 1);
+    CHECK_RC(xcp_download_max(r.s, 0, 0x40, src), XCP_OK);
+    fake_get_mem(r.f, 0x40u * (uint32_t)ag, back, nm * ag);
+    CHECK(memcmp(src, back, (size_t)(nm * ag)) == 0);
+    CHECK_RC(xcp_short_download(r.s, 0, 0x200, (uint8_t)((64 - 8) / ag), src + 3), XCP_OK);
+    fake_get_mem(r.f, 0x200u * (uint32_t)ag, back, 56);
+    CHECK(memcmp(src + 3, back, 56) == 0);
+    CHECK_RC(xcp_short_download(r.s, 0, 0x200, (uint8_t)((64 - 8) / ag + 1), src), XCP_E_ARG);
+    CHECK_RC(xcp_download_noblock(r.s, 0, 0x300, 200 / ag, src + 7), XCP_OK);
+    fake_get_mem(r.f, 0x300u * (uint32_t)ag, back, 200);
+    CHECK(memcmp(src + 7, back, 200) == 0);
+    CHECK(fake_count(r.f, XCP_CMD_DOWNLOAD_NEXT) == 0);
+    rig_down(&r);
+}
+
+/* R2-4 MODIFY_BITS（规范示例：S=16, MA=0xBFFE, MX=0x0001: 0xFFF0FFFF -> 0xBFF1FFFF） */
+static void t_modify_bits(int udp, int bo)
+{
+    Rig r; FakeCfg c = cal_cfg(udp, 1, bo); uint8_t w[4], back[4]; uint32_t v;
+    CHECK_RC(rig_up(&r, &c, 300), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    if (bo) { w[0] = 0xFF; w[1] = 0xF0; w[2] = 0xFF; w[3] = 0xFF; }
+    else { w[0] = 0xFF; w[1] = 0xFF; w[2] = 0xF0; w[3] = 0xFF; }
+    fake_set_mem(r.f, 0x80, w, 4);
+    CHECK_RC(xcp_modify_bits(r.s, 0, 0x80, 16, 0xBFFE, 0x0001), XCP_OK);
+    fake_get_mem(r.f, 0x80, back, 4);
+    v = bo ? ((uint32_t)back[0] << 24 | (uint32_t)back[1] << 16 | (uint32_t)back[2] << 8 | back[3])
+           : ((uint32_t)back[3] << 24 | (uint32_t)back[2] << 16 | (uint32_t)back[1] << 8 | back[0]);
+    CHECK(v == 0xBFF1FFFFu);
+    /* 清 bit0 */
+    CHECK_RC(xcp_modify_bits(r.s, 0, 0x80, 0, 0xFFFE, 0x0000), XCP_OK);
+    fake_get_mem(r.f, 0x80, back, 4);
+    CHECK((bo ? back[3] : back[0]) == 0xFE);
+    CHECK_RC(xcp_modify_bits(r.s, 0, 0x80, 32, 0, 0), XCP_E_ARG);
+    rig_down(&r);
+}
+
+/* R2-5 校验和：规范测试向量（Table 74/75） */
+static void t_checksum_vectors(void)
+{
+    static const uint8_t pat[32] = { 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,
+        0xF1,0xF2,0xF3,0xF4,0xF5,0xF6,0xF7,0xF8,0xF9,0xFA,0xFB,0xFC,0xFD,0xFE,0xFF,0x00 };
+    static const uint32_t intel[9] = { 0x10, 0x0F10, 0x00000F10, 0x1800, 0x00071800, 0x140C03F8, 0xC76A, 0x9D50, 0x89CD97CE };
+    static const uint32_t moto[9]  = { 0x10, 0x0F10, 0x00000F10, 0x0710, 0x00080710, 0xFC040B10, 0xC76A, 0x9D50, 0x89CD97CE };
+    int t; uint32_t v;
+    for (t = 1; t <= 9; t++) {
+        CHECK(xcp_checksum_compute((uint8_t)t, pat, 32, 0, &v) == 0 && v == intel[t - 1]);
+        CHECK(xcp_checksum_compute((uint8_t)t, pat, 32, 1, &v) == 0 && v == moto[t - 1]);
+    }
+    CHECK(xcp_checksum_compute(XCP_CKS_ADD_22, pat, 31, 0, &v) == -2);
+    CHECK(xcp_checksum_compute(XCP_CKS_ADD_44, pat, 30, 0, &v) == -2);
+    CHECK(xcp_checksum_compute(XCP_CKS_USER_DEFINED, pat, 32, 0, &v) == -1);
+}
+
+static int user_cks(void* u, const uint8_t* d, uint32_t len, uint32_t* out) { (void)u; *out = fake_user_checksum(d, len); return 0; }
+
+/* R2-6 BUILD_CHECKSUM 对从机：全部算法 + USER_DEFINED 回调 + 最大块 OUT_OF_RANGE 重试 + 超时 SYNCH+SET_MTA + 不一致 */
+static void t_checksum_slave(int udp, int bo)
+{
+    static const uint8_t types[10] = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 0xFF };
+    uint8_t data[1024], ty; uint32_t sum, maxb; int i, k;
+    XcpChecksumResult res;
+    for (i = 0; i < 1024; i++) data[i] = (uint8_t)(i * 97 + 13);
+    for (k = 0; k < 10; k++) {
+        Rig r; FakeCfg c = cal_cfg(udp, 1, bo);
+        c.max_cto = 64; c.cks_type = types[k]; c.cks_max_block = (k % 3 == 0) ? 256 : 0;
+        CHECK_RC(rig_up(&r, &c, 300), 0);
+        CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+        CHECK_RC(xcp_download(r.s, 0, 0x400, 1024, data), XCP_OK);
+        if (types[k] == 0xFF) CHECK_RC(xcp_checksum_verify(r.s, 0, 0x400, data, 1024, NULL, NULL, &res), XCP_E_UNSUPPORTED);
+        CHECK_RC(xcp_checksum_verify(r.s, 0, 0x400, data, 1024, user_cks, NULL, &res), XCP_OK);
+        CHECK(res.type == types[k]);
+        if (c.cks_max_block) {
+            CHECK(res.blocks == 4 && res.block_elems == 256);
+            CHECK_RC(xcp_build_checksum(r.s, 0, 0x400, 1024, &ty, &sum, &maxb), XCP_E_SLAVE(XCP_ERR_OUT_OF_RANGE));
+            CHECK(maxb == 256);
+        } else CHECK(res.blocks == 1);
+        if (k == 2) { /* 超时 -> SYNCH + SET_MTA 重试 */
+            int mta0 = fake_count(r.f, XCP_CMD_SET_MTA);
+            fake_drop(r.f, XCP_CMD_BUILD_CHECKSUM, 1);
+            CHECK_RC(xcp_build_checksum(r.s, 0, 0x400, 1024, &ty, &sum, &maxb), XCP_OK);
+            CHECK(fake_count(r.f, XCP_CMD_SET_MTA) == mta0 + 2);
+            CHECK(sum == 0x0001FFFFu || 1); /* 值由下一句核对 */
+            { uint32_t l; xcp_checksum_compute(3, data, 1024, bo, &l); CHECK(sum == l); }
+        }
+        { uint8_t x = (uint8_t)(data[700] ^ 0x01); fake_set_mem(r.f, 0x400 + 700, &x, 1); }
+        CHECK_RC(xcp_checksum_verify(r.s, 0, 0x400, data, 1024, user_cks, NULL, &res), XCP_E_MISMATCH);
+        if (c.cks_max_block) CHECK(res.bad_offset == 512);
+        rig_down(&r);
+    }
+}
+
+/* R2-7 Seed&Key：多段 seed（20 字节 / MAX_CTO 8）、多段 key（25 字节），逐资源、自动解锁、错 key、ERR_SEQUENCE 重试 */
+static int sk_ok(void* u, uint8_t res, const uint8_t* seed, int L, uint8_t* key, int* klen)
+{
+    int extra = *(int*)u;
+    if (*klen < L + extra) return -1;
+    *klen = fake_compute_key(res, seed, L, extra, key);
+    return 0;
+}
+static int sk_bad(void* u, uint8_t res, const uint8_t* seed, int L, uint8_t* key, int* klen)
+{
+    int rc = sk_ok(u, res, seed, L, key, klen);
+    key[0] ^= 0xFF;
+    return rc;
+}
+static void t_seed_key(int udp)
+{
+    Rig r; FakeCfg c = cal_cfg(udp, 1, 0); int extra = 5; uint8_t prot = 0xAA, d[16]; int sp;
+    memset(d, 0x42, sizeof(d));
+    c.protection = XCP_RES_CAL_PAG | XCP_RES_DAQ | XCP_RES_PGM; c.seed_len = 20; c.key_extra = extra;
+    CHECK_RC(rig_up(&r, &c, 300), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    CHECK_RC(xcp_unlock(r.s, XCP_RES_CAL_PAG), XCP_E_UNSUPPORTED);
+    CHECK_RC(xcp_download(r.s, 0, 0, 16, d), XCP_E_SLAVE(XCP_ERR_ACCESS_LOCKED));
+    xcp_set_seed_key(r.s, sk_ok, &extra);
+    sp = fake_count(r.f, XCP_CMD_GET_SEED);
+    CHECK_RC(xcp_unlock(r.s, XCP_RES_DAQ), XCP_OK);
+    CHECK(fake_protection(r.f) == (XCP_RES_CAL_PAG | XCP_RES_PGM));
+    CHECK(fake_count(r.f, XCP_CMD_GET_SEED) - sp == 4);       /* 6+6+6+2 */
+    CHECK(fake_count(r.f, XCP_CMD_UNLOCK) == 5);              /* 25 字节 / 6 */
+    CHECK_RC(xcp_unlock(r.s, XCP_RES_DAQ), XCP_OK);           /* 已解锁：GET_SEED 长度 0 */
+    /* 自动解锁：DOWNLOAD 遇 ACCESS_LOCKED -> 解 CAL/PAG -> 重试 */
+    CHECK_RC(xcp_download(r.s, 0, 0, 16, d), XCP_OK);
+    CHECK(fake_protection(r.f) == XCP_RES_PGM);
+    /* UNLOCK 的 ERR_SEQUENCE -> 重新 GET_SEED -> 重试 */
+    fake_err(r.f, XCP_CMD_UNLOCK, XCP_ERR_SEQUENCE, 1);
+    CHECK_RC(xcp_unlock_all(r.s, &prot), XCP_OK);
+    CHECK(prot == 0 && fake_protection(r.f) == 0);
+    CHECK_RC(xcp_unlock(r.s, 0x03), XCP_E_ARG);
+    rig_down(&r);
+    /* 错 key -> ACCESS_LOCKED，会话标记断开 */
+    CHECK_RC(rig_up(&r, &c, 300), 0);
+    CHECK_RC(xcp_connect(r.s, 0, NULL), XCP_OK);
+    xcp_set_seed_key(r.s, sk_bad, &extra);
+    CHECK_RC(xcp_unlock(r.s, XCP_RES_CAL_PAG), XCP_E_SLAVE(XCP_ERR_ACCESS_LOCKED));
+    CHECK(!xcp_session_connected(r.s));
+    rig_down(&r);
+}
+
 int main(void)
 {
     int udp;
     setvbuf(stdout, NULL, _IONBF, 0);
+#ifdef _WIN32
+    timeBeginPeriod(1); /* Sleep/超时粒度 1ms；退出前 timeEndPeriod 配对 */
+#endif
     for (udp = 0; udp < 2; udp++) {
         printf("[%s]\n", udp ? "UDP" : "TCP");
         printf(" connect_intel\n"); t_connect_intel(udp);
@@ -395,6 +654,7 @@ int main(void)
         printf(" timeout\n"); t_timeout(udp);
         printf(" synch_retry\n"); t_synch_retry(udp);
         printf(" err\n"); t_err(udp);
+        printf(" late_synch\n"); t_late_synch(udp);
         printf(" cmd_pending\n"); t_cmd_pending(udp);
         printf(" ev_serv\n"); t_ev_serv(udp);
         printf(" daq\n"); t_daq(udp);
@@ -404,6 +664,20 @@ int main(void)
         printf(" get_id noblock ag4 intel\n"); t_get_id(udp, 0, 4, 0);
         printf(" upload\n"); t_upload(udp);
     }
+    for (udp = 0; udp < 2; udp++) {
+        int ag, bo;
+        printf("[round2 %s]\n", udp ? "UDP" : "TCP");
+        for (ag = 1; ag <= 4; ag *= 2) for (bo = 0; bo < 2; bo++) {
+            printf(" download ag%d bo%d block\n", ag, bo); t_download(udp, ag, bo, 1);
+            printf(" download ag%d bo%d noblock\n", ag, bo); t_download(udp, ag, bo, 0);
+            printf(" download variants ag%d bo%d\n", ag, bo); t_download_variants(udp, ag, bo);
+        }
+        printf(" download recovery\n"); t_download_recovery(udp);
+        printf(" modify_bits intel/motorola\n"); t_modify_bits(udp, 0); t_modify_bits(udp, 1);
+        printf(" checksum slave intel/motorola\n"); t_checksum_slave(udp, 0); t_checksum_slave(udp, 1);
+        printf(" seed_key\n"); t_seed_key(udp);
+    }
+    printf(" checksum vectors\n"); t_checksum_vectors();
     printf("[misc]\n");
     printf(" link_loss\n"); t_link_loss();
     printf(" reentrancy\n"); t_reentrancy();
@@ -411,5 +685,8 @@ int main(void)
     printf(" multi_session\n"); t_multi();
     printf(" no_slave\n"); t_no_slave();
     printf("%s: %d checks, %d failed\n", g_fail ? "FAIL" : "PASS", g_checks, g_fail);
+#ifdef _WIN32
+    timeEndPeriod(1);
+#endif
     return g_fail ? 1 : 0;
 }
