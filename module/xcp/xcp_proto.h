@@ -103,6 +103,9 @@
 #define XCP_PROTOCOL_VERSION  0x13u /* 1.3 */
 #define XCP_TRANSPORT_VERSION 0x01u
 
+/* 注意：以下 64 只是本仓库“从机”（xcp_slave.c / MCU 示例）的缓冲上限。
+ * 主机侧新核心 xcp_session.c 使用 CONNECT 返回的 MAX_CTO/MAX_DTO 原值（CTO≤255，DTO≤65535），
+ * 不再引用这两个宏；旧 xcp_master.c 仍截断到 64，待 xcp.c 迁移到 XcpSession 后删除。 */
 #define XCP_MAX_CTO           64
 #define XCP_MAX_DTO           64
 #define XCP_MAX_DAQ           8

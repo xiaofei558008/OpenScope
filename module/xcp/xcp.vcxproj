@@ -81,11 +81,17 @@
     <ClCompile Include="xcp_tcp.c" />
     <ClCompile Include="xcp_can.c" />
     <ClCompile Include="xcp.c" />
+    <ClCompile Include="xcp_plat.c" />
+    <ClCompile Include="xcp_eth.c" />
+    <ClCompile Include="xcp_session.c" />
     <ClInclude Include="xcp_proto.h" />
     <ClInclude Include="xcp_slave.h" />
     <ClInclude Include="xcp_master.h" />
     <ClInclude Include="xcp_transport.h" />
     <ClInclude Include="xcp_can.h" />
+    <ClInclude Include="xcp_plat.h" />
+    <ClInclude Include="xcp_tl.h" />
+    <ClInclude Include="xcp_session.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
