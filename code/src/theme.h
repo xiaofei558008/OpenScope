@@ -29,6 +29,19 @@ typedef enum {
     TH_CHART_PLOT_BG, /* 波形绘图区背景 */
     TH_CHART_GRID,    /* 波形网格 */
     TH_CHART_AXIS,    /* 波形坐标标注 */
+
+    /* UI P0: layout-spec.md colors (Terminator-style dark) */
+    TH_GAP,           /* pane gap line (#0b0d10) */
+    TH_TITLE,         /* pane title bar (#1b2027) */
+    TH_TITLE_FOCUS,   /* focused pane title (#1f3b63) */
+    TH_CMDBAR,        /* command bar (#14181d) */
+    TH_ACCENT,        /* accent (#2f81f7) */
+    TH_NET_BG,        /* network bar bg (#10261f) */
+    TH_NET_TEXT,      /* network bar text (#7ee2b8) */
+    TH_XCP,           /* XCP text (#a5d6ff) */
+    TH_WARN,          /* warning (#e3b341) */
+    TH_ERROR,         /* error (#ff7b72) */
+    TH_OK,            /* run / connected (#3fb950) */
     TH_COUNT
 } OS_ThemeColor;
 

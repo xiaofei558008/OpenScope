@@ -192,7 +192,7 @@ void os_chart_push(HWND hwnd, const OS_Sample* s)
     sr->head = (sr->head + 1) % OS_CHART_HIST;
     if (sr->count < OS_CHART_HIST) sr->count++;
     now = GetTickCount64();
-    if (now - cw->last_paint > 33) {
+    if (now - cw->last_paint > 33 && !IsIconic(GetAncestor(hwnd, GA_ROOT))) { /* UI P0: <=30fps, none when minimized */
         cw->last_paint = now;
         InvalidateRect(hwnd, NULL, FALSE);
     }

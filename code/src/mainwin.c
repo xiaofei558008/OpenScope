@@ -15,6 +15,8 @@
 #include "module_mgr.h"
 #include "layout.h"
 #include "theme.h"
+#include "dpi.h"
+#include "osfont.h"
 #include "toolicon.h"
 #include "version.h"
 #include "helpwin.h"
@@ -248,7 +250,7 @@ static const struct { int id; const wchar_t* tip; } g_debug_btns[] = {
 
 static OS_SrcMap g_srcmap;
 static OS_SrcIdx g_srcidx;
-#define LEFT_TAB_H 24
+#define LEFT_TAB_H os_px(24)
 
 
 static HWND main_ctrl(int id)
@@ -266,7 +268,7 @@ static HWND main_ctrl(int id)
 
 /* ---------- 工具 ---------- */
 
-#define LOG_STRIP_H 10 /* F22: 消息栏收起后底部细条高度 */
+#define LOG_STRIP_H os_px(10) /* F22: 消息栏收起后底部细条高度 */
 
 static void set_status(int part, const wchar_t* text)
 {
@@ -901,8 +903,8 @@ static void tab_set_title(int idx, const wchar_t* name);
 
 /* Bug6: 平铺列间分隔带（拖拽调列宽）与 tab 底部最小化条（点击还原）。
  * 几何由 layout_tab_pages 填充（tab 客户区坐标），tab 子类命中/绘制共用。 */
-#define OS_TILE_GAP 6    /* 平铺列间分隔带宽度 */
-#define OS_MINIBAR_H 26  /* 最小化条高度（有最小化窗口时显示） */
+#define OS_TILE_GAP os_gap() /* UI P0: unified with DK_GAP (thin visual line) */    /* 平铺列间分隔带宽度 */
+#define OS_MINIBAR_H os_px(26)  /* 最小化条高度（有最小化窗口时显示） */
 static RECT g_tile_gaps[OS_MAX_GROUP];      /* 分隔带矩形 */
 static int  g_tile_gap_a[OS_MAX_GROUP];     /* 分隔带左列 group 下标 */
 static int  g_tile_gap_b[OS_MAX_GROUP];     /* 分隔带右列 group 下标 */
@@ -4629,8 +4631,9 @@ static int tab_gap_hit(int x, int y)
 {
     int g;
     for (g = 0; g < g_tile_gap_count; g++) {
+        int pad = os_gap_hit_pad(); /* UI P0: 6px hit area around thin gap */
         if (y >= g_tile_gaps[g].top && y < g_tile_gaps[g].bottom &&
-            x >= g_tile_gaps[g].left && x < g_tile_gaps[g].right)
+            x >= g_tile_gaps[g].left - pad && x < g_tile_gaps[g].right + pad)
             return g;
     }
     return -1;
@@ -4890,6 +4893,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         HMENU mFile, mAcq, mLog, mNet, mHelp;
         int i;
         g_app.hMain = hwnd;
+        os_dpi_set_current(os_dpi_of(hwnd)); /* UI P0 */
         os_theme_set_main(hwnd);
         os_dockbar_register(g_app.hInst);
         os_dockbar_create(hwnd, g_app.hInst);
@@ -5231,6 +5235,17 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             return TRUE;
         }
         break;
+    }
+    case WM_DPICHANGED: { /* UI P0: per-monitor DPI v2 */
+        const RECT* nr = (const RECT*)lParam;
+        os_dpi_set_current(HIWORD(wParam));
+        os_font_dpi_changed();
+        dock_dpi_changed();
+        SetWindowPos(hwnd, NULL, nr->left, nr->top, nr->right - nr->left, nr->bottom - nr->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        layout();
+        RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_ERASE);
+        return 0;
     }
     case WM_SIZE:
         layout();

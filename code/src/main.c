@@ -10,6 +10,8 @@
 #include "layout.h"
 #include "util.h"
 #include "theme.h"
+#include "dpi.h"
+#include "osfont.h"
 #include "version.h"
 #include "helpwin.h"
 #include "workspace.h"
@@ -405,6 +407,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
     icc.dwICC = ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES |
                 ICC_BAR_CLASSES | ICC_PROGRESS_CLASS;
     InitCommonControlsEx(&icc);
+    os_dpi_init();  /* UI P0: per-monitor DPI v2, before any window */
+    os_font_init(); /* UI P0: private JetBrains Mono from D:-side fonts dir */
     os_chart_register();
     os_num_register();
     os_src_register();

@@ -13,6 +13,8 @@ void dt_init(DtTree* t, int gap, int min_size)
     t->min_size = min_size > 0 ? min_size : 60;
 }
 
+void dt_set_hit_pad(DtTree* t, int pad) { t->hit_pad = pad > 0 ? pad : 0; }
+
 int dt_empty(const DtTree* t) { return t->root < 0; }
 
 static int node_alloc(DtTree* t, int type)
@@ -217,6 +219,16 @@ int dt_hit_splitter(const DtTree* t, int x, int y)
     int i;
     for (i = 0; i < DT_MAX_NODES; i++)
         if (t->n[i].type == DT_SPLIT && in_rect(t->n[i].split_rc, x, y)) return i;
+    if (t->hit_pad > 0) { /* UI P0: thin visual gap, wider drag hit area */
+        for (i = 0; i < DT_MAX_NODES; i++) {
+            DtRect r;
+            if (t->n[i].type != DT_SPLIT) continue;
+            r = t->n[i].split_rc;
+            if (t->n[i].vert) { r.t -= t->hit_pad; r.b += t->hit_pad; }
+            else { r.l -= t->hit_pad; r.r += t->hit_pad; }
+            if (in_rect(r, x, y)) return i;
+        }
+    }
     return -1;
 }
 
@@ -423,12 +435,12 @@ static int parse_rec(DtTree* t, PState* ps, int parent)
 int dt_parse(DtTree* t, const char* s, int (*map_in)(int, void*), void* u)
 {
     PState ps;
-    int gap = t->gap, ms = t->min_size, r;
-    dt_init(t, gap, ms);
+    int gap = t->gap, ms = t->min_size, hp = t->hit_pad, r;
+    dt_init(t, gap, ms); t->hit_pad = hp;
     if (!s || !*s || *s == 'E') return 0;
     ps.p = s; ps.m = map_in; ps.u = u; ps.err = 0;
     r = parse_rec(t, &ps, -1);
-    if (ps.err) { dt_init(t, gap, ms); return -1; }
+    if (ps.err) { dt_init(t, gap, ms); t->hit_pad = hp; return -1; }
     t->root = r >= 0 ? r : -1;
     return 0;
 }

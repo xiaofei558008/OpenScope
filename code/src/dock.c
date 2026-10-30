@@ -9,14 +9,16 @@
 #include "dock.h"
 #include "dock_tree.h"
 #include "theme.h"
+#include "dpi.h"
+#include "osfont.h"
 
 #define DK_MAX_PANELS 64
 #define DK_MAX_HOSTS  17          /* 0 = 主宿主，1.. = 浮动窗 */
-#define DK_CAP_H      22          /* 窗格标题栏（tab 条）高度 */
-#define DK_GAP        5
-#define DK_MIN        80
-#define DK_TAB_MAXW   170
-#define DK_CLOSE_W    20
+#define DK_CAP_H      os_px(20)          /* 窗格标题栏（tab 条）高度 */
+#define DK_GAP        os_gap()   /* UI P0: unified thin gap (OS_GAP_VISUAL, DPI scaled) */
+#define DK_MIN        os_px(80)
+#define DK_TAB_MAXW   os_px(170)
+#define DK_CLOSE_W    os_px(20)
 #define DK_DRAG_THRESH 6
 #define DK_EDGE_FRAC  0.25
 #define DK_THROTTLE_MS 33          /* 分隔条拖动中重排最多 ~30Hz */
@@ -39,6 +41,7 @@ typedef struct {
 enum { DRAG_NONE = 0, DRAG_SPLIT, DRAG_TAB_PENDING, DRAG_TAB };
 
 static DkPanel g_p[DK_MAX_PANELS];
+static void dk_tree_init(DtTree* t) { dt_init(t, DK_GAP, DK_MIN); dt_set_hit_pad(t, os_gap_hit_pad()); }
 static DkHost  g_h[DK_MAX_HOSTS];
 static DockCallbacks g_cb;
 static HWND    g_parent, g_overlay, g_excluded;
@@ -200,7 +203,7 @@ static void host_paint(int hi, HDC dc)
     RECT rc;
     HDC mem;
     HBITMAP bmp, old;
-    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    HFONT font = os_font_ui();
     int i;
     GetClientRect(H->host, &rc);
     if (rc.right <= 0 || rc.bottom <= 0) return;
@@ -223,7 +226,7 @@ static void host_paint(int hi, HDC dc)
         int n, k, focused;
         if (L->type != DT_LEAF) continue;
         cap = to_rc(L->rc); cap.bottom = cap.top + DK_CAP_H;
-        FillRect(mem, &cap, os_theme_brush(TH_PANEL));
+        FillRect(mem, &cap, os_theme_brush(i == H->focus_leaf ? TH_TITLE_FOCUS : TH_TITLE));
         body = leaf_body(L);
         FillRect(mem, &body, os_theme_brush(TH_BG));
         focused = (i == H->focus_leaf);
@@ -236,7 +239,7 @@ static void host_paint(int hi, HDC dc)
                 FillRect(mem, &tr, os_theme_brush(TH_EDIT_BG));
                 if (focused) {
                     RECT ac = tr; ac.bottom = ac.top + 2;
-                    HBRUSH b = CreateSolidBrush(RGB(0, 120, 215));
+                    HBRUSH b = CreateSolidBrush(os_theme(TH_ACCENT));
                     FillRect(mem, &ac, b);
                     DeleteObject(b);
                 }
@@ -321,7 +324,7 @@ static int float_create(int x, int y, int w, int h)
             DkHost* H = &g_h[i];
             HWND owner = GetAncestor(g_parent, GA_ROOT);
             memset(H, 0, sizeof(*H));
-            dt_init(&H->tree, DK_GAP, DK_MIN);
+            dk_tree_init(&H->tree);
             H->focus_leaf = -1;
             H->used = 1;
             H->frame = CreateWindowExW(WS_EX_TOOLWINDOW, FLOAT_CLASS, L"OpenScope",
@@ -710,7 +713,7 @@ HWND dock_init(HWND parent, const DockCallbacks* cb)
     memset(&g_drag, 0, sizeof(g_drag));
     if (cb) g_cb = *cb;
     g_parent = parent;
-    dt_init(&g_h[0].tree, DK_GAP, DK_MIN);
+    dk_tree_init(&g_h[0].tree);
     g_h[0].focus_leaf = -1;
     g_h[0].used = 1;
     g_h[0].host = CreateWindowExW(0, HOST_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
@@ -807,7 +810,7 @@ void dock_reset(void)
 {
     int i, ids[DK_MAX_PANELS], c = 0;
     for (i = 0; i < DK_MAX_PANELS; i++) if (g_p[i].used) ids[c++] = i;
-    for (i = 0; i < DK_MAX_HOSTS; i++) if (g_h[i].used) dt_init(&g_h[i].tree, DK_GAP, DK_MIN);
+    for (i = 0; i < DK_MAX_HOSTS; i++) if (g_h[i].used) dk_tree_init(&g_h[i].tree);
     g_h[0].focus_leaf = -1;
     cleanup_floats();
     for (i = 0; i < c; i++) { g_h[0].focus_leaf = -1; auto_place(ids[i]); }
@@ -918,10 +921,10 @@ int dock_load_apply(const HWND* by_index, int n)
     DtTree tmp;
     if (!g_ld_have) return -1;               /* 旧格式：保持自动放置结果 */
     m.by = by_index; m.n = n;
-    dt_init(&tmp, DK_GAP, DK_MIN);
+    dk_tree_init(&tmp);
     if (dt_parse(&tmp, g_ld_main, map_in_cb, &m) != 0) return -1;
     /* 清空现有放置 */
-    for (i = 0; i < DK_MAX_HOSTS; i++) if (g_h[i].used) dt_init(&g_h[i].tree, DK_GAP, DK_MIN);
+    for (i = 0; i < DK_MAX_HOSTS; i++) if (g_h[i].used) dk_tree_init(&g_h[i].tree);
     cleanup_floats();
     g_h[0].tree = tmp;
     g_h[0].focus_leaf = dt_first_leaf(&g_h[0].tree);
@@ -936,7 +939,7 @@ int dock_load_apply(const HWND* by_index, int n)
         }
         if (w < 200) w = 200;
         if (h < 150) h = 150;
-        dt_init(&tmp, DK_GAP, DK_MIN);
+        dk_tree_init(&tmp);
         if (dt_parse(&tmp, bar + 1, map_in_cb, &m) != 0 || dt_empty(&tmp)) continue;
         /* 主树已含的面板不得重复 */
         {
@@ -1040,4 +1043,18 @@ int dock_apply_tree(const char* main_tree, const HWND* by_index, int n)
     dock_load_begin();
     notify_changed();
     return rc;
+}
+
+/* UI P0: WM_DPICHANGED -> refresh gap / hit area / min size of every host tree and relayout */
+void dock_dpi_changed(void)
+{
+    int i;
+    for (i = 0; i < DK_MAX_HOSTS; i++) {
+        if (!g_h[i].used) continue;
+        g_h[i].tree.gap = DK_GAP;
+        g_h[i].tree.min_size = DK_MIN;
+        dt_set_hit_pad(&g_h[i].tree, os_gap_hit_pad());
+        host_layout(i);
+        if (g_h[i].host) InvalidateRect(g_h[i].host, NULL, FALSE);
+    }
 }

@@ -42,10 +42,12 @@ typedef struct {
     DtNode n[DT_MAX_NODES];
     int    root;            /* -1 = 空树 */
     int    gap;             /* 分隔条宽度（像素） */
+    int    hit_pad;         /* UI P0: extra splitter hit area per side (px) */
     int    min_size;        /* 窗格最小宽/高 */
 } DtTree;
 
 void dt_init(DtTree* t, int gap, int min_size);
+void dt_set_hit_pad(DtTree* t, int pad);
 int  dt_empty(const DtTree* t);
 int  dt_find_leaf(const DtTree* t, int id);          /* 含 id 的叶子，-1 无 */
 int  dt_first_leaf(const DtTree* t);

@@ -1,6 +1,8 @@
 /*
  * 源码窗口：等宽字体绘制，左侧行号/断点槽，双击槽切换硬件断点。
  */
+#include "dpi.h"
+#include "osfont.h"
 #include "srcwin.h"
 #include "app.h"
 #include "mainwin.h"
@@ -14,8 +16,8 @@
 #include <string.h>
 
 #define OS_MAGIC_SRC 0x53524331u /* 'SRC1' */
-#define GUTTER_W     56
-#define LINE_H       16
+#define GUTTER_W     os_px(56)
+#define LINE_H       os_px(16)
 #define MAX_SRC_LINES 200000
 
 #define IDM_SRC_BP_ADD    5601
@@ -532,9 +534,7 @@ static LRESULT CALLBACK src_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         s->sel_a = s->sel_b = -1;
         s->selecting = 0;
         s->line_h = LINE_H;
-        s->font = CreateFontW(15, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                              FIXED_PITCH | FF_MODERN, L"Consolas");
+        s->font = os_font_create(os_font_mono_face(), 13, FW_NORMAL); /* UI P0 */
         if (cs->lpszName) _snwprintf(s->title, 128, L"%s", cs->lpszName);
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)s);
         return 0;

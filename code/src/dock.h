@@ -37,6 +37,7 @@ void dock_activate(HWND panel);
 HWND dock_active_panel(void);
 void dock_set_excluded(HWND panel);               /* 全屏等临时脱离停靠的窗口（NULL 取消） */
 void dock_relayout(void);
+void dock_dpi_changed(void);                       /* UI P0: per-monitor DPI change */
 void dock_reset(void);
 int  dock_split_active(int vertical);
 int  dock_is_dragging(void);                       /* 分隔条/标题拖动中（供波形节流重绘） */
