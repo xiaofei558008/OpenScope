@@ -25,3 +25,18 @@ add_executable(xcp_session_test tests/xcp_session_test.c tests/xcp_fake_slave.c)
 target_link_libraries(xcp_session_test xcp_core)
 add_test(NAME xcp_session_test COMMAND xcp_session_test)
 set_tests_properties(xcp_session_test PROPERTIES TIMEOUT 300)
+
+# ---- 小微 D 块 mock 从机 + B4 A2L 解析（Windows 控制台工程） ----
+add_executable(xcp_mock_slave xcp_mock_main.c xcp_mock.c xcp_slave.c)
+if(WIN32)
+  target_link_libraries(xcp_mock_slave ws2_32)
+endif()
+add_executable(xcp_mock_test tests/xcp_mock_test.c xcp_mock.c xcp_slave.c)
+target_include_directories(xcp_mock_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+add_test(NAME xcp_mock_test COMMAND xcp_mock_test)
+add_executable(a2l_test ../a2l/tests/a2l_test.c ../a2l/a2l_parse.c)
+target_include_directories(a2l_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../a2l)
+add_test(NAME a2l_test COMMAND a2l_test ${CMAKE_CURRENT_SOURCE_DIR}/../a2l/tests/sample.a2l)
+# 主机会话层 ↔ mock 从机 TCP 互通（参数：端口 AG motorola；需先启动 xcp_mock_slave）
+add_executable(xcp_interop_test tests/xcp_interop_test.c)
+target_link_libraries(xcp_interop_test xcp_core)
