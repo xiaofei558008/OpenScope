@@ -68,7 +68,22 @@ struct XcpSlave {
     uint32_t dto_overflow;
     int      dto_h, dto_t, dto_n;
     uint32_t clock;
+    int      msb;             /* 1 = Motorola 字节序 */
+    int      ag;              /* 地址粒度 1/2/4 字节 */
+    uint8_t  rq[XCP_SLAVE_RSP_Q][XCP_MAX_CTO];  /* 从机块模式 UPLOAD 的后续 RES 帧 */
+    int      rql[XCP_SLAVE_RSP_Q];
+    int      rqh, rqn;
 };
+
+static uint16_t R16(const XcpSlave* s, const uint8_t* p)
+{ return s->msb ? (uint16_t)((p[0] << 8) | p[1]) : xcp_rd16(p); }
+static uint32_t R32(const XcpSlave* s, const uint8_t* p)
+{ return s->msb ? ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3] : xcp_rd32(p); }
+static void W16(const XcpSlave* s, uint8_t* p, uint16_t v)
+{ if (s->msb) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; } else xcp_wr16(p, v); }
+static void W32(const XcpSlave* s, uint8_t* p, uint32_t v)
+{ if (s->msb) { p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16); p[2] = (uint8_t)(v >> 8); p[3] = (uint8_t)v; } else xcp_wr32(p, v); }
+
 
 static int put_err(uint8_t* rsp, uint8_t code)
 {
@@ -108,6 +123,7 @@ XcpSlave* xcp_slave_create(uint32_t base, uint32_t size)
     memcpy(s->id, XCP_ID_TEXT, sizeof(XCP_ID_TEXT));
     s->seed_fn = default_seed;
     s->key_fn = default_key;
+    s->ag = 1;
     return s;
 }
 
@@ -173,6 +189,31 @@ uint8_t* xcp_slave_ptr(XcpSlave* s, uint32_t addr, uint32_t len)
     if (!s) return NULL;
     return work_ptr(s, addr, len);
 }
+
+int xcp_slave_set_format(XcpSlave* s, int msb_first, int ag)
+{
+    if (!s || s->connected || (ag != 1 && ag != 2 && ag != 4)) return -1;
+    s->msb = msb_first ? 1 : 0;
+    s->ag = ag;
+    return 0;
+}
+
+int xcp_slave_byte_order(const XcpSlave* s) { return s ? s->msb : 0; }
+int xcp_slave_ag(const XcpSlave* s) { return s ? s->ag : 1; }
+
+int xcp_slave_pop_rsp(XcpSlave* s, uint8_t* dst, int cap)
+{
+    int n;
+    if (!s || s->rqn <= 0) return 0;
+    n = s->rql[s->rqh];
+    if (n > cap) return -1;
+    memcpy(dst, s->rq[s->rqh], (size_t)n);
+    s->rqh = (s->rqh + 1) % XCP_SLAVE_RSP_Q;
+    s->rqn--;
+    return n;
+}
+
+int xcp_slave_dto_pending(const XcpSlave* s) { return s ? s->dto_n : 0; }
 
 void xcp_slave_lock(XcpSlave* s, uint8_t resource)
 {
@@ -252,9 +293,9 @@ static int cmd_connect(XcpSlave* s, uint8_t* rsp)
     s->dl_remain = 0;
     rsp[0] = XCP_PID_RES;
     rsp[1] = XCP_RES_CAL_PAG | XCP_RES_DAQ;
-    rsp[2] = XCP_CMB;
+    rsp[2] = (uint8_t)(XCP_CMB | (s->msb ? 0x01 : 0) | ((s->ag == 4 ? 2 : s->ag == 2 ? 1 : 0) << 1));
     rsp[3] = XCP_MAX_CTO;
-    xcp_wr16(rsp + 4, XCP_MAX_DTO);
+    W16(s, rsp + 4, XCP_MAX_DTO);
     rsp[6] = XCP_PROTOCOL_VERSION;
     rsp[7] = XCP_TRANSPORT_VERSION;
     return 8;
@@ -268,7 +309,7 @@ static int cmd_get_status(XcpSlave* s, uint8_t* rsp)
     rsp[2] = s->protect;
     rsp[3] = XCP_RES_CAL_PAG | XCP_RES_DAQ;
     rsp[4] = 0;
-    xcp_wr16(rsp + 5, s->session_id);
+    W16(s, rsp + 5, s->session_id);
     return 7;
 }
 
@@ -284,7 +325,7 @@ static int cmd_get_id(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     rsp[1] = 0; /* 模式 0：随后 UPLOAD */
     rsp[2] = 0;
     rsp[3] = 0;
-    xcp_wr32(rsp + 4, (uint32_t)n);
+    W32(s, rsp + 4, (uint32_t)n);
     return 8;
 }
 
@@ -293,34 +334,53 @@ static int cmd_set_mta(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     if (len < 8) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     if (cmd[3] != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     s->mta_id = 0;
-    s->mta = xcp_rd32(cmd + 4);
+    s->mta = R32(s, cmd + 4);
     rsp[0] = XCP_PID_RES;
     return 1;
 }
 
+/* UPLOAD n 个 AG 元素（1..255）。超过一帧时走从机块模式：首帧作为应答返回，
+ * 余帧进 rq 队列（xcp_slave_pop_rsp 取出，外壳紧随首帧发送）。每帧 [RES][AG-1 填充][数据]。 */
 static int cmd_upload(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
 {
-    int n;
+    uint8_t buf[255 * 4];
+    int n, bytes, per, off, first;
     if (len < 2) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     n = cmd[1];
-    if (n < 1 || n > XCP_MAX_CTO - 1) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    if (n < 1) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    bytes = n * s->ag;
+    per = ((XCP_MAX_CTO - s->ag) / s->ag) * s->ag;
+    if (read_mem(s, buf, bytes) != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    first = bytes < per ? bytes : per;
+    memset(rsp, 0, (size_t)s->ag);
     rsp[0] = XCP_PID_RES;
-    if (read_mem(s, rsp + 1, n) != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
-    return 1 + n;
+    memcpy(rsp + s->ag, buf, (size_t)first);
+    for (off = first; off < bytes; off += per) {
+        int c = bytes - off < per ? bytes - off : per;
+        int t = (s->rqh + s->rqn) % XCP_SLAVE_RSP_Q;
+        if (s->rqn >= XCP_SLAVE_RSP_Q) return put_err(rsp, XCP_ERR_MEMORY_OVERFLOW);
+        memset(s->rq[t], 0, (size_t)s->ag);
+        s->rq[t][0] = XCP_PID_RES;
+        memcpy(s->rq[t] + s->ag, buf + off, (size_t)c);
+        s->rql[t] = s->ag + c;
+        s->rqn++;
+    }
+    return s->ag + first;
 }
 
 static int cmd_short_upload(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
 {
     int n;
     if (len < 8) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    n = cmd[1];
-    if (n < 1 || n > XCP_MAX_CTO - 1) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    n = cmd[1] * s->ag;
+    if (n < 1 || n > XCP_MAX_CTO - s->ag) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     if (cmd[3] != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     s->mta_id = 0;
-    s->mta = xcp_rd32(cmd + 4);
+    s->mta = R32(s, cmd + 4);
+    memset(rsp, 0, (size_t)s->ag);
     rsp[0] = XCP_PID_RES;
-    if (read_mem(s, rsp + 1, n) != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
-    return 1 + n;
+    if (read_mem(s, rsp + s->ag, n) != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    return s->ag + n;
 }
 
 static int accept_download_bytes(XcpSlave* s, const uint8_t* data, int n, uint8_t* rsp)
@@ -337,19 +397,24 @@ static int accept_download_bytes(XcpSlave* s, const uint8_t* data, int n, uint8_
     return 1;
 }
 
+/* DOWNLOAD/DOWNLOAD_NEXT 数据偏移：AG1/2 为 2，AG4 为 4；每帧字节数取 AG 整数倍 */
+static int dl_off(const XcpSlave* s) { return s->ag == 4 ? 4 : 2; }
+static int dl_per(const XcpSlave* s) { return ((XCP_MAX_CTO - dl_off(s)) / s->ag) * s->ag; }
+
 static int cmd_download(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
 {
     int n, have;
     if (s->protect & XCP_RES_CAL_PAG) return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
     if (len < 2) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     if (s->dl_remain) return put_err(rsp, XCP_ERR_SEQUENCE);
-    n = cmd[1];
+    n = cmd[1] * s->ag;
     if (n < 1) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    have = len - 2;
+    have = len - dl_off(s);
     if (have > n) have = n;
-    if (have > XCP_MAX_CTO - 2) have = XCP_MAX_CTO - 2;
+    if (have > dl_per(s)) have = dl_per(s);
+    if (have < 1) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     s->dl_remain = n;
-    return accept_download_bytes(s, cmd + 2, have, rsp);
+    return accept_download_bytes(s, cmd + dl_off(s), have, rsp);
 }
 
 static int cmd_download_next(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
@@ -358,21 +423,21 @@ static int cmd_download_next(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* 
     if (s->protect & XCP_RES_CAL_PAG) return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
     if (!s->dl_remain) return put_err(rsp, XCP_ERR_SEQUENCE);
     if (len < 2) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    n = cmd[1];
+    n = cmd[1] * s->ag;
     if (n != s->dl_remain) return put_err(rsp, XCP_ERR_SEQUENCE);
-    have = len - 2;
+    have = len - dl_off(s);
     if (have > s->dl_remain) have = s->dl_remain;
-    if (have > XCP_MAX_CTO - 2) have = XCP_MAX_CTO - 2;
+    if (have > dl_per(s)) have = dl_per(s);
     if (have < 1) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    return accept_download_bytes(s, cmd + 2, have, rsp);
+    return accept_download_bytes(s, cmd + dl_off(s), have, rsp);
 }
 
 static int cmd_download_max(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
 {
-    int n = XCP_MAX_CTO - 1;
+    int n = ((XCP_MAX_CTO - s->ag) / s->ag) * s->ag;
     if (s->protect & XCP_RES_CAL_PAG) return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
-    if (len < 1 + n) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    { int wr = write_mem(s, cmd + 1, n); if (wr != 0) return put_err(rsp, wr == -2 ? XCP_ERR_WRITE_PROTECTED : XCP_ERR_OUT_OF_RANGE); }
+    if (len < s->ag + n) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
+    { int wr = write_mem(s, cmd + s->ag, n); if (wr != 0) return put_err(rsp, wr == -2 ? XCP_ERR_WRITE_PROTECTED : XCP_ERR_OUT_OF_RANGE); }
     rsp[0] = XCP_PID_RES;
     return 1;
 }
@@ -382,11 +447,11 @@ static int cmd_short_download(XcpSlave* s, const uint8_t* cmd, int len, uint8_t*
     int n;
     if (s->protect & XCP_RES_CAL_PAG) return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
     if (len < 8) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    n = cmd[1];
+    n = cmd[1] * s->ag;
     if (n < 1 || 8 + n > len || n > XCP_MAX_CTO - 8) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     if (cmd[3] != 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     s->mta_id = 0;
-    s->mta = xcp_rd32(cmd + 4);
+    s->mta = R32(s, cmd + 4);
     { int wr = write_mem(s, cmd + 8, n); if (wr != 0) return put_err(rsp, wr == -2 ? XCP_ERR_WRITE_PROTECTED : XCP_ERR_OUT_OF_RANGE); }
     rsp[0] = XCP_PID_RES;
     return 1;
@@ -405,8 +470,8 @@ static int cmd_modify_bits(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rs
     p = work_ptr(s, s->mta, 1);
     if (!p) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     shift = cmd[1];
-    and_m = xcp_rd16(cmd + 2);
-    xor_m = xcp_rd16(cmd + 4);
+    and_m = R16(s, cmd + 2);
+    xor_m = R16(s, cmd + 4);
     for (i = 0; i < shift; i++) {
         and_m = (uint16_t)((and_m << 1) | 1u);
         xor_m = (uint16_t)(xor_m << 1);
@@ -422,7 +487,9 @@ static int cmd_checksum(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     uint32_t n, i, sum = 0;
     uint8_t* p;
     if (len < 8) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    n = xcp_rd32(cmd + 4);
+    n = R32(s, cmd + 4);
+    if (n > 0x01000000u) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    n *= (uint32_t)s->ag;
     if (s->mta_id) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     p = page_ptr(s, s->mta, n);
     if (!p || n == 0) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
@@ -432,8 +499,24 @@ static int cmd_checksum(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     rsp[1] = XCP_CHECKSUM_ADD_14;
     rsp[2] = 0;
     rsp[3] = 0;
-    xcp_wr32(rsp + 4, sum);
+    W32(s, rsp + 4, sum);
     return 8;
+}
+
+static void clear_daq(XcpSlave* s);
+
+/* 结束会话（DISCONNECT 与错误密钥共用）：停止并清空 DAQ、清 DTO/块应答队列、块下载与 Seed&Key 状态 */
+static void end_session(XcpSlave* s)
+{
+    s->connected = 0;
+    s->dl_remain = 0;
+    s->seed_res = 0;
+    s->key_total = 0;
+    s->key_len = 0;
+    clear_daq(s);
+    s->dto_h = s->dto_t = s->dto_n = 0;
+    s->rqh = s->rqn = 0;
+    refresh_session(s);
 }
 
 /* GET_SEED：mode 0 = 新种子首段，mode 1 = 余段（种子长度 > MAX_CTO-2 时）。
@@ -498,9 +581,7 @@ static int cmd_unlock(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     }
     klen = s->key_fn(s->sk_user, s->seed_res, s->seed, s->seed_len, expect, (int)sizeof(expect));
     if (klen != s->key_total || memcmp(expect, s->key_buf, (size_t)klen) != 0) {
-        s->seed_res = 0;
-        s->key_total = 0;
-        s->connected = 0;
+        end_session(s);
         return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
     }
     s->protect = (uint8_t)(s->protect & (uint8_t)~s->seed_res);
@@ -574,7 +655,7 @@ static int cmd_alloc_daq(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     int n;
     if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     if (s->alloc_step != 1) return put_err(rsp, XCP_ERR_SEQUENCE);
-    n = xcp_rd16(cmd + 2);
+    n = R16(s, cmd + 2);
     if (n < 1 || n > XCP_MAX_DAQ) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     s->n_daq = n;
     s->alloc_step = 2;
@@ -587,7 +668,7 @@ static int cmd_alloc_odt(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     int daq, n;
     if (len < 5) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     if (s->alloc_step < 2) return put_err(rsp, XCP_ERR_SEQUENCE);
-    daq = xcp_rd16(cmd + 2);
+    daq = R16(s, cmd + 2);
     n = cmd[4];
     if (daq < 0 || daq >= s->n_daq || n < 1 || n > XCP_MAX_ODT)
         return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
@@ -602,7 +683,7 @@ static int cmd_alloc_odt_entry(XcpSlave* s, const uint8_t* cmd, int len, uint8_t
     int daq, odt, n;
     if (len < 6) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     if (s->alloc_step < 2) return put_err(rsp, XCP_ERR_SEQUENCE);
-    daq = xcp_rd16(cmd + 2);
+    daq = R16(s, cmd + 2);
     odt = cmd[4];
     n = cmd[5];
     if (daq >= s->n_daq || !s->daq[daq].alloc || odt >= s->daq[daq].nodt)
@@ -617,7 +698,7 @@ static int cmd_set_daq_ptr(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rs
 {
     int daq, odt, ent;
     if (len < 6) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    daq = xcp_rd16(cmd + 2);
+    daq = R16(s, cmd + 2);
     odt = cmd[4];
     ent = cmd[5];
     if (daq >= s->n_daq || odt >= s->daq[daq].nodt || ent >= s->daq[daq].odt[odt].alloc)
@@ -630,18 +711,22 @@ static int cmd_set_daq_ptr(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rs
     return 1;
 }
 
+/* ODT 条目最大元素数（字节数 ≤ 8，AG1 保持原来的 7） */
+static int max_entry(const XcpSlave* s) { return s->ag == 1 ? 7 : 8 / s->ag; }
+
 static int write_one_entry(XcpSlave* s, uint8_t bit_off, uint8_t size, uint8_t ext, uint32_t addr, uint8_t* rsp)
 {
     XcpOdt* o;
     int used = 0, i;
     if (!s->ptr_valid) return put_err(rsp, XCP_ERR_SEQUENCE);
-    if (ext != 0 || bit_off != 0xFF || size < 1 || size > 7)
+    if (ext != 0 || bit_off != 0xFF || size < 1 || size > max_entry(s))
         return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
+    size = (uint8_t)(size * s->ag);
     if (!work_ptr(s, addr, size)) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     o = &s->daq[s->ptr_daq].odt[s->ptr_odt];
     for (i = 0; i < o->alloc; i++)
         if (o->ent[i].used) used += o->ent[i].size;
-    if (used + size + 1 + 4 > XCP_MAX_DTO) return put_err(rsp, XCP_ERR_DAQ_CONFIG);
+    if (used + size + s->ag + 4 > XCP_MAX_DTO) return put_err(rsp, XCP_ERR_DAQ_CONFIG);
     if (s->ptr_entry >= o->alloc) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     o->ent[s->ptr_entry].addr = addr;
     o->ent[s->ptr_entry].size = size;
@@ -657,7 +742,7 @@ static int cmd_write_daq(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp)
     int r;
     if (s->protect & XCP_RES_DAQ) return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
     if (len < 8) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    r = write_one_entry(s, cmd[1], cmd[2], cmd[3], xcp_rd32(cmd + 4), rsp);
+    r = write_one_entry(s, cmd[1], cmd[2], cmd[3], R32(s, cmd + 4), rsp);
     if (r) return r;
     rsp[0] = XCP_PID_RES;
     return 1;
@@ -672,7 +757,7 @@ static int cmd_write_daq_multiple(XcpSlave* s, const uint8_t* cmd, int len, uint
     if (n < 1 || 2 + n * 7 > len) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
     for (i = 0; i < n; i++) {
         const uint8_t* e = cmd + 2 + i * 7;
-        int r = write_one_entry(s, e[0], e[1], e[2], xcp_rd32(e + 3), rsp);
+        int r = write_one_entry(s, e[0], e[1], e[2], R32(s, e + 3), rsp);
         if (r) return r;
     }
     rsp[0] = XCP_PID_RES;
@@ -683,8 +768,8 @@ static int cmd_set_daq_mode(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* r
 {
     int daq, ev;
     if (len < 8) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    daq = xcp_rd16(cmd + 2);
-    ev = xcp_rd16(cmd + 4);
+    daq = R16(s, cmd + 2);
+    ev = R16(s, cmd + 4);
     if (daq >= s->n_daq || !s->daq[daq].alloc) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     if (ev >= XCP_MAX_EVENT) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     if (cmd[1] & XCP_DAQ_FLAG_DIRECTION) return put_err(rsp, XCP_ERR_MODE_NOT_VALID);
@@ -700,13 +785,13 @@ static int cmd_get_daq_mode(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* r
 {
     int daq;
     if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    daq = xcp_rd16(cmd + 2);
+    daq = R16(s, cmd + 2);
     if (daq >= s->n_daq) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     rsp[0] = XCP_PID_RES;
     rsp[1] = s->daq[daq].mode;
     rsp[2] = 0;
     rsp[3] = 0;
-    xcp_wr16(rsp + 4, s->daq[daq].event);
+    W16(s, rsp + 4, s->daq[daq].event);
     rsp[6] = s->daq[daq].prescaler;
     rsp[7] = s->daq[daq].priority;
     return 8;
@@ -724,7 +809,7 @@ static int cmd_start_stop_list(XcpSlave* s, const uint8_t* cmd, int len, uint8_t
     int daq;
     if (s->protect & XCP_RES_DAQ) return put_err(rsp, XCP_ERR_ACCESS_LOCKED);
     if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-    daq = xcp_rd16(cmd + 2);
+    daq = R16(s, cmd + 2);
     if (daq >= s->n_daq || !s->daq[daq].alloc) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
     if (cmd[1] == XCP_DAQ_START_STOP) s->daq[daq].running = 0;
     else if (cmd[1] == XCP_DAQ_START_START) {
@@ -762,9 +847,9 @@ static int cmd_read_daq(XcpSlave* s, uint8_t* rsp)
     e = &s->daq[s->ptr_daq].odt[s->ptr_odt].ent[s->ptr_entry];
     rsp[0] = XCP_PID_RES;
     rsp[1] = e->used ? 0xFF : 0;
-    rsp[2] = e->used ? e->size : 0;
+    rsp[2] = (uint8_t)(e->used ? e->size / s->ag : 0);
     rsp[3] = 0;
-    xcp_wr32(rsp + 4, e->used ? e->addr : 0);
+    W32(s, rsp + 4, e->used ? e->addr : 0);
     s->ptr_entry++;
     if (s->ptr_entry >= s->daq[s->ptr_daq].odt[s->ptr_odt].alloc) s->ptr_valid = 0;
     return 8;
@@ -787,9 +872,11 @@ void xcp_slave_tick(XcpSlave* s, uint16_t event, uint32_t time_us)
         for (o = 0; o < q->nodt; o++) {
             XcpOdt* od = &q->odt[o];
             pos = 0;
-            pkt[pos++] = (uint8_t)(pid + o);
+            memset(pkt, 0, (size_t)s->ag);
+            pkt[0] = (uint8_t)(pid + o);
+            pos = s->ag;     /* 绝对 ODT 号 + AG 对齐填充 */
             if (o == 0 && (q->mode & XCP_DAQ_FLAG_TIMESTAMP)) {
-                xcp_wr32(pkt + pos, time_us);
+                W32(s, pkt + pos, time_us);
                 pos += 4;
             }
             for (e = 0; e < od->nent; e++) {
@@ -801,7 +888,7 @@ void xcp_slave_tick(XcpSlave* s, uint16_t event, uint32_t time_us)
                 memcpy(pkt + pos, p, od->ent[e].size);
                 pos += od->ent[e].size;
             }
-            if (pos > 1) push_dto(s, pkt, pos);
+            if (pos > s->ag) push_dto(s, pkt, pos);
         }
     }
 }
@@ -810,13 +897,13 @@ int xcp_slave_input(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp, int 
 {
     if (!s || !cmd || !rsp || len < 1 || rsp_cap < XCP_MAX_CTO)
         return rsp ? put_err(rsp, XCP_ERR_GENERIC) : -1;
+    s->rqh = s->rqn = 0;  /* 新命令：丢弃未取走的块模式余帧 */
     if (cmd[0] == XCP_CMD_SYNCH) return put_err(rsp, XCP_ERR_CMD_SYNCH);
     if (cmd[0] == XCP_CMD_CONNECT) return cmd_connect(s, rsp);
     if (!s->connected) return put_err(rsp, XCP_ERR_CMD_BUSY);
     switch (cmd[0]) {
     case XCP_CMD_DISCONNECT:
-        s->connected = 0;
-        s->dl_remain = 0;
+        end_session(s);
         rsp[0] = XCP_PID_RES;
         return 1;
     case XCP_CMD_GET_STATUS: return cmd_get_status(s, rsp);
@@ -833,7 +920,7 @@ int xcp_slave_input(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp, int 
     case XCP_CMD_SET_REQUEST:
         if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
         s->session = (uint8_t)((s->session & XCP_SS_DAQ_RUNNING) | (cmd[1] & 0x0Du));
-        s->session_id = xcp_rd16(cmd + 2);
+        s->session_id = R16(s, cmd + 2);
         rsp[0] = XCP_PID_RES;
         return 1;
     case XCP_CMD_GET_SEED: return cmd_get_seed(s, cmd, len, rsp);
@@ -860,8 +947,8 @@ int xcp_slave_input(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp, int 
         if (cmd[1] == 0) {
             rsp[0] = XCP_PID_RES;
             rsp[1] = rsp[2] = rsp[3] = 0;
-            xcp_wr32(rsp + 4, s->base);
-            xcp_wr32(rsp + 8, s->size);
+            W32(s, rsp + 4, s->base);
+            W32(s, rsp + 8, s->size);
             return 12;
         }
         if (cmd[1] == 1) {
@@ -909,43 +996,43 @@ int xcp_slave_input(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp, int 
     case XCP_CMD_GET_DAQ_CLOCK:
         rsp[0] = XCP_PID_RES;
         rsp[1] = rsp[2] = rsp[3] = 0;
-        xcp_wr32(rsp + 4, s->clock);
+        W32(s, rsp + 4, s->clock);
         return 8;
     case XCP_CMD_READ_DAQ: return cmd_read_daq(s, rsp);
     case XCP_CMD_GET_DAQ_PROCESSOR_INFO:
         rsp[0] = XCP_PID_RES;
         rsp[1] = 0x01 | 0x02 | 0x10; /* 动态、预分频、时间戳 */
-        xcp_wr16(rsp + 2, XCP_MAX_DAQ);
-        xcp_wr16(rsp + 4, XCP_MAX_EVENT);
+        W16(s, rsp + 2, XCP_MAX_DAQ);
+        W16(s, rsp + 4, XCP_MAX_EVENT);
         rsp[6] = 0;
         rsp[7] = 0;
         return 8;
     case XCP_CMD_GET_DAQ_RESOLUTION_INFO:
         rsp[0] = XCP_PID_RES;
-        rsp[1] = 1;
-        rsp[2] = 7;
-        rsp[3] = 1;
-        rsp[4] = 7;
+        rsp[1] = (uint8_t)s->ag;
+        rsp[2] = (uint8_t)max_entry(s);
+        rsp[3] = (uint8_t)s->ag;
+        rsp[4] = (uint8_t)max_entry(s);
         rsp[5] = XCP_TS_MODE;
-        xcp_wr16(rsp + 6, 1);
+        W16(s, rsp + 6, 1);
         return 8;
     case XCP_CMD_GET_DAQ_LIST_INFO: {
         int daq;
         if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-        daq = xcp_rd16(cmd + 2);
+        daq = R16(s, cmd + 2);
         if (daq >= s->n_daq) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
         rsp[0] = XCP_PID_RES;
         rsp[1] = 0;
         rsp[2] = (uint8_t)s->daq[daq].nodt;
         rsp[3] = (uint8_t)(s->daq[daq].nodt ? s->daq[daq].odt[0].alloc : 0);
-        xcp_wr16(rsp + 4, s->daq[daq].event);
+        W16(s, rsp + 4, s->daq[daq].event);
         rsp[6] = (uint8_t)first_pid(s, daq);
         return 7;
     }
     case XCP_CMD_GET_DAQ_EVENT_INFO: {
         int ev;
         if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
-        ev = xcp_rd16(cmd + 2);
+        ev = R16(s, cmd + 2);
         if (ev >= XCP_MAX_EVENT) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
         rsp[0] = XCP_PID_RES;
         rsp[1] = 0x04; /* DAQ */
@@ -960,7 +1047,7 @@ int xcp_slave_input(XcpSlave* s, const uint8_t* cmd, int len, uint8_t* rsp, int 
         int daq, o, e;
         if (len < 4) return put_err(rsp, XCP_ERR_CMD_SYNTAX);
         if (daq_running(s)) return put_err(rsp, XCP_ERR_DAQ_ACTIVE);
-        daq = xcp_rd16(cmd + 2);
+        daq = R16(s, cmd + 2);
         if (daq >= s->n_daq) return put_err(rsp, XCP_ERR_OUT_OF_RANGE);
         for (o = 0; o < s->daq[daq].nodt; o++)
             for (e = 0; e < XCP_MAX_ODT_ENTRY; e++)

@@ -292,6 +292,153 @@ static void test_daq_faults(void)
     drain();
 }
 
+/* 评审 §2-1：从机块模式 UPLOAD（最多 255 元素，多帧 RES） */
+static void test_block_upload(void)
+{
+    int rl, i, got, frames = 0;
+    uint8_t out[1024], f[XCP_MAX_CTO];
+    XcpSlave* s = xcp_mock_slave(M);
+    uint8_t* p = xcp_slave_ptr(s, 0x20000400, 255);
+    for (i = 0; i < 255; i++) p[i] = (uint8_t)(i ^ 0x5A);
+    TX(XCP_CMD_CONNECT, 0);
+    EXPECT(OK() && (R[2] & XCP_COMM_SLAVE_BLOCK), "CONNECT 声明从机块模式");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x00, 0x04, 0x00, 0x20);
+    TX(XCP_CMD_UPLOAD, 200);
+    EXPECT(OK() && rl == 64, "UPLOAD 200：首帧 1+63");
+    memcpy(out, R + 1, 63); got = 63; frames = 1;
+    while ((rl = xcp_mock_pop_rsp(M, f, sizeof f)) > 0) {
+        EXPECT(f[0] == XCP_PID_RES, "余帧 PID=RES");
+        memcpy(out + got, f + 1, (size_t)(rl - 1)); got += rl - 1; frames++;
+    }
+    EXPECT(got == 200 && frames == 4 && memcmp(out, p, 200) == 0, "UPLOAD 200 字节 4 帧数据一致");
+    TX(XCP_CMD_UPLOAD, 55);
+    EXPECT(OK() && rl == 56 && R[1] == p[200] && xcp_mock_pop_rsp(M, f, sizeof f) == 0, "MTA 自增，续传 55 字节单帧");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x00, 0x04, 0x00, 0x20);
+    TX(XCP_CMD_UPLOAD, 255);
+    got = rl - 1;
+    while ((rl = xcp_mock_pop_rsp(M, f, sizeof f)) > 0) got += rl - 1;
+    EXPECT(got == 255, "UPLOAD 255（最大）");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x00, 0x04, 0x00, 0x20);
+    TX(XCP_CMD_UPLOAD, 200);
+    TX(XCP_CMD_GET_STATUS);
+    EXPECT(OK() && xcp_mock_pop_rsp(M, f, sizeof f) == 0, "新命令丢弃未取余帧");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0xF0, 0x0F, 0x00, 0x20);
+    TX(XCP_CMD_UPLOAD, 200);
+    EXPECT(ERR(XCP_ERR_OUT_OF_RANGE) && xcp_mock_pop_rsp(M, f, sizeof f) == 0, "越界块上传 → OUT_OF_RANGE，无余帧");
+    TX(XCP_CMD_UPLOAD, 0);
+    EXPECT(ERR(XCP_ERR_OUT_OF_RANGE), "UPLOAD 0 被拒");
+}
+
+/* 评审 §2-4：运行时字节序 + AG */
+static void test_format(void)
+{
+    int rl, i, got;
+    uint8_t f[XCP_MAX_CTO], out[600];
+    XcpMock* m2;
+    XcpMock* save = M;
+    XcpSlave* s;
+    uint8_t* p;
+    EXPECT(xcp_slave_set_format(xcp_mock_slave(M), 1, 2) == -1, "已连接时不可改格式");
+    m2 = xcp_mock_create(0x20000000, 4096);
+    s = xcp_mock_slave(m2);
+    EXPECT(xcp_slave_set_format(s, 0, 3) == -1, "AG=3 非法");
+    EXPECT(xcp_slave_set_format(s, 1, 2) == 0, "Motorola + AG2");
+    M = m2;
+    p = xcp_slave_ptr(s, 0x20000000, 600);
+    for (i = 0; i < 600; i++) p[i] = (uint8_t)i;
+    TX(XCP_CMD_CONNECT, 0);
+    EXPECT(OK() && (R[2] & 0x07) == (0x01 | (1 << 1)), "COMM_MODE_BASIC：BYTE_ORDER=1, AG=WORD");
+    EXPECT(R[4] == 0 && R[5] == 64, "MAX_DTO 按 Motorola 编码");
+    TX(XCP_CMD_SHORT_UPLOAD, 4, 0, 0, 0x20, 0x00, 0x00, 0x10);      /* 地址 BE 0x20000010，4 个 WORD */
+    EXPECT(OK() && rl == 2 + 8 && R[1] == 0 && R[2] == 0x10 && R[9] == 0x17, "SHORT_UPLOAD：BE 地址，AG2 对齐填充，8 字节");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x20, 0x00, 0x00, 0x00);
+    TX(XCP_CMD_UPLOAD, 255);                                           /* 510 字节 */
+    EXPECT(OK() && rl == 64 && R[1] == 0, "AG2 块上传首帧 2+62");
+    memcpy(out, R + 2, (size_t)(rl - 2)); got = rl - 2;
+    while ((rl = xcp_mock_pop_rsp(M, f, sizeof f)) > 0) {
+        EXPECT((rl - 2) % 2 == 0, "AG2 每帧数据为 WORD 整数倍");
+        memcpy(out + got, f + 2, (size_t)(rl - 2)); got += rl - 2;
+    }
+    EXPECT(got == 510 && memcmp(out, p, 510) == 0, "AG2 UPLOAD 255 元素 = 510 字节");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x20, 0x00, 0x01, 0x00);
+    TX(XCP_CMD_DOWNLOAD, 2, 0xAA, 0xBB, 0xCC, 0xDD);
+    EXPECT(OK() && p[0x100] == 0xAA && p[0x103] == 0xDD, "AG2 DOWNLOAD 2 元素");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x20, 0x00, 0x01, 0x00);
+    TX(XCP_CMD_BUILD_CHECKSUM, 0, 0, 0, 0, 0, 0, 2);                   /* 2 个 WORD，BE */
+    EXPECT(OK() && R[7] == (uint8_t)(0xAA + 0xBB + 0xCC + 0xDD) && R[6] == 0x03, "BUILD_CHECKSUM：元素单位 + BE 结果");
+    TX(XCP_CMD_GET_DAQ_PROCESSOR_INFO);
+    EXPECT(OK() && R[2] == 0 && R[3] == XCP_MAX_DAQ, "PROCESSOR_INFO MAX_DAQ 按 BE");
+    TX(XCP_CMD_FREE_DAQ);
+    TX(XCP_CMD_ALLOC_DAQ, 0, 0, 1);
+    TX(XCP_CMD_ALLOC_ODT, 0, 0, 0, 1);
+    TX(XCP_CMD_ALLOC_ODT_ENTRY, 0, 0, 0, 0, 1);
+    TX(XCP_CMD_SET_DAQ_PTR, 0, 0, 0, 0, 0);
+    TX(XCP_CMD_WRITE_DAQ, 0xFF, 5, 0, 0x20, 0x00, 0x00, 0x00);
+    EXPECT(ERR(XCP_ERR_OUT_OF_RANGE), "AG2 ODT 条目上限 4 元素");
+    TX(XCP_CMD_WRITE_DAQ, 0xFF, 2, 0, 0x20, 0x00, 0x00, 0x00);
+    EXPECT(OK(), "WRITE_DAQ 2 元素(4 字节)");
+    TX(XCP_CMD_SET_DAQ_LIST_MODE, XCP_DAQ_FLAG_TIMESTAMP, 0, 0, 0, 0, 1, 0);
+    TX(XCP_CMD_START_STOP_DAQ_LIST, 1, 0, 0);
+    xcp_mock_tick(M, 0, 0x01020304);
+    rl = xcp_mock_pop(M, f, sizeof f);
+    EXPECT(rl == 2 + 4 + 4 && f[0] == 0 && f[1] == 0 && f[2] == 0x01 && f[5] == 0x04 && f[6] == 0x00 && f[9] == 0x03,
+           "DTO：PID+填充、BE 时间戳、4 字节数据");
+    M = save;
+    xcp_mock_destroy(m2);
+    /* AG4 + Intel 快速检查 */
+    m2 = xcp_mock_create(0x20000000, 4096);
+    EXPECT(xcp_slave_set_format(xcp_mock_slave(m2), 0, 4) == 0, "AG4");
+    M = m2;
+    TX(XCP_CMD_CONNECT, 0);
+    EXPECT(OK() && (R[2] & 0x07) == (2 << 1), "COMM_MODE_BASIC AG=DWORD");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x00, 0x00, 0x00, 0x20);
+    TX(XCP_CMD_UPLOAD, 255);
+    got = rl - 4;
+    while ((rl = xcp_mock_pop_rsp(M, f, sizeof f)) > 0) got += rl - 4;
+    EXPECT(got == 1020, "AG4 UPLOAD 255 元素 = 1020 字节");
+    TX(XCP_CMD_SET_MTA, 0, 0, 0, 0x00, 0x01, 0x00, 0x20);
+    TX(XCP_CMD_DOWNLOAD, 1, 0, 0, 1, 2, 3, 4);
+    EXPECT(OK() && *xcp_slave_ptr(xcp_mock_slave(M), 0x20000103, 1) == 4, "AG4 DOWNLOAD 数据偏移 4");
+    M = save;
+    xcp_mock_destroy(m2);
+}
+
+/* 评审 §2-3：错误密钥 = DISCONNECT 语义，清 DAQ 与 DTO 队列 */
+static void test_wrong_key_clears(void)
+{
+    int rl;
+    uint8_t b[XCP_MAX_DTO];
+    XcpSlave* s = xcp_mock_slave(M);
+    TX(XCP_CMD_CONNECT, 0);
+    EXPECT(setup_daq(1) == 0, "配置 DAQ");
+    TX(XCP_CMD_START_STOP_SYNCH, XCP_DAQ_SYNCH_START_SEL);
+    xcp_mock_tick(M, 0, 1);
+    xcp_mock_tick(M, 0, 2);
+    EXPECT(xcp_slave_dto_pending(s) > 0, "DTO 队列有积压");
+    xcp_slave_lock(s, XCP_RES_CAL_PAG);
+    TX(XCP_CMD_GET_SEED, 0, XCP_RES_CAL_PAG);
+    TX(XCP_CMD_UNLOCK, 4, 0, 0, 0, 0);
+    EXPECT(ERR(XCP_ERR_ACCESS_LOCKED) && !xcp_slave_is_connected(s), "错误密钥断开");
+    EXPECT(xcp_slave_dto_pending(s) == 0 && xcp_mock_pop(M, b, sizeof b) == 0, "DTO 队列已清空");
+    xcp_mock_tick(M, 0, 3);
+    EXPECT(xcp_slave_dto_pending(s) == 0, "DAQ 已停止，不再产生 DTO");
+    TX(XCP_CMD_CONNECT, 0);
+    TX(XCP_CMD_GET_STATUS);
+    EXPECT(OK() && !(R[1] & XCP_SS_DAQ_RUNNING), "重连后 DAQ 未运行");
+    TX(XCP_CMD_GET_DAQ_LIST_INFO, 0, 0, 0);
+    EXPECT(ERR(XCP_ERR_OUT_OF_RANGE), "DAQ 列表已释放");
+    /* DISCONNECT 同样清理 */
+    EXPECT(setup_daq(1) == 0, "重新配置 DAQ");
+    TX(XCP_CMD_START_STOP_SYNCH, XCP_DAQ_SYNCH_START_SEL);
+    xcp_mock_tick(M, 0, 4);
+    TX(XCP_CMD_DISCONNECT);
+    EXPECT(OK() && xcp_slave_dto_pending(s) == 0, "DISCONNECT 清 DTO 队列");
+    TX(XCP_CMD_CONNECT, 0);
+    xcp_slave_set_seed_key(s, NULL, NULL, NULL);
+    TX(XCP_CMD_GET_SEED, 0, XCP_RES_CAL_PAG);
+    TX(XCP_CMD_UNLOCK, 4, 0xEE, 0xDD, 0xCC, 0xBB);
+}
+
 int main(void)
 {
     M = xcp_mock_create(0x20000000, 4096);
@@ -300,6 +447,9 @@ int main(void)
     test_daq();
     test_cmd_faults();
     test_daq_faults();
+    test_block_upload();
+    test_format();
+    test_wrong_key_clears();
     xcp_mock_destroy(M);
     printf("xcp_mock_test: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;

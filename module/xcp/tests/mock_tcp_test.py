@@ -5,7 +5,7 @@ import socket, struct, subprocess, sys, time
 
 exe = sys.argv[1]
 _t = socket.socket(); _t.bind(("127.0.0.1", 0)); port = _t.getsockname()[1]; _t.close()
-p = subprocess.Popen([exe, "--port", str(port), "--seconds", "10", "--lock", "daq",
+p = subprocess.Popen([exe, "--port", str(port), "--seconds", "3", "--lock", "daq",
                       "--fault", "busy:FD:1", "--fault", "drop:10"], stdout=subprocess.PIPE)
 import atexit; atexit.register(lambda: (p.kill(), p.wait()))
 if not p.stdout.readline().startswith(b"xcp_mock_slave listening"): sys.exit("mock failed to start")
@@ -43,6 +43,13 @@ def cmd(b):
 r = cmd([0xFF, 0]); check(r[0] == 0xFF and r[3] == 64, "TCP CONNECT")
 r = cmd([0xFD]); check(r[:2] == b"\xfe\x10", "注入 ERR_CMD_BUSY")
 r = cmd([0xFD]); check(r[0] == 0xFF and r[2] & 0x04, "重试成功，DAQ 资源已锁")
+# 评审 §2-1：小序会话层 200 字节块上传（从机块模式，多帧 RES）
+r = cmd([0xF6, 0, 0, 0] + list(struct.pack("<I", 0x20000000)))
+r = cmd([0xF5, 200]); data = r[1:]
+while len(data) < 200:
+    _, f = recv_pkt()
+    if f[0] == 0xFF: data += f[1:]
+check(len(data) == 200, "TCP 块模式 UPLOAD 200 字节（4 帧）")
 r = cmd([0xD6]); check(r[0] == 0xFF, "FREE_DAQ")
 r = cmd([0xD5, 0, 1, 0]); r = cmd([0xD4, 0, 0, 0, 1]); r = cmd([0xD3, 0, 0, 0, 0, 1])
 r = cmd([0xE2, 0, 0, 0, 0, 0]); r = cmd([0xE1, 0xFF, 4, 0] + list(struct.pack("<I", 0x20000000)))
@@ -69,6 +76,30 @@ gaps = sum(1 for a, b in zip(samples, samples[1:]) if b[1] - a[1] != 1)
 check(gaps > 0, f"计数器检测到 {gaps} 处丢包（drop:10 注入）")
 check(all(b[0] > a[0] for a, b in zip(samples, samples[1:])), "时间戳单调递增")
 check(ctr_gaps == 0, "TCP 头 CTR 连续")
-cmd([0xFE]); s.close(); p.terminate(); p.wait()
+cmd([0xFE]); s.close()
+# 评审 §2-2：--seconds 到点退出，即使客户端已断开（之前卡在 accept）
+try:
+    p.wait(timeout=12); check(p.returncode == 0, "--seconds 到时退出（客户端断开后）")
+except subprocess.TimeoutExpired:
+    check(False, "--seconds 到时退出（客户端断开后）")
+
+# 评审 §2-4：Motorola + AG2
+p2 = subprocess.Popen([exe, "--port", str(port), "--seconds", "3", "--byte-order", "motorola", "--ag", "2"],
+                      stdout=subprocess.PIPE)
+atexit.register(lambda: (p2.kill(), p2.wait()))
+p2.stdout.readline()
+s = socket.create_connection(("127.0.0.1", port), timeout=2); buf = b""; ctr = 0
+r = cmd([0xFF, 0]); check(r[2] & 0x07 == 0x03 and r[4:6] == b"\x00\x40", "Motorola/AG2 CONNECT（MAX_DTO 大端）")
+r = cmd([0xF6, 0, 0, 0] + list(struct.pack(">I", 0x20000000)))
+r = cmd([0xF5, 100]); data = r[2:]
+while len(data) < 200:
+    _, f = recv_pkt()
+    if f[0] == 0xFF: data += f[2:]
+check(len(data) == 200, "AG2 UPLOAD 100 元素 = 200 字节")
+c1 = struct.unpack(">I", data[0:4])[0]; time.sleep(0.05)
+r = cmd([0xF4, 2, 0, 0] + list(struct.pack(">I", 0x20000000))); c2 = struct.unpack(">I", r[2:6])[0]
+check(0 < c2 - c1 < 1000, f"大端计数器递增 {c1}→{c2}")
+r = cmd([0xFE]); s.close()
+p2.wait(timeout=6); check(p2.returncode == 0, "第二实例按 --seconds 退出")
 print("mock_tcp_test:", "ALL PASS" if not fails else f"{fails} FAIL")
 sys.exit(1 if fails else 0)

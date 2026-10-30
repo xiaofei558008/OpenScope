@@ -58,6 +58,8 @@ XcpMockResult xcp_mock_input(XcpMock* m, const uint8_t* cmd, int len, uint8_t* r
 void      xcp_mock_tick(XcpMock* m, uint16_t event, uint32_t time_us);
 /* 取出下一条异步包（EV 优先，其次经丢包/乱序/重复处理后的 DTO）。0 = 空 */
 int       xcp_mock_pop(XcpMock* m, uint8_t* dst, int cap);
+/* 从机块模式余帧（UPLOAD > 一帧）。外壳在发出应答首帧后立即依次发送。0 = 无 */
+int       xcp_mock_pop_rsp(XcpMock* m, uint8_t* dst, int cap);
 
 typedef struct XcpMockStats {
     uint32_t dto_in, dto_out, dto_dropped, dto_swapped, dto_dup, faults_hit;

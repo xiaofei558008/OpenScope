@@ -3,6 +3,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,22 +16,36 @@ typedef struct Lex {
     int         line;
 } Lex;
 
+/* 内存不足不再 abort：全部分配走 xrealloc，失败返回 NULL，由调用方报错并释放已建结构。
+ * 测试钩子：a2l_debug_fail_alloc_after(n) 让第 n+1 次分配起失败（-1 关闭；非线程安全，仅测试用）。 */
+static long g_fail_after = -1;
+
+void a2l_debug_fail_alloc_after(long n) { g_fail_after = n; }
+
 static void* xrealloc(void* p, size_t n)
 {
-    void* q = realloc(p, n ? n : 1);
-    if (!q) { fprintf(stderr, "a2l: out of memory\n"); abort(); }
+    if (g_fail_after == 0) return NULL;
+    if (g_fail_after > 0) g_fail_after--;
+    return realloc(p, n ? n : 1);
+}
+
+static void* xcalloc(size_t n, size_t sz)
+{
+    void* q = xrealloc(NULL, n * sz);
+    if (q) memset(q, 0, n * sz);
     return q;
 }
 
 static char* xstrndup(const char* s, size_t n)
 {
     char* d = (char*)xrealloc(NULL, n + 1);
+    if (!d) return NULL;
     memcpy(d, s, n);
     d[n] = 0;
     return d;
 }
 
-/* 取下一个记号；返回 0 = 结束，-1 = 错误（未闭合字符串/注释） */
+/* 取下一个记号；返回 0 = 结束，-1 = 错误（未闭合字符串/注释），-2 = 内存不足 */
 static int lex_next(Lex* L, A2lTok* t)
 {
     const char* p = L->p;
@@ -65,10 +80,16 @@ static int lex_next(Lex* L, A2lTok* t)
                 if (p < L->end && *p == '"') p++;
                 else break;
             } else if (ch == '\n') L->line++;
-            if (n + 2 > cap) { cap = cap ? cap * 2 : 32; buf = (char*)xrealloc(buf, cap); }
+            if (n + 2 > cap) {
+                char* nb;
+                cap = cap ? cap * 2 : 32;
+                nb = (char*)xrealloc(buf, cap);
+                if (!nb) { free(buf); L->p = p; return -2; }
+                buf = nb;
+            }
             buf[n++] = ch;
         }
-        if (!buf) buf = (char*)xrealloc(NULL, 1);
+        if (!buf && (buf = (char*)xrealloc(NULL, 1)) == NULL) { L->p = p; return -2; }
         buf[n] = 0;
         t->s = buf;
         t->quoted = 1;
@@ -79,6 +100,7 @@ static int lex_next(Lex* L, A2lTok* t)
             p++;
         t->s = xstrndup(s, (size_t)(p - s));
         t->quoted = 0;
+        if (!t->s) { L->p = p; return -2; }
     }
     L->p = p;
     return 1;
@@ -88,9 +110,10 @@ static int lex_next(Lex* L, A2lTok* t)
 
 static A2lNode* node_new(const char* kw, int line)
 {
-    A2lNode* n = (A2lNode*)calloc(1, sizeof(A2lNode));
-    if (!n) abort();
+    A2lNode* n = (A2lNode*)xcalloc(1, sizeof(A2lNode));
+    if (!n) return NULL;
     n->kw = xstrndup(kw, strlen(kw));
+    if (!n->kw) { free(n); return NULL; }
     n->line = line;
     return n;
 }
@@ -107,19 +130,32 @@ static void node_free(A2lNode* n)
     free(n);
 }
 
-static void node_add_tok(A2lNode* n, A2lTok t)
+/* 容量 4,8,16…：仅在 n==0 或 n 为 ≥4 的 2 的幂时扩容（修复 n=1 时缩到 2 的多余 realloc） */
+static int need_grow(int n) { return n == 0 || (n >= 4 && (n & (n - 1)) == 0); }
+
+static int node_add_tok(A2lNode* n, A2lTok t)
 {
-    if ((n->ntok & (n->ntok - 1)) == 0 || n->ntok == 0)
-        n->tok = (A2lTok*)xrealloc(n->tok, sizeof(A2lTok) * (size_t)(n->ntok ? n->ntok * 2 : 4));
+    if (need_grow(n->ntok)) {
+        A2lTok* q = (A2lTok*)xrealloc(n->tok, sizeof(A2lTok) * (size_t)(n->ntok ? n->ntok * 2 : 4));
+        if (!q) return -1;
+        n->tok = q;
+    }
     n->tok[n->ntok++] = t;
+    return 0;
 }
 
-static void node_add_kid(A2lNode* n, A2lNode* k)
+static int node_add_kid(A2lNode* n, A2lNode* k)
 {
-    if ((n->nkid & (n->nkid - 1)) == 0 || n->nkid == 0)
-        n->kid = (A2lNode**)xrealloc(n->kid, sizeof(A2lNode*) * (size_t)(n->nkid ? n->nkid * 2 : 4));
+    if (need_grow(n->nkid)) {
+        A2lNode** q = (A2lNode**)xrealloc(n->kid, sizeof(A2lNode*) * (size_t)(n->nkid ? n->nkid * 2 : 4));
+        if (!q) return -1;
+        n->kid = q;
+    }
     n->kid[n->nkid++] = k;
+    return 0;
 }
+
+#define OOM_MSG "内存不足"
 
 static A2lNode* build_tree(const char* text, size_t len, char* err, int errcap)
 {
@@ -129,25 +165,34 @@ static A2lNode* build_tree(const char* text, size_t len, char* err, int errcap)
     int sp = 0, r;
     L.p = text; L.end = text + len; L.line = 1;
     stack[0] = node_new("", 0);
+    if (!stack[0]) { snprintf(err, (size_t)errcap, OOM_MSG); return NULL; }
     while ((r = lex_next(&L, &t)) > 0) {
         if (!t.quoted && strcmp(t.s, "/begin") == 0) {
             A2lTok k;
+            int r2;
             free(t.s);
-            if (lex_next(&L, &k) <= 0 || k.quoted) {
+            r2 = lex_next(&L, &k);
+            if (r2 == -2) { r = -2; break; }
+            if (r2 <= 0 || k.quoted) {
+                if (r2 > 0) free(k.s);   /* /begin "X"：带引号的记号也要释放 */
                 snprintf(err, (size_t)errcap, "line %d: /begin 后缺关键字", L.line);
                 goto fail;
             }
             if (sp + 1 >= 64) { snprintf(err, (size_t)errcap, "line %d: 嵌套过深", L.line); free(k.s); goto fail; }
             {
                 A2lNode* n = node_new(k.s, k.line);
-                node_add_kid(stack[sp], n);
+                free(k.s);
+                if (!n) { r = -2; break; }
+                if (node_add_kid(stack[sp], n) != 0) { node_free(n); r = -2; break; }
                 stack[++sp] = n;
             }
-            free(k.s);
         } else if (!t.quoted && strcmp(t.s, "/end") == 0) {
             A2lTok k;
+            int r2;
             free(t.s);
-            if (lex_next(&L, &k) <= 0) { snprintf(err, (size_t)errcap, "line %d: /end 后缺关键字", L.line); goto fail; }
+            r2 = lex_next(&L, &k);
+            if (r2 == -2) { r = -2; break; }
+            if (r2 <= 0) { snprintf(err, (size_t)errcap, "line %d: /end 后缺关键字", L.line); goto fail; }
             if (sp == 0 || strcmp(k.s, stack[sp]->kw) != 0) {
                 snprintf(err, (size_t)errcap, "line %d: /end %s 与 /begin %s (line %d) 不匹配", k.line, k.s,
                          sp ? stack[sp]->kw : "(none)", sp ? stack[sp]->line : 0);
@@ -156,9 +201,13 @@ static A2lNode* build_tree(const char* text, size_t len, char* err, int errcap)
             }
             free(k.s);
             sp--;
-        } else
-            node_add_tok(stack[sp], t);
+        } else if (node_add_tok(stack[sp], t) != 0) {
+            free(t.s);
+            r = -2;
+            break;
+        }
     }
+    if (r == -2) { snprintf(err, (size_t)errcap, OOM_MSG); goto fail; }
     if (r < 0) { snprintf(err, (size_t)errcap, "line %d: 未闭合的字符串或注释", L.line); goto fail; }
     if (sp != 0) { snprintf(err, (size_t)errcap, "文件结束时 /begin %s (line %d) 未闭合", stack[sp]->kw, stack[sp]->line); goto fail; }
     return stack[0];
@@ -201,10 +250,29 @@ static void cpy(char* d, size_t cap, const char* s)
 }
 #define CPY(d, s) cpy((d), sizeof(d), (s))
 
-static void str_push(char*** arr, int* n, const char* s)
+/* 抽取阶段内存不足：跳回 a2l_parse_text，由其 a2l_free 已建结构（各数组在扩容成功后才计数，始终一致） */
+typedef struct Ctx { jmp_buf jb; } Ctx;
+
+static void* need(A2lFile* f, void* p)
 {
-    *arr = (char**)xrealloc(*arr, sizeof(char*) * (size_t)(*n + 1));
-    (*arr)[(*n)++] = xstrndup(s, strlen(s));
+    if (!p) longjmp(((Ctx*)f->priv)->jb, 1);
+    return p;
+}
+
+static void str_push(A2lFile* f, char*** arr, int* n, const char* s)
+{
+    char* d;
+    *arr = (char**)need(f, xrealloc(*arr, sizeof(char*) * (size_t)(*n + 1)));
+    d = (char*)need(f, xstrndup(s, strlen(s)));
+    (*arr)[(*n)++] = d;
+}
+
+static void* grow_impl(A2lFile* f, void** arr, int* n, size_t sz)
+{
+    char* q = (char*)need(f, xrealloc(*arr, sz * (size_t)(*n + 1)));
+    *arr = q;
+    memset(q + sz * (size_t)*n, 0, sz);
+    return q + sz * (size_t)(*n)++;
 }
 
 static void str_free(char** a, int n)
@@ -214,7 +282,7 @@ static void str_free(char** a, int n)
     free(a);
 }
 
-#define GROW(arr, n) ((arr) = xrealloc((arr), sizeof(*(arr)) * (size_t)((n) + 1)), memset(&(arr)[n], 0, sizeof(*(arr))), &(arr)[(n)++])
+#define GROW(arr, n) grow_impl(f, (void**)&(arr), &(n), sizeof(*(arr)))
 
 int a2l_datatype_size(const char* dt)
 {
@@ -227,7 +295,7 @@ int a2l_datatype_size(const char* dt)
 
 /* ============================ 抽取：XCP ============================ */
 
-static void parse_proto(const A2lNode* n, A2lXcpProto* p)
+static void parse_proto(A2lFile* f, const A2lNode* n, A2lXcpProto* p)
 {
     int i;
     p->present = 1;
@@ -241,7 +309,7 @@ static void parse_proto(const A2lNode* n, A2lXcpProto* p)
     for (i = 12; i < n->ntok; i++) {
         if (n->tok[i].quoted) continue;
         if (!strcmp(n->tok[i].s, "OPTIONAL_CMD") && i + 1 < n->ntok)
-            str_push(&p->optional_cmd, &p->noptional_cmd, n->tok[++i].s);
+            str_push(f, &p->optional_cmd, &p->noptional_cmd, n->tok[++i].s);
         else if (!strcmp(n->tok[i].s, "SEED_AND_KEY_EXTERNAL_FUNCTION") && i + 1 < n->ntok)
             CPY(p->seed_key_dll, n->tok[++i].s);
         else if (!strcmp(n->tok[i].s, "COMMUNICATION_MODE_SUPPORTED")) {
@@ -275,7 +343,7 @@ static double unit_kw_seconds(const char* s)
     return 0.0;
 }
 
-static void parse_daq(const A2lNode* n, A2lXcpDaq* d)
+static void parse_daq(A2lFile* f, const A2lNode* n, A2lXcpDaq* d)
 {
     int i;
     const A2lNode* ts;
@@ -318,14 +386,14 @@ static void parse_daq(const A2lNode* n, A2lXcpDaq* d)
     }
 }
 
-static void parse_common(const A2lNode* n, A2lXcpProto* p, A2lXcpDaq* d)
+static void parse_common(A2lFile* f, const A2lNode* n, A2lXcpProto* p, A2lXcpDaq* d)
 {
     const A2lNode* c;
-    if ((c = a2l_node_child(n, "PROTOCOL_LAYER", 0)) != NULL) parse_proto(c, p);
-    if ((c = a2l_node_child(n, "DAQ", 0)) != NULL) parse_daq(c, d);
+    if ((c = a2l_node_child(n, "PROTOCOL_LAYER", 0)) != NULL) parse_proto(f, c, p);
+    if ((c = a2l_node_child(n, "DAQ", 0)) != NULL) parse_daq(f, c, d);
 }
 
-static void parse_transport(const A2lNode* n, A2lXcp* x)
+static void parse_transport(A2lFile* f, const A2lNode* n, A2lXcp* x)
 {
     static const struct { const char* kw; A2lTlKind k; } map[] = {
         { "XCP_ON_TCP_IP", A2L_TL_TCP }, { "XCP_ON_UDP_IP", A2L_TL_UDP }, { "XCP_ON_CAN", A2L_TL_CAN },
@@ -356,15 +424,15 @@ static void parse_transport(const A2lNode* n, A2lXcp* x)
     } else if (t->kind == A2L_TL_SXI) {
         t->baudrate = tu32(n, 1);
     }
-    parse_common(n, &t->proto, &t->daq);
+    parse_common(f, n, &t->proto, &t->daq);
 }
 
-static void parse_if_data_xcp(const A2lNode* n, A2lXcp* x)
+static void parse_if_data_xcp(A2lFile* f, const A2lNode* n, A2lXcp* x)
 {
     int i;
     const A2lNode* c;
     x->present = 1;
-    parse_common(n, &x->proto, &x->daq);
+    parse_common(f, n, &x->proto, &x->daq);
     if ((c = a2l_node_child(n, "PAG", 0)) != NULL) {
         x->pag_present = 1;
         x->pag_max_segments = (int)tint(c, 0);
@@ -373,7 +441,7 @@ static void parse_if_data_xcp(const A2lNode* n, A2lXcp* x)
     /* SEED_AND_KEY_EXTERNAL_FUNCTION 也可能出现在 XCP 层（Common_Parameters） */
     if ((i = kwi(n, 0, "SEED_AND_KEY_EXTERNAL_FUNCTION")) >= 0 && !x->proto.seed_key_dll[0])
         CPY(x->proto.seed_key_dll, tk(n, i + 1));
-    for (i = 0; i < n->nkid; i++) parse_transport(n->kid[i], x);
+    for (i = 0; i < n->nkid; i++) parse_transport(f, n->kid[i], x);
 }
 
 /* ============================ 抽取：其他 ============================ */
@@ -420,7 +488,7 @@ static void parse_tab(A2lFile* f, const A2lNode* n, int is_vtab, int is_range)
     if (is_range) { t->kind = A2L_CM_TAB_VERB; cnt = (int)tint(n, 2); pos = 3; }
     else { t->kind = is_vtab ? A2L_CM_TAB_VERB : compu_type(tk(n, 2)); cnt = (int)tint(n, 3); pos = 4; }
     if (cnt < 0 || pos + cnt * (is_range ? 3 : 2) > n->ntok) cnt = 0;
-    t->e = (A2lTabEntry*)calloc((size_t)(cnt ? cnt : 1), sizeof(A2lTabEntry));
+    t->e = (A2lTabEntry*)need(f, xcalloc((size_t)(cnt ? cnt : 1), sizeof(A2lTabEntry)));
     t->n = cnt;
     for (i = 0; i < cnt; i++) {
         A2lTabEntry* e = &t->e[i];
@@ -476,7 +544,7 @@ static A2lAxisAttr axis_attr(const char* s)
     return A2L_AX_UNKNOWN;
 }
 
-static void parse_axis_descr(const A2lNode* n, A2lAxisDescr* a)
+static void parse_axis_descr(A2lFile* f, const A2lNode* n, A2lAxisDescr* a)
 {
     int j, k;
     const A2lNode* fl;
@@ -495,8 +563,8 @@ static void parse_axis_descr(const A2lNode* n, A2lAxisDescr* a)
         a->fix_kind = 2; a->fix_offset = tnum(n, j + 1); a->fix_shift_or_dist = tnum(n, j + 2); a->fix_count = (int)tint(n, j + 3);
     } else if ((fl = a2l_node_child(n, "FIX_AXIS_PAR_LIST", 0)) != NULL) {
         a->fix_kind = 3;
+        a->fix_list = (double*)need(f, xcalloc((size_t)(fl->ntok ? fl->ntok : 1), sizeof(double)));
         a->fix_count = fl->ntok;
-        a->fix_list = (double*)calloc((size_t)(fl->ntok ? fl->ntok : 1), sizeof(double));
         for (k = 0; k < fl->ntok; k++) a->fix_list[k] = tnum(fl, k);
     }
 }
@@ -518,7 +586,7 @@ static void parse_chr(A2lFile* f, const A2lNode* n)
     c->read_only = kwi(n, 9, "READ_ONLY") >= 0;
     read_addr_opts(n, 9, &c->bit_mask, &c->addr_ext, &c->number);
     for (i = 0; i < n->nkid && c->naxis < 3; i++)
-        if (!strcmp(n->kid[i]->kw, "AXIS_DESCR")) parse_axis_descr(n->kid[i], &c->axis[c->naxis++]);
+        if (!strcmp(n->kid[i]->kw, "AXIS_DESCR")) { A2lAxisDescr* ad = &c->axis[c->naxis++]; parse_axis_descr(f, n->kid[i], ad); }
 }
 
 static void parse_axpts(A2lFile* f, const A2lNode* n)
@@ -548,12 +616,12 @@ static void parse_rl(A2lFile* f, const A2lNode* n)
     if ((j = kwi(n, 1, "NO_AXIS_PTS_Y")) >= 0) { r->no_axis_y_pos = (int)tint(n, j + 1); CPY(r->no_axis_y_type, tk(n, j + 2)); }
 }
 
-static void push_refs(const A2lNode* n, const char* kw, char*** arr, int* cnt)
+static void push_refs(A2lFile* f, const A2lNode* n, const char* kw, char*** arr, int* cnt)
 {
     int i, k;
     for (i = 0; i < n->nkid; i++)
         if (!strcmp(n->kid[i]->kw, kw))
-            for (k = 0; k < n->kid[i]->ntok; k++) str_push(arr, cnt, n->kid[i]->tok[k].s);
+            for (k = 0; k < n->kid[i]->ntok; k++) str_push(f, arr, cnt, n->kid[i]->tok[k].s);
 }
 
 static void parse_group(A2lFile* f, const A2lNode* n, int is_function)
@@ -563,14 +631,14 @@ static void parse_group(A2lFile* f, const A2lNode* n, int is_function)
     CPY(g->longid, tk(n, 1));
     g->is_function = is_function;
     g->root = kwi(n, 2, "ROOT") >= 0;
-    push_refs(n, "REF_CHARACTERISTIC", &g->chars, &g->nchars);
-    push_refs(n, "DEF_CHARACTERISTIC", &g->chars, &g->nchars);
-    push_refs(n, "REF_MEASUREMENT", &g->meas, &g->nmeas);
-    push_refs(n, "IN_MEASUREMENT", &g->meas, &g->nmeas);
-    push_refs(n, "OUT_MEASUREMENT", &g->meas, &g->nmeas);
-    push_refs(n, "LOC_MEASUREMENT", &g->meas, &g->nmeas);
-    push_refs(n, "SUB_GROUP", &g->subs, &g->nsubs);
-    push_refs(n, "SUB_FUNCTION", &g->subs, &g->nsubs);
+    push_refs(f, n, "REF_CHARACTERISTIC", &g->chars, &g->nchars);
+    push_refs(f, n, "DEF_CHARACTERISTIC", &g->chars, &g->nchars);
+    push_refs(f, n, "REF_MEASUREMENT", &g->meas, &g->nmeas);
+    push_refs(f, n, "IN_MEASUREMENT", &g->meas, &g->nmeas);
+    push_refs(f, n, "OUT_MEASUREMENT", &g->meas, &g->nmeas);
+    push_refs(f, n, "LOC_MEASUREMENT", &g->meas, &g->nmeas);
+    push_refs(f, n, "SUB_GROUP", &g->subs, &g->nsubs);
+    push_refs(f, n, "SUB_FUNCTION", &g->subs, &g->nsubs);
 }
 
 static void parse_segment(A2lFile* f, const A2lNode* n)
@@ -615,7 +683,7 @@ static void parse_module(A2lFile* f, const A2lNode* m)
         else if (!strcmp(kw, "GROUP")) parse_group(f, n, 0);
         else if (!strcmp(kw, "FUNCTION")) parse_group(f, n, 1);
         else if (!strcmp(kw, "IF_DATA") && (!strcmp(tk(n, 0), "XCP") || !strcmp(tk(n, 0), "XCPplus")))
-            parse_if_data_xcp(n, &f->xcp);
+            parse_if_data_xcp(f, n, &f->xcp);
         else if (!strcmp(kw, "MOD_COMMON")) {
             if ((j = kwi(n, 1, "BYTE_ORDER")) >= 0) f->byte_order_msb_first = !strcmp(tk(n, j + 1), "MSB_FIRST");
         } else if (!strcmp(kw, "MOD_PAR")) {
@@ -662,11 +730,25 @@ A2lFile* a2l_parse_text(const char* text, size_t len, char* errbuf, int errcap)
         node_free(root);
         return NULL;
     }
-    f = (A2lFile*)calloc(1, sizeof(A2lFile));
-    if (!f) abort();
+    f = (A2lFile*)xcalloc(1, sizeof(A2lFile));
+    if (!f) {
+        if (errbuf && errcap > 0) snprintf(errbuf, (size_t)errcap, OOM_MSG);
+        node_free(root);
+        return NULL;
+    }
     f->root = root;
-    if (proj) CPY(f->project, tk(proj, 0));
-    parse_module(f, mod);
+    {
+        Ctx ctx;
+        f->priv = &ctx;
+        if (setjmp(ctx.jb) != 0) {
+            if (errbuf && errcap > 0) snprintf(errbuf, (size_t)errcap, OOM_MSG);
+            a2l_free(f);
+            return NULL;
+        }
+        if (proj) CPY(f->project, tk(proj, 0));
+        parse_module(f, mod);
+        f->priv = NULL;
+    }
     return f;
 }
 
@@ -682,6 +764,7 @@ A2lFile* a2l_parse_file(const char* path, char* errbuf, int errcap)
     fseek(fp, 0, SEEK_SET);
     if (n < 0) { fclose(fp); return NULL; }
     buf = (char*)xrealloc(NULL, (size_t)n + 1);
+    if (!buf) { fclose(fp); if (errbuf) snprintf(errbuf, (size_t)errcap, OOM_MSG); return NULL; }
     if (fread(buf, 1, (size_t)n, fp) != (size_t)n) { fclose(fp); free(buf); if (errbuf) snprintf(errbuf, (size_t)errcap, "读取失败"); return NULL; }
     fclose(fp);
     buf[n] = 0;

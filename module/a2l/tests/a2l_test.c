@@ -3,6 +3,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_fail, g_pass;
@@ -143,6 +144,43 @@ static void test_errors(void)
     EXPECT(!f && strstr(err, "MODULE"), "缺 MODULE 报错");
 }
 
+/* 评审 §3：/begin 后跟带引号记号不得泄漏（LeakSanitizer 在进程退出时检查） */
+static void test_review_leak(void)
+{
+    char err[256];
+    const char* t1 = "/begin \"X\" /end X";
+    const char* t2 = "/begin PROJECT P \"\" /begin \"quoted kw\" 1 2 /end PROJECT";
+    EXPECT(!a2l_parse_text(t1, strlen(t1), err, sizeof err) && strstr(err, "缺关键字"), "/begin \"X\" 报错");
+    EXPECT(!a2l_parse_text(t2, strlen(t2), err, sizeof err) && strstr(err, "缺关键字"), "嵌套内 /begin \"..\" 报错");
+}
+
+/* 内存不足：逐个让第 k 次分配失败，必须返回 NULL + “内存不足”，不 abort、不泄漏；最终能成功 */
+static void test_oom(const char* path)
+{
+    char err[256], *buf;
+    FILE* fp = fopen(path, "rb");
+    long n, k, fails = 0, bad = 0;
+    A2lFile* f = NULL;
+    if (!fp) { EXPECT(0, "打开样例"); return; }
+    fseek(fp, 0, SEEK_END); n = ftell(fp); fseek(fp, 0, SEEK_SET);
+    buf = (char*)malloc((size_t)n);
+    if (!buf || fread(buf, 1, (size_t)n, fp) != (size_t)n) { fclose(fp); free(buf); EXPECT(0, "读样例"); return; }
+    fclose(fp);
+    for (k = 0; k < 100000; k++) {
+        a2l_debug_fail_alloc_after(k);
+        f = a2l_parse_text(buf, (size_t)n, err, sizeof err);
+        a2l_debug_fail_alloc_after(-1);
+        if (f) break;
+        fails++;
+        if (!strstr(err, "内存不足")) bad++;
+    }
+    EXPECT(f != NULL && f->nchr == 6 && f->xcp.ntl == 3, "OOM 注入后最终解析成功且结果完整");
+    EXPECT(fails > 500 && bad == 0, "每个分配点失败都返回“内存不足”");
+    printf("  OOM 注入：%ld 个分配点逐一失败均安全返回\n", fails);
+    a2l_free(f);
+    free(buf);
+}
+
 int main(int argc, char** argv)
 {
     char err[256];
@@ -154,6 +192,8 @@ int main(int argc, char** argv)
     test_groups_segments(f);
     a2l_free(f);
     test_errors();
+    test_review_leak();
+    test_oom(argc > 1 ? argv[1] : "tests/sample.a2l");
     printf("a2l_test: %d pass, %d fail\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

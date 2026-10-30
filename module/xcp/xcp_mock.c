@@ -156,7 +156,11 @@ XcpMockResult xcp_mock_input(XcpMock* m, const uint8_t* cmd, int len, uint8_t* r
         r.faulted = 1;
         switch (f->type) {
         case XCP_FAULT_TIMEOUT:
-            if (f->exec) xcp_slave_input(m->s, cmd, len, rsp, rsp_cap);
+            if (f->exec) {
+                uint8_t tmp[XCP_MAX_CTO];
+                xcp_slave_input(m->s, cmd, len, rsp, rsp_cap);
+                while (xcp_slave_pop_rsp(m->s, tmp, (int)sizeof(tmp)) > 0) {}
+            }
             r.len = 0;
             return r;
         case XCP_FAULT_ERROR:
@@ -255,6 +259,11 @@ int xcp_mock_pop(XcpMock* m, uint8_t* dst, int cap)
     }
     m->st.dto_out++;
     return n;
+}
+
+int xcp_mock_pop_rsp(XcpMock* m, uint8_t* dst, int cap)
+{
+    return m ? xcp_slave_pop_rsp(m->s, dst, cap) : 0;
 }
 
 void xcp_mock_stats(const XcpMock* m, XcpMockStats* out)

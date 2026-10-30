@@ -241,9 +241,10 @@ typedef struct A2lFile {
     A2lGroup*          grp;     int ngrp;
     A2lMemSegment*     seg;     int nseg;
     char               err[256];
+    void*              priv;     /* 内部：解析期上下文 */
 } A2lFile;
 
-/* 解析文本（可含 /include？不支持，见 README）。失败返回 NULL，errbuf 写原因。 */
+/* 解析文本（不支持 /include，见 README）。失败（语法错误或内存不足）返回 NULL，errbuf 写原因，不会 abort。 */
 A2lFile* a2l_parse_text(const char* text, size_t len, char* errbuf, int errcap);
 A2lFile* a2l_parse_file(const char* path, char* errbuf, int errcap);
 void     a2l_free(A2lFile* f);
@@ -274,5 +275,8 @@ double      a2l_eval_formula(const char* expr, double x, int* ok);
 
 /* 树：按关键字取子块（第 idx 个），NULL 未找到 */
 const A2lNode* a2l_node_child(const A2lNode* n, const char* kw, int idx);
+
+/* 测试钩子：第 n+1 次内部分配起返回失败（-1 关闭）。全局、非线程安全，仅供单测模拟 OOM。 */
+void a2l_debug_fail_alloc_after(long n);
 
 #endif
