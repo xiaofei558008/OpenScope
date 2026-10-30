@@ -43,3 +43,13 @@ add_test(NAME a2l_test COMMAND a2l_test ${CMAKE_CURRENT_SOURCE_DIR}/../a2l/tests
 # 主机会话层 ↔ mock 从机 TCP 互通（参数：端口 AG motorola；需先启动 xcp_mock_slave）
 add_executable(xcp_interop_test tests/xcp_interop_test.c)
 target_link_libraries(xcp_interop_test xcp_core)
+target_link_libraries(xcp_interop_test winmm)
+add_executable(xcp_interop3_test tests/xcp_interop3_test.c)
+target_link_libraries(xcp_interop3_test xcp_core)
+if(WIN32)
+  target_link_libraries(xcp_interop3_test winmm)
+  # 旧 API 冒烟（迁移后 xcp_master 走 xcp_session）
+  add_executable(xcp_smoke tests/xcp_smoke.c xcp_master.c xcp_slave.c xcp_transport.c xcp_serial.c xcp_tcp.c xcp_can.c)
+  target_link_libraries(xcp_smoke xcp_core winmm)
+  add_test(NAME xcp_smoke COMMAND xcp_smoke)
+endif()
