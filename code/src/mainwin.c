@@ -17,6 +17,7 @@
 #include "theme.h"
 #include "dpi.h"
 #include "osfont.h"
+#include "netbar.h"
 #include "toolicon.h"
 #include "version.h"
 #include "helpwin.h"
@@ -77,6 +78,10 @@ typedef struct {
 #define IDC_BTN_CPU_STEPOUT 2042
 #define IDC_BTN_CPU_STEPOVER 2043
 #define IDC_BTN_BP          2044
+#define IDC_BTN_CPU_RTC     2045 /* UI P1b run-to-cursor (not implemented yet, disabled) */
+#define IDC_BTN_CONN_TOGGLE 2046 /* UI P1b connect/disconnect toggle icon */
+#define IDC_CHIP_PROBE      2047 /* UI P2 session chip */
+#define IDC_CHIP_XCP        2048 /* UI P2 session chip */
 #define IDM_SRCMAP       2031
 #define IDM_BP          2032
 /* 需求 14：网络内联控件（UI整合：并入工具栏首行），2110+ 避开菜单/其它控件 id */
@@ -245,6 +250,9 @@ static const struct { int id; const wchar_t* tip; } g_debug_btns[] = {
     { IDC_BTN_CPU_RHALT, L"复位并停住 (Reset Halt)" }, { IDC_BTN_CPU_STEP, L"单步" },
     { IDC_BTN_CPU_STEPIN, L"步入" }, { IDC_BTN_CPU_STEPOUT, L"步出" },
     { IDC_BTN_CPU_STEPOVER, L"步过" },
+    { IDC_BTN_CPU_RTC, L"Run to cursor (Ctrl+F10, not implemented yet)" },
+    { IDC_BTN_CONN_TOGGLE, L"Connect / Disconnect (Ctrl+Shift+C)" },
+    { IDC_CHIP_PROBE, L"PROBE session" }, { IDC_CHIP_XCP, L"XCP session" },
     { IDC_BTN_BP, L"断点" },
 };
 
@@ -735,10 +743,13 @@ static void refresh_status(void)
         OS_Module* m = NULL; void* ctx = NULL;
         if (os_ws_resolve_mod(os_ws_project_at(i), &m, &ctx) == 0) nconn++;
     }
-    _snwprintf(w, 512, L"WS:%dproj/%don | Probe:%s | %s | Act:%s",
-               os_ws()->project_count, nconn,
-               dn[0] ? dn : L"off", xn, pn[0] ? pn : L"-");
+    _snwprintf(w, 512, L"Probe:%s | %s | %s | Layout:%s | WS:%dproj/%don",
+               dn[0] ? dn : L"off", xn, os_netbar_summary(), pn[0] ? pn : L"default",
+               os_ws()->project_count, nconn);
     set_status(0, w);
+    os_toolicon_set_state(OS_APP_CONNECTED(), g_app.xcp_connected); /* UI P2 chips */
+    { int k; static const int ids[3] = { IDC_BTN_CONN_TOGGLE, IDC_CHIP_PROBE, IDC_CHIP_XCP };
+      for (k = 0; k < 3; k++) { HWND hc = main_ctrl(ids[k]); if (hc) InvalidateRect(hc, NULL, FALSE); } }
     if (ap && ap->elf_path[0])
         set_status(1, ap->elf_path);
     else if (g_app.elf_path[0])
@@ -1410,7 +1421,7 @@ typedef struct BarItem { int id; int fixed_w; int combo; } BarItem;
 static void layout_bar_controls(HWND bar, HWND fallback,
     const BarItem* items, int n)
 {
-    int i, x = OS_DOCKBAR_GRIP + 4;
+    int i, x = OS_DOCKBAR_GRIP + os_px(4);
     RECT br;
     int bar_h = OS_DOCKBAR_THICK;
     if (bar && GetClientRect(bar, &br) && br.bottom > 8) bar_h = br.bottom;
@@ -1423,11 +1434,11 @@ static void layout_bar_controls(HWND bar, HWND fallback,
             ShowWindow(c, SW_SHOW);
         }
         if (items[i].combo) {
-            MoveWindow(c, x, 4, items[i].fixed_w, 120, TRUE);
-            x += items[i].fixed_w + 4;
+            MoveWindow(c, x, os_px(4), os_px(items[i].fixed_w), os_px(120), TRUE);
+            x += os_px(items[i].fixed_w + 4);
         } else if (items[i].fixed_w) {
-            MoveWindow(c, x, (bar_h - 22) / 2, items[i].fixed_w, 22, TRUE);
-            x += items[i].fixed_w + 4;
+            MoveWindow(c, x, (bar_h - os_px(items[i].fixed_w == 28 ? 26 : 22)) / 2, os_px(items[i].fixed_w), os_px(items[i].fixed_w == 28 ? 26 : 22), TRUE);
+            x += os_px(items[i].fixed_w + 4);
         } else {
             wchar_t textw[64]; SIZE sz; HDC hdc; int len; int bw;
             hdc = GetDC(c);
@@ -1437,7 +1448,7 @@ static void layout_bar_controls(HWND bar, HWND fallback,
             GetTextExtentPoint32W(hdc, textw, len, &sz);
             ReleaseDC(c, hdc);
             bw = sz.cx + 14;
-            MoveWindow(c, x, (bar_h - 22) / 2, bw, 22, TRUE);
+            MoveWindow(c, x, (bar_h - os_px(22)) / 2, bw, os_px(22), TRUE);
             ShowWindow(c, SW_SHOW);
             x += bw + 4;
         }
@@ -1452,7 +1463,11 @@ static void layout(void)
     GetClientRect(g_app.hMain, &rc);
     bw = rc.right;
     content = rc;
-    content.bottom -= 22;
+    content.bottom -= os_px(22);
+    if (os_netbar_hwnd()) { /* UI P2: network bar wraps everything (top-most) */
+        MoveWindow(os_netbar_hwnd(), 0, 0, bw, os_netbar_height(), TRUE);
+        content.top += os_netbar_height();
+    }
     os_dockbar_apply_layout(g_app.hMain, &content);
     bh = content.top;
     sw = g_app.tree_w;
@@ -1482,7 +1497,8 @@ static void layout(void)
             { IDC_BTN_CPU_RUN, 28, 0 }, { IDC_BTN_CPU_STOP, 28, 0 },
             { IDC_BTN_CPU_RHALT, 28, 0 }, { IDC_BTN_CPU_STEP, 28, 0 },
             { IDC_BTN_CPU_STEPIN, 28, 0 }, { IDC_BTN_CPU_STEPOUT, 28, 0 },
-            { IDC_BTN_CPU_STEPOVER, 28, 0 }, { IDC_BTN_BP, 28, 0 },
+            { IDC_BTN_CPU_STEPOVER, 28, 0 }, { IDC_BTN_CPU_RTC, 28, 0 }, { IDC_BTN_BP, 28, 0 },
+            { IDC_BTN_CONN_TOGGLE, 28, 0 }, { IDC_CHIP_PROBE, 70, 0 }, { IDC_CHIP_XCP, 60, 0 },
             /* XCP 并行通道放调试栏，避免主工具栏（网络控件已占满）被裁切 */
             { IDC_XCP_TRANSPORT, 72, 1 }, { IDC_XCP_PORT, 72, 0 }, { IDC_XCP_BAUD, 56, 0 },
             { IDC_XCP_SCAN, 0, 0 }, { IDC_XCP_CONNECT, 0, 0 }, { IDC_XCP_DISCONNECT, 0, 0 },
@@ -1584,10 +1600,10 @@ static void layout(void)
         }
     }
 layout_status:
-    MoveWindow(g_app.hStatus, 0, rc.bottom - 22, bw, 22, TRUE);
+    MoveWindow(g_app.hStatus, 0, rc.bottom - os_px(22), bw, os_px(22), TRUE);
     {
-        int cpu_w = 200;
-        parts[0] = 150; parts[1] = 380; parts[2] = 500;
+        int cpu_w = os_px(200);
+        parts[0] = os_px(420); parts[1] = os_px(640); parts[2] = os_px(740);
         parts[3] = (bw > cpu_w + 40) ? (bw - cpu_w) : (bw * 3 / 4);
         parts[4] = -1;
         SendMessageW(g_app.hStatus, SB_SETPARTS, 5, (LPARAM)parts);
@@ -2474,6 +2490,11 @@ void os_mainwin_net_cmd(int action, const char* ip, int port)
         cfg.port = port;
         {
             int rc = g_app.netmod->command(g_app.netmod_ctx, action, &cfg, NULL);
+            { wchar_t peer[128]; /* UI P2 network bar (RTT not in protocol yet -> unknown) */
+              if (action == OS_CMD_NET_START) _snwprintf(peer, 128, L"listening :%d", cfg.port);
+              else _snwprintf(peer, 128, L"%S:%d", cfg.ip, cfg.port);
+              os_netbar_set(rc < 0 ? NB_LOST : NB_OK, action == OS_CMD_NET_START ? L"LOCAL" : L"REMOTE", peer, -1, NULL);
+              refresh_status(); }
             os_log(OS_LOG_INFO, "网络: %s %s:%d rc=%d",
                    action == OS_CMD_NET_START ? "监听" : "连接", cfg.ip, cfg.port, rc);
         }
@@ -2488,6 +2509,7 @@ void os_mainwin_net_cmd(int action, const char* ip, int port)
         os_log(OS_LOG_INFO, "网络: 写变量 %s=%s rc=%d", req.name, req.value, rc);
     } else {
         g_app.netmod->command(g_app.netmod_ctx, action, NULL, NULL);
+        if (action == OS_CMD_NET_STOP) { os_netbar_set(NB_OFF, L"LOCAL", NULL, -1, NULL); refresh_status(); }
         os_log(OS_LOG_INFO, "网络: %s", action == OS_CMD_NET_STOP ? "已停止"
                : action == OS_CMD_NET_SYNC_ELF ? "上传 ELF 变量表"
                : action == OS_CMD_NET_ELF_PULL ? "请求远端 ELF 变量表"
@@ -4917,7 +4939,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             parent = hDbgBar ? hDbgBar : hwnd;
             for (i = 0; i < (int)(sizeof(g_debug_btns) / sizeof(g_debug_btns[0])); i++) {
                 os_toolicon_create_btn(parent, g_debug_btns[i].id,
-                                       6 + i * 30, 3, 28, 26, g_debug_btns[i].tip);
+                                       os_px(6 + i * 30), os_px(3), os_px(28), os_px(26), g_debug_btns[i].tip);
+                if (g_debug_btns[i].id == IDC_BTN_CPU_RTC) EnableWindow(main_ctrl(IDC_BTN_CPU_RTC), FALSE);
             }
         }
         /* 连接配置控件（仿真器/MCU核心/接口/速度/设备/刷新，随工具栏一行布局） */
@@ -5102,6 +5125,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             ListView_InsertColumn(g_app.hLog, 2, &col);
         }
         dock_sys_init();   /* 停靠模式：变量树/源码文件/消息成为一等停靠面板 */
+        os_netbar_create(hwnd); /* UI P2 */
         g_app.hStatus = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE,
                                       0, 0, 0, 0, hwnd, NULL, g_app.hInst, NULL);
         /* F20: 子类化状态栏，整体用主题色自绘（标准 SB_SET*COLOR 消息无效） */
@@ -5661,6 +5685,22 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         switch (LOWORD(wParam)) {
         case IDC_BTN_OPEN: cmd_open_elf(); break;
+        case IDC_BTN_CONN_TOGGLE:
+        case IDC_CHIP_PROBE:
+            SendMessageW(hwnd, WM_COMMAND, IDM_CONN_TOGGLE, 0);
+            break;
+        case IDC_CHIP_XCP:
+            SendMessageW(hwnd, WM_COMMAND, g_app.xcp_connected ? IDC_XCP_DISCONNECT : IDC_XCP_CONNECT, 0);
+            break;
+        case IDC_BTN_CPU_RTC:
+            os_log(OS_LOG_INFO, "Run to cursor: not implemented yet");
+            break;
+        case IDM_BP_TOGGLE: { /* UI P1b: F9 */
+            HWND ap = dock_active_panel();
+            if (!(ap && os_src_is(ap) && os_src_toggle_bp_caret(ap)))
+                SendMessageW(hwnd, WM_COMMAND, IDC_BTN_BP, 0);
+            break;
+        }
         case IDM_CONN_TOGGLE: /* UI P1: single connect/disconnect toggle */
             if (OS_APP_CONNECTED()) cmd_disconnect(); else cmd_connect();
             break;

@@ -943,3 +943,13 @@ int os_src_describe_json(char* out, int cap)
     len += _snprintf(out + len, cap - len, "]}");
     return len;
 }
+
+/* UI P1b: F9 toggles a breakpoint on the caret line of a source window */
+int os_src_toggle_bp_caret(HWND hwnd)
+{
+    OS_SrcWin* s = src_from(hwnd);
+    if (!s || s->caret_line < 0 || s->caret_line >= s->line_count) return 0;
+    src_toggle_bp(s, s->caret_line + 1);
+    InvalidateRect(hwnd, NULL, FALSE);
+    return 1;
+}

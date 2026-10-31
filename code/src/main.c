@@ -509,7 +509,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         /* 需求12：F1 弹出帮助文档；Ctrl+F 快速搜索变量（用户指定，原 Ctrl+H）。
          * 加速键在消息循环层拦截，子控件焦点同样生效；波形窗口的纯 F 键
          * （全局显示）不受影响——FCONTROL 修饰要求按住 Ctrl。 */
-        ACCEL acc[14];
+        ACCEL acc[15];
         HACCEL hAcc;
         acc[0].fVirt = FVIRTKEY;
         acc[0].key = VK_F1;
@@ -537,7 +537,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
         acc[11].fVirt = FVIRTKEY | FSHIFT;         acc[11].key = VK_F11;  acc[11].cmd = 2042; /* Step Out */
         acc[12].fVirt = FVIRTKEY | FCONTROL | FSHIFT; acc[12].key = 'C';  acc[12].cmd = IDM_CONN_TOGGLE;
         acc[13].fVirt = FVIRTKEY | FCONTROL | FSHIFT; acc[13].key = 'P';  acc[13].cmd = IDM_CMD_PALETTE;
-        hAcc = CreateAcceleratorTableW(acc, 14);
+        acc[14].fVirt = FVIRTKEY; acc[14].key = VK_F9; acc[14].cmd = IDM_BP_TOGGLE; /* UI P1b */
+        hAcc = CreateAcceleratorTableW(acc, 15);
         while (GetMessage(&msg, NULL, 0, 0)) {
             /* N3: 就地重命名编辑框的回车/ESC 在分发前拦截（不子类化编辑框） */
             HWND te = os_tab_edit_hwnd();

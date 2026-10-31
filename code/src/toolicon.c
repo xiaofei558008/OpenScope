@@ -19,6 +19,12 @@
 #define IDC_BTN_CPU_STEPOUT  2042
 #define IDC_BTN_CPU_STEPOVER 2043
 #define IDC_BTN_BP           2044
+#define IDC_BTN_CPU_RTC      2045
+#define IDC_BTN_CONN_TOGGLE  2046
+#define IDC_CHIP_PROBE       2047
+#define IDC_CHIP_XCP         2048
+static int g_probe_on, g_xcp_on;
+void os_toolicon_set_state(int probe_on, int xcp_on) { g_probe_on = probe_on; g_xcp_on = xcp_on; }
 
 int os_toolicon_from_ctrl(int ctrl_id)
 {
@@ -31,6 +37,8 @@ int os_toolicon_from_ctrl(int ctrl_id)
     case IDC_BTN_CPU_STEPOUT: return TI_STEP_OUT;
     case IDC_BTN_CPU_STEPOVER: return TI_STEP_OVER;
     case IDC_BTN_BP: return TI_BP;
+    case IDC_BTN_CPU_RTC: return TI_RUN_TO_CURSOR;
+    case IDC_BTN_CONN_TOGGLE: return g_probe_on ? TI_DISCONNECT : TI_CONNECT;
     default: return -1;
     }
 }
@@ -305,6 +313,25 @@ int os_toolicon_draw(const DRAWITEMSTRUCT* dis)
     COLORREF fg, bg;
     int disabled, hot, pushed;
     if (!dis || dis->CtlType != ODT_BUTTON) return 0;
+    if (dis->CtlID == IDC_CHIP_PROBE || dis->CtlID == IDC_CHIP_XCP) { /* UI P2 session chips */
+        int on = dis->CtlID == IDC_CHIP_PROBE ? g_probe_on : g_xcp_on;
+        RECT r = dis->rcItem, p;
+        HBRUSH bb = CreateSolidBrush(os_theme(TH_CMDBAR));
+        HBRUSH cb = CreateSolidBrush(on ? (dis->CtlID == IDC_CHIP_XCP ? RGB(0x12, 0x2d, 0x45) : RGB(0x12, 0x33, 0x1d)) : os_theme(TH_TITLE));
+        HPEN pen = CreatePen(PS_SOLID, 1, on ? (dis->CtlID == IDC_CHIP_XCP ? os_theme(TH_XCP) : os_theme(TH_OK)) : os_theme(TH_DIMTEXT));
+        HGDIOBJ ob, op;
+        FillRect(dis->hDC, &r, bb);
+        p = r; InflateRect(&p, -os_px(2), -os_px(3));
+        ob = SelectObject(dis->hDC, cb); op = SelectObject(dis->hDC, pen);
+        RoundRect(dis->hDC, p.left, p.top, p.right, p.bottom, os_px(10), os_px(10));
+        SelectObject(dis->hDC, ob); SelectObject(dis->hDC, op);
+        SetBkMode(dis->hDC, TRANSPARENT);
+        SetTextColor(dis->hDC, on ? (dis->CtlID == IDC_CHIP_XCP ? os_theme(TH_XCP) : os_theme(TH_OK)) : os_theme(TH_DIMTEXT));
+        DrawTextW(dis->hDC, dis->CtlID == IDC_CHIP_PROBE ? (on ? L"PROBE \x25CF" : L"PROBE \x25CB") : (on ? L"XCP \x25CF" : L"XCP \x25CB"),
+                  -1, &p, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        DeleteObject(bb); DeleteObject(cb); DeleteObject(pen);
+        return 1;
+    }
     icon = os_toolicon_from_ctrl((int)dis->CtlID);
     if (icon < 0) return 0;
     rc = dis->rcItem;

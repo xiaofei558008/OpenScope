@@ -4,6 +4,7 @@
  * 格式：UTF-8 文本，windows 逐条 [win]，vars 用 '|' 分隔（变量完整叶名）。
  * 关闭时自动保存到默认路径；启动时自动恢复；菜单“保存布局为.../加载布局...”可分享。
  */
+#include "workspace.h"
 #include "app.h"
 #include "layout.h"
 #include "chartwin.h"
@@ -222,7 +223,21 @@ static void default_path(wchar_t* out, int cap, int for_save)
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH) > 0) {
         _snwprintf(out, cap, L"%s\\OpenScope", dir);
         CreateDirectoryW(out, NULL);
-        _snwprintf(out, cap, L"%s\\layout.ini", out);
+        { /* UI P2: per-project layout (layout_<project>.ini); load falls back to layout.ini */
+            OS_Project* pr = os_ws_active();
+            wchar_t base[MAX_PATH], pn[64];
+            int k;
+            _snwprintf(base, MAX_PATH, L"%s", out);
+            if (pr && pr->name[0]) {
+                MultiByteToWideChar(CP_UTF8, 0, pr->name, -1, pn, 64);
+                pn[63] = 0;
+                for (k = 0; pn[k]; k++)
+                    if (wcschr(L"\\/:*?\"<>| ", pn[k])) pn[k] = L'_';
+                _snwprintf(out, cap, L"%s\\layout_%s.ini", base, pn);
+                if (for_save || _waccess(out, 0) == 0) return;
+            }
+            _snwprintf(out, cap, L"%s\\layout.ini", base);
+        }
         return;
     }
     if (n && (slash = wcsrchr(exe, L'\\'))) {

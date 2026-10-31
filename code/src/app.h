@@ -95,6 +95,7 @@ typedef struct {
 #define IDM_DOCK_SPLIT_H 2732 /* 停靠：Ctrl+Shift+O 上下拆分当前 tab */
 #define IDM_DOCK_SPLIT_V 2733 /* 停靠：Ctrl+Shift+E 左右拆分当前 tab */
 #define IDM_CONN_TOGGLE 2740 /* UI P1: Ctrl+Shift+C connect/disconnect toggle */
+#define IDM_BP_TOGGLE   2742 /* UI P1b: F9 toggle breakpoint at source caret */
 #define IDM_CMD_PALETTE 2741 /* UI P1: Ctrl+Shift+P command palette (reserved, P2) */
 
 typedef enum {

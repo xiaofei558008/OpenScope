@@ -36,5 +36,7 @@ HWND os_toolicon_create_btn(HWND parent, int ctrl_id, int x, int y, int w, int h
 int  os_toolicon_paint(HDC hdc, RECT rc, int icon, int state);
 /* spec color of an icon (normal state) */
 COLORREF os_toolicon_color(int icon);
+/* UI P2: session state for connect toggle icon and PROBE / XCP chips */
+void os_toolicon_set_state(int probe_on, int xcp_on);
 
 #endif

@@ -24,6 +24,7 @@ int  os_src_get_state(HWND hwnd, wchar_t* path, int cap, int* top1);
 int  os_src_restore(HWND hwnd, const wchar_t* path, int top1);
 int  os_src_describe_json(char* out, int cap);
 /* 将 PC 高亮到指定文件行（1-based）；line<=0 清除全部 PC 高亮 */
+int  os_src_toggle_bp_caret(HWND hwnd); /* UI P1b: F9; 1 = toggled */
 void os_src_set_pc_line(const wchar_t* path, int line1);
 
 #ifdef __cplusplus

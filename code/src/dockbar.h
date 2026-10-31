@@ -23,7 +23,8 @@ typedef enum OS_DockSide {
 #define OS_DOCKBAR_COUNT 2
 
 #define OS_DOCKBAR_GRIP  14   /* 抓取条像素 */
-#define OS_DOCKBAR_THICK 34   /* 水平停靠高度 / 垂直停靠宽度 */
+#include "dpi.h"
+#define OS_DOCKBAR_THICK os_px(34)   /* 水平停靠高度 / 垂直停靠宽度 */
 
 typedef struct OS_DockBar {
     int         id;
