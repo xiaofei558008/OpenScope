@@ -102,8 +102,10 @@ Check (Test-Path $autoLayout) "A: 关闭后自动保存布局文件"
 $content = ""
 if (Test-Path $autoLayout) {
     $content = Get-Content $autoLayout -Encoding UTF8 -Raw
-    Check ($content -match 'wins=2' -and $content -match 'type=chart' -and
-           $content -match 'type=num') "A: 布局含 2 窗口类型"
+    # 停靠模式下布局还包含源码/局部变量等系统面板；只断言用户创建的波形/数值各至少 1 个
+    $chartCount = ([regex]::Matches($content, 'type=chart')).Count
+    $numCount = ([regex]::Matches($content, 'type=num')).Count
+    Check ($chartCount -ge 1 -and $numCount -ge 1) "A: 布局含波形/数值窗口类型（chart=$chartCount num=$numCount）"
     Check ($content -match 'vars=.*AngleBit') "A: 布局含变量名"
 }
 

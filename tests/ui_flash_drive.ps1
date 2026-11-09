@@ -73,7 +73,12 @@ try {
     }
     Check ($dlg -ne [IntPtr]::Zero) "OSDlgFlash open"
     if ($dlg -ne [IntPtr]::Zero) {
-        $ids = Get-ChildIds $dlg
+        $ids = @()
+        for ($i = 0; $i -lt 40; $i++) {
+            $ids = Get-ChildIds $dlg
+            if ($ids -contains 2908 -and $ids -contains 2909) { break }
+            Start-Sleep -Milliseconds 80
+        }
         Check ($ids -contains 2901) "path edit"
         Check ($ids -contains 2902) "browse button"
         Check ($ids -contains 2908) "download button"

@@ -332,6 +332,61 @@ int os_vartree_synths_apply(void)
     return n;
 }
 
+/* 每设备 MAP 符号：按 (project_id, name) 去重；MAP 无类型信息，按无符号整型处理。
+ * 地址/大小可在重新加载 MAP 时更新（窗口按 name+project 重绑）。 */
+int os_vartree_add_map_symbol(int project_id, const char* name,
+                              uint64_t addr, uint32_t size)
+{
+    int i;
+    OS_Leaf* L;
+    if (!name || !name[0] || project_id < 0) return 0;
+    for (i = 0; i < g_app.leaf_count; i++) {
+        L = &g_app.leaves[i];
+        if (L->project_id == project_id && !strcmp(L->name, name)) {
+            /* ELF/A2L 已定义同名变量：它们带类型信息，优先于 MAP，不覆盖地址 */
+            if (!L->is_map) return 0;
+            if (L->address == addr && L->size == size) return 0;
+            L->address = addr;
+            L->size = size ? size : 4;
+            return 2;
+        }
+    }
+    if (g_app.leaf_count >= OS_MAX_LEAVES) return 0;
+    L = &g_app.leaves[g_app.leaf_count];
+    memset(L, 0, sizeof(*L));
+    L->id = g_app.leaf_count;
+    _snprintf(L->name, sizeof(L->name), "%s", name);
+    L->address = addr;
+    L->size = size ? (size > 64 ? 64 : size) : 4;
+    L->kind = OS_TYPE_UINT;
+    L->is_signed = 0;
+    L->is_map = 1;
+    L->project_id = project_id;
+    g_app.leaf_count++;
+    return 1;
+}
+
+int os_vartree_remove_project(int project_id, int only_map)
+{
+    int i, k = 0, removed = 0, watched = 0;
+    for (i = 0; i < g_app.leaf_count; i++) {
+        OS_Leaf* L = &g_app.leaves[i];
+        int drop = (L->project_id == project_id) && (!only_map || L->is_map);
+        if (drop) {
+            removed++;
+            continue;
+        }
+        if (k != i) g_app.leaves[k] = *L;
+        g_app.leaves[k].id = k;
+        if (g_app.leaves[k].watched) watched++;
+        k++;
+    }
+    g_app.leaf_count = k;
+    g_app.watch_count = watched;
+    if (removed > 0 && g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    return removed;
+}
+
 int os_vartree_missing_count(void) { return g_missing_count; }
 const char* os_vartree_missing_at(int i)
 {
@@ -341,6 +396,29 @@ const char* os_vartree_missing_at(int i)
 
 int os_vartree_find_by_name(const char* name)
 {
+    const char* sep;
+    if (!name) return -1;
+    /* 支持 "设备名::变量" / "设备名 #id::变量"（混设备时明确指定来源） */
+    sep = strstr(name, "::");
+    if (sep) {
+        char prefix[128];
+        int n = (int)(sep - name);
+        int i;
+        if (n > 0 && n < (int)sizeof(prefix)) {
+            memcpy(prefix, name, (size_t)n);
+            prefix[n] = 0;
+            for (i = 0; i < os_ws()->project_count; i++) {
+                OS_Project* p = os_ws_project_at(i);
+                char with_id[160];
+                if (!p) continue;
+                _snprintf(with_id, sizeof(with_id), "%s #%d", p->name, p->id);
+                if (!strcmp(prefix, p->name) || !strcmp(prefix, with_id)) {
+                    int id = os_vartree_find_by_name_proj(sep + 2, p->id);
+                    if (id >= 0) return id;
+                }
+            }
+        }
+    }
     return os_vartree_find_by_name_proj(name, -1);
 }
 
@@ -361,6 +439,8 @@ int os_vartree_merge_elf(int project_id, const wchar_t* path_w)
     char utf8[MAX_PATH], err[256];
     OS_ElfFile* elf;
     OS_Leaf* keep = NULL;
+    char (*old_watch)[256] = NULL;
+    int old_n = 0;
     int keep_n = 0, i, n;
     if (!pr || !path_w || !path_w[0]) return -1;
     /* 采集启停由调用方（load_elf_path 等）负责，避免单元测试链接 datasrv */
@@ -370,12 +450,24 @@ int os_vartree_merge_elf(int project_id, const wchar_t* path_w)
         os_log(OS_LOG_WARN, "ELF 合并失败 (project=%d): %s", project_id, err);
         return -1;
     }
-    /* 保留其它 Project 的叶 + 本 Project 的 A2L/synth */
+    /* 记录本设备旧观测名：重建 ELF 叶后按名恢复（否则重新编译后观测全丢） */
+    if (g_app.leaf_count > 0) {
+        old_watch = (char (*)[256])malloc(sizeof(*old_watch) * (size_t)g_app.leaf_count);
+        if (old_watch) {
+            for (i = 0; i < g_app.leaf_count; i++) {
+                if (g_app.leaves[i].project_id == project_id && g_app.leaves[i].watched) {
+                    _snprintf(old_watch[old_n], 256, "%s", g_app.leaves[i].name);
+                    old_n++;
+                }
+            }
+        }
+    }
+    /* 保留其它 Project 的叶 + 本 Project 的 A2L/synth/map */
     keep = (OS_Leaf*)malloc(sizeof(OS_Leaf) * (size_t)(g_app.leaf_count + 1));
-    if (!keep) { os_elf_close(elf); return -1; }
+    if (!keep) { free(old_watch); os_elf_close(elf); return -1; }
     for (i = 0; i < g_app.leaf_count; i++) {
         OS_Leaf* L = &g_app.leaves[i];
-        if (L->project_id != project_id || L->from_a2l || L->is_synth)
+        if (L->project_id != project_id || L->from_a2l || L->is_synth || L->is_map)
             keep[keep_n++] = *L;
     }
     os_vartree_clear();
@@ -399,6 +491,24 @@ int os_vartree_merge_elf(int project_id, const wchar_t* path_w)
                      OS_TYPE_OTHER, 0, 0, 0, 0, 0, NULL);
     }
     g_flatten_pid = -1;
+    /* 按名恢复旧观测；缺失变量记入 g_missing（上层可弹窗/忽略） */
+    g_missing_count = 0;
+    for (i = 0; i < old_n; i++) {
+        int j, found = 0;
+        for (j = 0; j < g_app.leaf_count; j++) {
+            OS_Leaf* L = &g_app.leaves[j];
+            if (L->project_id == project_id && !strcmp(L->name, old_watch[i])) {
+                if (!L->watched) { L->watched = 1; g_app.watch_count++; }
+                found = 1;
+                break;
+            }
+        }
+        if (!found && g_missing_count < 64)
+            _snprintf(g_missing[g_missing_count++], 256, "%s", old_watch[i]);
+    }
+    free(old_watch);
+    os_log(OS_LOG_INFO, "ELF 变量表重建: %d 个叶子（原观测 %d 个，缺失 %d 个）",
+           g_app.leaf_count, old_n, g_missing_count);
     if (pr->elf && pr->elf != g_app.elf) os_elf_close(pr->elf);
     pr->elf = elf;
     _snwprintf(pr->elf_path, MAX_PATH, L"%s", path_w);
@@ -497,13 +607,40 @@ int os_vartree_select_leaf(HWND hTree, const wchar_t* leaf_name)
     return -1;
 }
 
+static int str_contains_ci(const char* hay, const char* needle)
+{
+    size_t nl;
+    if (!hay || !needle) return 0;
+    nl = strlen(needle);
+    if (!nl) return 1;
+    for (; *hay; hay++) {
+        size_t i;
+        for (i = 0; i < nl; i++) {
+            char a = hay[i], b = needle[i];
+            if (!a) return 0;
+            if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+            if (a != b) break;
+        }
+        if (i == nl) return 1;
+    }
+    return 0;
+}
+
 int os_vartree_search(const char* needle, int max, int* out_ids)
 {
     int i, n = 0;
-    if (!needle || !*needle || max <= 0) return 0;
+    if (!needle || !*needle || max <= 0 || !out_ids) return 0;
     for (i = 0; i < g_app.leaf_count && n < max; i++) {
-        if (_strnicmp(g_app.leaves[i].name, needle, strlen(needle)) == 0 ||
-            strstr(g_app.leaves[i].name, needle) != NULL) {
+        char label[400];
+        os_ws_leaf_label(&g_app.leaves[i], label, sizeof(label));
+        /* 变量名 + 设备前缀（Device::var / [J-Link] Device::var）都参与模糊匹配 */
+        if (str_contains_ci(g_app.leaves[i].name, needle) ||
+            str_contains_ci(label, needle) ||
+            str_contains_ci(os_ws_dev_kind_name(os_ws_project(g_app.leaves[i].project_id)
+                                                    ? os_ws_project(g_app.leaves[i].project_id)->dev_kind
+                                                    : OS_DEVK_UNKNOWN),
+                            needle)) {
             out_ids[n++] = i;
         }
     }
@@ -614,7 +751,7 @@ static void tree_add_leaf(HWND tree, HTREEITEM parent, const OS_Leaf* L)
     if (pr) {
         wchar_t pn[64];
         os_utf8_to_wide_buf(pr->name, pn, 64);
-        _snwprintf(wproj, 80, L"[%s] ", pn);
+        _snwprintf(wproj, 80, L"[%s #%d] ", pn, pr->id);
     }
     _snwprintf(wfull, 480, L"%s%s  @0x%llX%s",
                wproj, wname, (unsigned long long)L->address,
@@ -719,30 +856,64 @@ static void fill_elf_under(HWND hTree, HTREEITEM parent, OS_ElfFile* elf)
     }
 }
 
+LPARAM os_vartree_device_lparam(int project_id)
+{
+    return (LPARAM)(OS_TREE_LP_DEVICE_BASE - project_id);
+}
+
+int os_vartree_lparam_project(LPARAM lp)
+{
+    if (lp <= OS_TREE_LP_DEVICE_BASE)
+        return (int)(OS_TREE_LP_DEVICE_BASE - lp);
+    return -1;
+}
+
+/* 设备根节点显示：类型 + 名称 + 连接状态 + 关键配置摘要 */
+static void device_root_text(const OS_Project* pr, int active, wchar_t* out, int cap)
+{
+    wchar_t pn[80];
+    const char* kind = os_ws_dev_kind_name(pr->dev_kind);
+    wchar_t wk[32];
+    wchar_t detail[160];
+    os_utf8_to_wide_buf(pr->name, pn, 80);
+    os_utf8_to_wide_buf(kind, wk, 32);
+    detail[0] = 0;
+    if (pr->kind == OS_PROJ_PROBE) {
+        wchar_t wser[80];
+        os_utf8_to_wide_buf(pr->serial, wser, 80);
+        _snwprintf(detail, 160, L"  %s %d kHz%s%s",
+                   pr->iface ? L"JTAG" : L"SWD", pr->speed_khz,
+                   wser[0] ? L"  SN:" : L"", wser[0] ? wser : L"");
+    } else if (pr->kind == OS_PROJ_XCP) {
+        wchar_t wp[80];
+        os_utf8_to_wide_buf(pr->xcp_port, wp, 80);
+        _snwprintf(detail, 160, L"  %hs:%ls", pr->xcp_transport, wp);
+    } else if (pr->kind == OS_PROJ_NET) {
+        wchar_t wip[80];
+        os_utf8_to_wide_buf(pr->net_ip, wip, 80);
+        _snwprintf(detail, 160, L"  %s %ls:%d",
+                   pr->net_mode ? L"监听" : L"连接", wip, pr->net_port);
+    }
+    _snwprintf(out, cap, L"%s[%ls] %ls #%d%s%ls",
+               active ? L"● " : L"",
+               wk, pn, pr->id, pr->connected ? L"  [已连接]" : L"", detail);
+}
+
 void os_vartree_fill_tree(HWND hTree)
 {
     int pi, i;
     g_tree_filling = 1;
     TreeView_DeleteAllItems(hTree);
-    /* 按 Project 分组；无 Project 时退回全局 ELF */
+    /* 按设备/Project 分组；无 Project 时退回全局 ELF */
     if (os_ws()->project_count > 0) {
         for (pi = 0; pi < os_ws()->project_count; pi++) {
             OS_Project* pr = os_ws_project_at(pi);
-            wchar_t wroot[160], pn[64];
+            wchar_t wroot[420];
             HTREEITEM root;
             OS_ElfFile* elf;
-            char kind8[16];
             if (!pr) continue;
-            os_utf8_to_wide_buf(pr->name, pn, 64);
-            _snprintf(kind8, sizeof(kind8), "%s", pr->kind == OS_PROJ_XCP ? "XCP" : "Probe");
-            {
-                wchar_t wk[16];
-                os_utf8_to_wide_buf(kind8, wk, 16);
-                _snwprintf(wroot, 160, L"%s%s (%s)%s",
-                           (pi == os_ws()->active) ? L"● " : L"",
-                           pn, wk, pr->connected ? L" [已连接]" : L"");
-            }
-            root = add_node(hTree, NULL, wroot, (LPARAM)-1, 0, 0);
+            device_root_text(pr, pi == os_ws()->active, wroot, 420);
+            root = add_node(hTree, NULL, wroot, os_vartree_device_lparam(pr->id), 0, 0);
             elf = pr->elf ? pr->elf : ((os_ws_active_id() == pr->id) ? g_app.elf : NULL);
             g_fill_pid = pr->id;
             fill_elf_under(hTree, root, elf);
@@ -751,6 +922,7 @@ void os_vartree_fill_tree(HWND hTree)
                 OS_Leaf* L = &g_app.leaves[i];
                 if (L->project_id != pr->id) continue;
                 if (L->is_synth) { tree_add_leaf(hTree, root, L); continue; }
+                if (L->is_map) { tree_add_leaf(hTree, root, L); continue; }
                 if (L->from_a2l) {
                     int in_elf = 0, j, nv;
                     if (elf) {

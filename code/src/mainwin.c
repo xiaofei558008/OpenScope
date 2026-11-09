@@ -71,6 +71,7 @@ typedef struct {
 #define IDC_BTN_CPU_STOP 2018
 #define IDC_BTN_CPU_RHALT 2019
 #define IDC_BTN_CPU_STEP 2020
+#define IDC_BTN_ADD_DEV     2014 /* 左树设备列表：添加设备（与空白处右键同源） */
 #define IDC_BTN_CPU_STEPIN  2041
 #define IDC_BTN_CPU_STEPOUT 2042
 #define IDC_BTN_CPU_STEPOVER 2043
@@ -127,6 +128,56 @@ typedef struct {
 #define IDM_TREE_RELOAD  2304
 #define IDM_TREE_ADD_CHART 2305
 #define IDM_TREE_ADD_NUM   2306
+
+/* 设备列表（左树设备节点）：空白处右键添加 / 设备节点右键配置 */
+#define IDM_DEV_ADD_JLINK    2920
+#define IDM_DEV_ADD_STLINK   2921
+#define IDM_DEV_ADD_DAS      2922
+#define IDM_DEV_ADD_XCP      2923
+#define IDM_DEV_ADD_NET      2924
+#define IDM_DEV_CFG          2930
+#define IDM_DEV_CONNECT      2931
+#define IDM_DEV_DISCONNECT   2932
+#define IDM_DEV_ATTACH       2933
+#define IDM_DEV_LOAD_ELF     2934
+#define IDM_DEV_LOAD_A2L     2935
+#define IDM_DEV_LOAD_MAP     2936
+#define IDM_DEV_RENAME       2937
+#define IDM_DEV_DELETE       2938
+#define IDM_DEV_SET_ACTIVE   2939
+#define IDM_DEV_REFRESH      2940
+
+/* 设备配置对话框（OSDlgDevCfg） */
+#define IDD_DEVCFG_NAME          2960
+#define IDD_DEVCFG_ELF           2961
+#define IDD_DEVCFG_ELF_BROWSE    2962
+#define IDD_DEVCFG_A2L           2963
+#define IDD_DEVCFG_A2L_BROWSE    2964
+#define IDD_DEVCFG_MAP           2965
+#define IDD_DEVCFG_MAP_BROWSE    2966
+#define IDD_DEVCFG_IFACE         2967
+#define IDD_DEVCFG_SPEED         2968
+#define IDD_DEVCFG_DEVICE        2969
+#define IDD_DEVCFG_PROBE         2970
+#define IDD_DEVCFG_REFRESH       2971
+#define IDD_DEVCFG_ATTACH        2972
+#define IDD_DEVCFG_UNDERRESET    2973
+#define IDD_DEVCFG_XCP_TRANSPORT 2974
+#define IDD_DEVCFG_XCP_PORT      2975
+#define IDD_DEVCFG_XCP_BAUD      2976
+#define IDD_DEVCFG_XCP_SCAN      2977
+#define IDD_DEVCFG_NET_MODE      2978
+#define IDD_DEVCFG_NET_IP        2979
+#define IDD_DEVCFG_NET_PORT      2980
+#define IDD_DEVCFG_CONNECT       2981
+#define IDD_DEVCFG_DISCONNECT    2982
+#define IDD_DEVCFG_OK            2983
+#define IDD_DEVCFG_CANCEL        2984
+#define IDD_DEVCFG_DELETE        2985
+#define IDD_DEVCFG_NET_UPELF     2986
+#define IDD_DEVCFG_NET_DOWNELF   2987
+#define IDD_DEVCFG_STATUS        2988
+#define IDD_DEVCFG_ELF_LOAD      2989
 #define IDM_TAB_CLOSE      2501
 #define IDM_TAB_RENAME     2502
 #define IDM_TAB_ADD_CHART  2503 /* N11: 在当前 tab 添加波形窗口 */
@@ -228,14 +279,13 @@ static int g_modwin_menu_count;
 
 /* 工具栏按钮（菜单栏正下方一行） */
 static const struct { int id; const wchar_t* text; } g_tool_btns[] = {
+    { IDC_BTN_ADD_DEV, L"添加设备" },
     { IDC_BTN_OPEN, L"打开ELF" }, { IDC_BTN_CONNECT, L"连接" },
     { IDC_BTN_ATTACH, L"Attach" },
     { IDC_BTN_DISCON, L"断开" }, { IDC_BTN_START, L"开始采集" },
     { IDC_BTN_STOP, L"停止采集" }, { IDC_BTN_LOGSTART, L"录制" },
     { IDC_BTN_FLASH, L"烧录" },
     { IDC_BTN_REPLAY, L"离线回放" }, { IDC_BTN_REPLAYSTOP, L"停止回放" },
-    { IDD_NET_LISTEN, L"监听" }, { IDD_NET_UPELF, L"上传ELF" },
-    { IDD_NET_DOWNELF, L"下载ELF" },
 };
 
 static const struct { int id; const wchar_t* tip; } g_debug_btns[] = {
@@ -261,6 +311,25 @@ static HWND main_ctrl(int id)
         if (bars[i] && (c = GetDlgItem(bars[i], id)) != NULL) return c;
     }
     return GetDlgItem(g_app.hMain, id);
+}
+
+/* 设备配置已移入左树设备节点右键菜单：旧工具栏控件保留句柄（兼容既有自动化脚本），
+ * 但不再显示，避免命令栏拥挤。 */
+static void hide_legacy_cfg_controls(void)
+{
+    static const int ids[] = {
+        IDC_CFG_DRIVER, IDC_CFG_DEVICE, IDC_CFG_IFACE, IDC_CFG_SPEED,
+        IDC_CFG_EMU, IDC_CFG_REFRESH,
+        IDD_NET_IP, IDD_NET_PORT, IDD_NET_LISTEN, IDD_NET_CONNECT,
+        IDD_NET_UPELF, IDD_NET_DOWNELF,
+        IDC_XCP_TRANSPORT, IDC_XCP_PORT, IDC_XCP_BAUD,
+        IDC_XCP_SCAN, IDC_XCP_CONNECT, IDC_XCP_DISCONNECT
+    };
+    int i;
+    for (i = 0; i < (int)(sizeof(ids) / sizeof(ids[0])); i++) {
+        HWND h = main_ctrl(ids[i]);
+        if (h) ShowWindow(h, SW_HIDE);
+    }
 }
 
 
@@ -631,14 +700,17 @@ void os_mainwin_update_buttons(void)
     }
     {
         OS_Project* ap = os_ws_active();
-        int probe_ok = (ap && ap->kind == OS_PROJ_PROBE && conn);
+        int ap_net = (ap && ap->kind == OS_PROJ_NET);
+        int ap_xcp = (ap && ap->kind == OS_PROJ_XCP);
+        int ap_probe = (!ap || ap->kind == OS_PROJ_PROBE);
+        int probe_ok = (ap_probe && conn);
         int any = os_ds_any_connected();
         int connecting = os_mainwin_connecting();   /* 后台连接中（UI 或 AI 发起）：连接/Attach 置灰，断开 = 取消 */
-        ENB(IDC_BTN_CONNECT, hasDriver && !conn && !replay && !connecting &&
-            (!ap || ap->kind == OS_PROJ_PROBE));
-        ENB(IDC_BTN_ATTACH, hasDriver && !conn && !replay && !connecting &&
-            (!ap || ap->kind == OS_PROJ_PROBE));
-        ENB(IDC_BTN_DISCON, conn || connecting || (ap && ap->kind == OS_PROJ_XCP && g_app.xcp_connected));
+        ENB(IDC_BTN_CONNECT, !replay && !connecting &&
+            ((ap_probe && hasDriver && !conn) || ap_net || (ap_xcp && !g_app.xcp_connected)));
+        ENB(IDC_BTN_ATTACH, ap_probe && hasDriver && !conn && !replay && !connecting);
+        ENB(IDC_BTN_DISCON, conn || connecting || ap_net ||
+            (ap_xcp && g_app.xcp_connected));
         int stepping = g_step_job != NULL;     /* 后台 StepOut 中：只留 Stop（= 取消）/ 断开 */
         ENB(IDC_CFG_DRIVER, !connecting && !stepping);  /* 连接/步出中不可切驱动/刷新 */
         ENB(IDC_CFG_REFRESH, !connecting && !stepping && !g_app.net_mode);
@@ -651,8 +723,8 @@ void os_mainwin_update_buttons(void)
         ENB(IDC_BTN_CPU_STEPOUT, probe_ok && !replay && !stepping);
         ENB(IDC_BTN_CPU_STEPOVER, probe_ok && !replay && !stepping);
         ENB(IDC_BTN_BP, probe_ok && !replay && !stepping);
-        ENB(IDC_BTN_START, any && g_app.watch_count > 0 && !running && !replay);
-        ENB(IDC_BTN_STOP, running);
+        ENB(IDC_BTN_START, (any || ap_net) && g_app.watch_count > 0 && !running && !replay);
+        ENB(IDC_BTN_STOP, running || ap_net);
         ENB(IDC_BTN_LOGSTART, !replay);
         ENB(IDC_BTN_FLASH, probe_ok && !replay && !stepping);
         ENB(IDC_BTN_REPLAY, !running && !replay);
@@ -662,26 +734,26 @@ void os_mainwin_update_buttons(void)
 #undef ENB
 }
 
-/* 工具栏 → 活动 Project 连接配置 */
+/* 旧工具栏控件 → 活动 Project 连接配置（兼容既有自动化脚本：
+ * 设备配置对话框已是权威入口，这里只合并“速度/接口”这类测试会直接写的值；
+ * 器件型号/序列号由设备自身维护，避免隐藏控件默认值覆盖 DAS/自定义器件）。 */
 static void proj_cfg_from_toolbar(OS_Project* pr)
 {
-    LRESULT ifi, emu, dci;
+    LRESULT ifi, emu;
     wchar_t sbuf[64];
-    char sb8[64], dev8[128];
+    char sb8[64];
+    int speed;
     if (!pr || pr->kind != OS_PROJ_PROBE) return;
     ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
-    pr->iface = (ifi == 1) ? 1 : 0;
+    if (ifi == 0 || ifi == 1) pr->iface = (ifi == 1) ? 1 : 0;
     SendMessageW(main_ctrl(IDC_CFG_SPEED), WM_GETTEXT, 64, (LPARAM)sbuf);
     os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
-    pr->speed_khz = atoi(sb8);
-    if (pr->speed_khz < 0) pr->speed_khz = 0;
+    speed = atoi(sb8);
+    if (speed != pr->speed_khz && (speed > 0 || !strstr(sb8, "自动")))
+        pr->speed_khz = speed < 0 ? 0 : speed;
     emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
-    pr->probe_index = (emu == CB_ERR) ? -1 : (int)emu;
-    dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
-    if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
-        os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
-        _snprintf(pr->device, sizeof(pr->device), "%s", dev8);
-    }
+    if (emu != CB_ERR && pr->serial[0] == 0 && pr->probe_index < 0)
+        pr->probe_index = (int)emu;
     pr->driver_index = os_modmgr_driver_index();
 }
 
@@ -1465,25 +1537,21 @@ static void layout(void)
     {
         HWND hMainBar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
         HWND hDbgBar = os_dockbar_hwnd(OS_DOCKBAR_DEBUG);
+        /* 设备连接配置全部移入左树设备节点的右键“设备配置…”对话框；
+         * 命令栏只保留全局动作，避免一行塞满仿真器/速度/网络/XCP 控件。 */
         static const BarItem main_items[] = {
+            { IDC_BTN_ADD_DEV, 0, 0 },
             { IDC_BTN_OPEN, 0, 0 }, { IDC_BTN_CONNECT, 0, 0 }, { IDC_BTN_ATTACH, 0, 0 },
             { IDC_BTN_DISCON, 0, 0 },
             { IDC_BTN_START, 0, 0 }, { IDC_BTN_STOP, 0, 0 }, { IDC_BTN_LOGSTART, 0, 0 },
             { IDC_BTN_FLASH, 0, 0 },
             { IDC_BTN_REPLAY, 0, 0 }, { IDC_BTN_REPLAYSTOP, 0, 0 },
-            { IDC_CFG_DRIVER, 100, 1 }, { IDC_CFG_DEVICE, 118, 1 }, { IDC_CFG_IFACE, 56, 1 },
-            { IDC_CFG_SPEED, 80, 1 }, { IDC_CFG_EMU, 170, 1 }, { IDC_CFG_REFRESH, 48, 0 },
-            { IDD_NET_IP, 96, 0 }, { IDD_NET_PORT, 44, 0 },
-            { IDD_NET_LISTEN, 0, 0 }, { IDD_NET_CONNECT, 0, 0 }, { IDD_NET_UPELF, 0, 0 }, { IDD_NET_DOWNELF, 0, 0 },
         };
         static const BarItem dbg_items[] = {
             { IDC_BTN_CPU_RUN, 28, 0 }, { IDC_BTN_CPU_STOP, 28, 0 },
             { IDC_BTN_CPU_RHALT, 28, 0 }, { IDC_BTN_CPU_STEP, 28, 0 },
             { IDC_BTN_CPU_STEPIN, 28, 0 }, { IDC_BTN_CPU_STEPOUT, 28, 0 },
             { IDC_BTN_CPU_STEPOVER, 28, 0 }, { IDC_BTN_BP, 28, 0 },
-            /* XCP 并行通道放调试栏，避免主工具栏（网络控件已占满）被裁切 */
-            { IDC_XCP_TRANSPORT, 72, 1 }, { IDC_XCP_PORT, 72, 0 }, { IDC_XCP_BAUD, 56, 0 },
-            { IDC_XCP_SCAN, 0, 0 }, { IDC_XCP_CONNECT, 0, 0 }, { IDC_XCP_DISCONNECT, 0, 0 },
         };
         if (hMainBar) layout_bar_controls(hMainBar, g_app.hMain, main_items,
             (int)(sizeof(main_items)/sizeof(main_items[0])));
@@ -1900,6 +1968,16 @@ static int load_elf_path(const wchar_t* path)
     int i;
     OS_Project* pr = os_ws_active();
     int was_running = (g_app.acq_state == OS_ACQ_RUNNING);
+    /* 没有任何设备时（旧工程/命令行直接打开 ELF）：自动补一个 J-Link 设备，
+     * 让符号挂到设备节点下，而不是回到无设备的全局模式。 */
+    if (!pr) {
+        int idx = os_ws_add_device(OS_DEVK_JLINK, "J-Link 1");
+        if (idx >= 0) {
+            os_ws_set_active(idx);
+            pr = os_ws_active();
+            if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+        }
+    }
     /* 采集线程直接读 g_app.leaves。重载会整表重建，必须先停采集，否则地址/下标会被撕开。 */
     if (was_running) os_ds_stop();
     if (pr) {
@@ -2047,6 +2125,15 @@ static int g_conn_pend = -1;   /* -1 无；0 = 连接；1 = Attach */
 static int g_conn_pend_ticks;
 static void cmd_connect(void);
 static void cmd_attach(void);
+/* 左树设备列表（统一 jlink/stlink/miniwiggler/xcp/网络） */
+static void device_add_menu(HWND owner);
+static void device_add_kind(int dev_kind);
+static void device_configure_dialog(int project_index);
+static void device_set_active_index(int index);
+static void device_refresh_ui(void);
+static void device_connect_index(int index);
+static void device_disconnect_index(int index);
+static int  device_load_symbol_dialog(int index, int which); /* 0=ELF 1=A2L 2=MAP */
 static int connect_again(int attach, int rc)
 {
     if (rc != OS_ERR_AGAIN) {
@@ -2114,63 +2201,66 @@ static void conn_job_start(int attach, const OS_ConnectCfg* cfg)
 static void cmd_connect(void)
 {
     OS_ConnectCfg cfg;
-    LRESULT ifi, emu, dci;
     OS_Project* apr;
+    int i;
     if (conn_busy_ignore()) return;
     apr = os_ws_active();
-    /* 对准活动 Project 的探针驱动（多 MCU 并行） */
-    if (apr && apr->kind == OS_PROJ_PROBE && apr->driver_index >= 0)
-        os_modmgr_select_driver(apr->driver_index);
-    /* 需求14 UI整合：网络通道下"连接"按键复用为网络连接 */
+    if (!apr) {
+        int di = os_ws_default_device_index();
+        if (di < 0) {
+            MessageBoxW(g_app.hMain,
+                        L"还没有任何设备。\n\n请在左侧列表空白处右键 → 添加设备。",
+                        L"连接", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        os_ws_set_active(di);
+        apr = os_ws_active();
+    }
+    /* 网络设备：连接 = 客户端连接 / 服务端监听（配置来自设备自身） */
+    if (apr->kind == OS_PROJ_NET) {
+        device_connect_index(os_ws()->active);
+        return;
+    }
+    /* XCP 设备：配置来自设备自身（传输/端口/波特） */
+    if (apr->kind == OS_PROJ_XCP) {
+        device_connect_index(os_ws()->active);
+        return;
+    }
+    if (os_ws_bind_device_driver(apr) != 0) {
+        wchar_t msg[192];
+        _snwprintf(msg, 192, L"未找到 %hs 驱动模块。\n请确认 dll 目录下已安装对应模块。",
+                   os_ws_dev_kind_name(apr->dev_kind));
+        MessageBoxW(g_app.hMain, msg, L"连接", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    os_modmgr_select_driver(apr->driver_index);
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块");
         set_status(0, L"未加载驱动模块");
         return;
     }
-    /* 无仿真器：弹窗提示（需求：扫描不到设备时告知用户；驱动感知） */
-    if (g_emu_count <= 0) {
-        wchar_t msg[256], cap[64], dn[64];
-        os_utf8_to_wide_buf(drv_name(), dn, 64);
-        _snwprintf(msg, 256, L"没有发现 %s 设备，请确认仿真器已插入 USB 并点击「刷新」。", dn);
-        _snwprintf(cap, 64, L"%s", dn);
-        MessageBoxW(g_app.hMain, msg, cap, MB_OK | MB_ICONWARNING);
-        return;
+    /* 同一类设备共享一个驱动 DLL 实例：连接新设备前先断开同 driver_index 的旧设备 */
+    for (i = 0; i < os_ws()->project_count; i++) {
+        OS_Project* q = os_ws_project_at(i);
+        if (!q || q == apr || q->kind != OS_PROJ_PROBE || !q->connected) continue;
+        if (q->driver_index != apr->driver_index) continue;
+        if (q->driver_index >= 0 && q->driver_index < g_app.driver_count &&
+            g_app.drivers[q->driver_index] && g_app.drivers[q->driver_index]->command) {
+            g_app.drivers[q->driver_index]->command(g_app.driver_ctxs[q->driver_index],
+                                                    OS_CMD_DISCONNECT, NULL, NULL);
+        }
+        q->connected = 0;
+        os_log(OS_LOG_INFO, "设备 %s 已断开（同类设备当前共用一个驱动会话）", q->name);
     }
-    /* 界面配置写入活动 Project，再填 ConnectCfg */
-    if (apr && apr->kind == OS_PROJ_PROBE) proj_cfg_from_toolbar(apr);
+    proj_cfg_from_toolbar(apr); /* 兼容脚本直接改隐藏速度/接口控件 */
     memset(&cfg, 0, sizeof(cfg));
-    if (apr && apr->kind == OS_PROJ_PROBE) {
-        cfg.iface = apr->iface ? OS_IF_JTAG : OS_IF_SWD;
-        cfg.speed_khz = apr->speed_khz;
-        cfg.probe_index = apr->probe_index;
-        _snprintf(cfg.device, sizeof(cfg.device), "%s",
-                  apr->device[0] ? apr->device : "Cortex-M4");
-        g_app.speed_khz = cfg.speed_khz;
-        (void)ifi; (void)emu; (void)dci;
-    } else {
-        ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
-        cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
-        {
-            wchar_t sbuf[64];
-            char sb8[64];
-            HWND hs = main_ctrl(IDC_CFG_SPEED);
-            SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
-            os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
-            cfg.speed_khz = atoi(sb8);
-            if (cfg.speed_khz < 0) cfg.speed_khz = 0;
-            g_app.speed_khz = cfg.speed_khz;
-        }
-        emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
-        cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
-        dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
-        if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
-            char dev8[128];
-            os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
-            _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
-        } else {
-            _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
-        }
-    }
+    cfg.iface = apr->iface ? OS_IF_JTAG : OS_IF_SWD;
+    cfg.speed_khz = apr->speed_khz;
+    cfg.probe_index = apr->probe_index;
+    cfg.connect_under_reset = apr->connect_under_reset ? 1 : 0;
+    _snprintf(cfg.serial, sizeof(cfg.serial), "%s", apr->serial);
+    _snprintf(cfg.device, sizeof(cfg.device), "%s", apr->device[0] ? apr->device : "Cortex-M4");
+    g_app.speed_khz = cfg.speed_khz;
     conn_job_start(0, &cfg);
 }
 
@@ -2209,6 +2299,8 @@ static void connect_done(OS_ConnJob* job)
     os_log(OS_LOG_INFO, "已连接: %s（%s, %s DLL %s, HW %d, FW %d）",
            pinfo->emulator[0] ? pinfo->emulator : "?", pinfo->name, same ? drv_name() : "?", pinfo->dll_version,
            pinfo->hw_version, pinfo->fw_version);
+    if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    os_ws_save_auto();
     refresh_status();
     os_mainwin_update_buttons();
 }
@@ -2220,41 +2312,48 @@ static void cmd_attach(void)
 {
     /* 复用连接：attach=1 非侵入，成功后若有监视则开采集 */
     OS_ConnectCfg cfg;
-    LRESULT ifi, emu, dci;
+    OS_Project* apr = os_ws_active();
+    int i;
     if (conn_busy_ignore()) return;
-    if (g_app.net_mode) {
-        MessageBoxW(g_app.hMain, L"网络通道不支持 Attach", L"Attach", MB_OK | MB_ICONINFORMATION);
+    if (!apr) {
+        int di = os_ws_default_device_index();
+        if (di < 0) {
+            MessageBoxW(g_app.hMain, L"请先在左侧添加设备", L"Attach", MB_OK | MB_ICONINFORMATION);
+            return;
+        }
+        os_ws_set_active(di);
+        apr = os_ws_active();
+    }
+    if (apr->kind != OS_PROJ_PROBE) {
+        MessageBoxW(g_app.hMain, L"只有探针设备支持 Attach（XCP/网络设备请用“连接”）",
+                    L"Attach", MB_OK | MB_ICONINFORMATION);
         return;
     }
+    if (os_ws_bind_device_driver(apr) != 0) {
+        MessageBoxW(g_app.hMain, L"未找到对应驱动模块", L"Attach", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    os_modmgr_select_driver(apr->driver_index);
     if (!g_app.driver || !g_app.driver->command) {
         os_log(OS_LOG_ERROR, "未加载驱动模块");
         return;
     }
-    if (g_emu_count <= 0) {
-        MessageBoxW(g_app.hMain, L"没有发现仿真器，请先刷新", L"Attach", MB_OK | MB_ICONWARNING);
-        return;
+    for (i = 0; i < os_ws()->project_count; i++) {
+        OS_Project* q = os_ws_project_at(i);
+        if (!q || q == apr || q->kind != OS_PROJ_PROBE || !q->connected) continue;
+        if (q->driver_index != apr->driver_index) continue;
+        g_app.drivers[q->driver_index]->command(g_app.driver_ctxs[q->driver_index],
+                                                OS_CMD_DISCONNECT, NULL, NULL);
+        q->connected = 0;
     }
     memset(&cfg, 0, sizeof(cfg));
     cfg.attach = 1;
-    ifi = SendMessageW(main_ctrl(IDC_CFG_IFACE), CB_GETCURSEL, 0, 0);
-    cfg.iface = (ifi == 1) ? OS_IF_JTAG : OS_IF_SWD;
-    {
-        wchar_t sbuf[64]; char sb8[64];
-        HWND hs = main_ctrl(IDC_CFG_SPEED);
-        SendMessageW(hs, WM_GETTEXT, 64, (LPARAM)sbuf);
-        os_wide_to_utf8_buf(sbuf, sb8, sizeof(sb8));
-        cfg.speed_khz = atoi(sb8);
-        if (cfg.speed_khz < 0) cfg.speed_khz = 0;
-        g_app.speed_khz = cfg.speed_khz;
-    }
-    emu = SendMessageW(main_ctrl(IDC_CFG_EMU), CB_GETCURSEL, 0, 0);
-    cfg.probe_index = (emu == CB_ERR) ? -1 : (int)emu;
-    dci = SendMessageW(main_ctrl(IDC_CFG_DEVICE), CB_GETCURSEL, 0, 0);
-    if (dci >= 0 && dci < (LRESULT)(sizeof(g_devices) / sizeof(g_devices[0]))) {
-        char dev8[128];
-        os_wide_to_utf8_buf(g_devices[dci], dev8, sizeof(dev8));
-        _snprintf(cfg.device, sizeof(cfg.device), "%s", dev8);
-    } else _snprintf(cfg.device, sizeof(cfg.device), "%s", "Cortex-M4");
+    cfg.iface = apr->iface ? OS_IF_JTAG : OS_IF_SWD;
+    cfg.speed_khz = apr->speed_khz;
+    cfg.probe_index = apr->probe_index;
+    _snprintf(cfg.serial, sizeof(cfg.serial), "%s", apr->serial);
+    _snprintf(cfg.device, sizeof(cfg.device), "%s", apr->device[0] ? apr->device : "Cortex-M4");
+    g_app.speed_khz = cfg.speed_khz;
     conn_job_start(1, &cfg);
 }
 
@@ -2270,7 +2369,13 @@ static void attach_done(OS_ConnJob* job)
         return;
     }
     if (same) OS_APP_SET_CONNECTED(job->connected);
+    {
+        OS_Project* pr = os_ws_active();
+        if (pr && pr->kind == OS_PROJ_PROBE) pr->connected = job->connected;
+    }
     os_log(OS_LOG_INFO, "Attach 成功: %s", job->info.emulator[0] ? job->info.emulator : "?");
+    if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    os_ws_save_auto();
     refresh_status();
     os_mainwin_update_buttons();
     if (same && OS_APP_CONNECTED() && g_app.watch_count > 0 && g_app.acq_state != OS_ACQ_RUNNING)
@@ -2403,7 +2508,12 @@ static void cmd_disconnect(void)
         g_conn_job->drv->command(g_conn_job->ctx, OS_CMD_DISCONNECT, NULL, NULL); /* 期间切了 Project 也打到正确的驱动 */
         os_log(OS_LOG_INFO, "正在取消连接…");
     }
-    if (apr && apr->kind == OS_PROJ_XCP) {
+    if (apr && apr->kind == OS_PROJ_NET) {
+        if (g_app.netmod && g_app.netmod->command)
+            g_app.netmod->command(g_app.netmod_ctx, OS_CMD_NET_STOP, NULL, NULL);
+        apr->connected = 0;
+        os_log(OS_LOG_INFO, "已断开网络设备（%s）", apr->name);
+    } else if (apr && apr->kind == OS_PROJ_XCP) {
         if (g_app.xcpmod && g_app.xcpmod->command)
             g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
         g_app.xcp_connected = 0;
@@ -2433,6 +2543,8 @@ static void cmd_disconnect(void)
             g_app.driver->command(g_app.driver_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
         OS_APP_SET_CONNECTED(c);
     }
+    if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    os_ws_save_auto();
     refresh_status();
     os_mainwin_update_buttons();
 }
@@ -2740,6 +2852,835 @@ static void cmd_xcp_disconnect(void)
     os_xcpwin_refresh();
 }
 
+/* ================= 左树设备列表（统一 jlink/stlink/miniwiggler/xcp/网络） ================= */
+
+static void run_modal(HWND dlg, HWND owner);
+static void combo_install_theme(HWND h);
+static LRESULT CALLBACK devcfg_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam);
+static void device_cfg_commit(HWND dlg, void* state);
+static void device_cfg_fill_probes(HWND dlg, void* state);
+static void device_cfg_show_groups(HWND dlg, int dev_kind);
+
+/* 选中树中某设备根节点（lParam 负数哨兵） */
+static void tree_select_device_root(int project_index)
+{
+    HTREEITEM h;
+    OS_Project* p = os_ws_project_at(project_index);
+    if (!g_app.hTree || !p) return;
+    h = (HTREEITEM)SendMessageW(g_app.hTree, TVM_GETNEXTITEM, TVGN_ROOT, 0);
+    while (h) {
+        TVITEMW it;
+        memset(&it, 0, sizeof(it));
+        it.mask = TVIF_PARAM;
+        it.hItem = h;
+        if (TreeView_GetItem(g_app.hTree, &it) &&
+            os_vartree_lparam_project(it.lParam) == p->id) {
+            SendMessageW(g_app.hTree, TVM_SELECTITEM, TVGN_CARET, (LPARAM)h);
+            return;
+        }
+        h = (HTREEITEM)SendMessageW(g_app.hTree, TVM_GETNEXTITEM, TVGN_NEXT, (LPARAM)h);
+    }
+}
+
+static void device_refresh_ui(void)
+{
+    if (g_app.hTree && IsWindow(g_app.hTree))
+        os_vartree_fill_tree(g_app.hTree);
+    os_ws_save_auto();
+    refresh_status();
+    os_mainwin_update_buttons();
+}
+
+static void device_set_active_index(int index)
+{
+    OS_Project* p = os_ws_project_at(index);
+    if (!p) return;
+    os_ws_set_active(index);
+    if (p->elf) {
+        g_app.elf = p->elf;
+        _snwprintf(g_app.elf_path, MAX_PATH, L"%s", p->elf_path);
+        g_app.elf_mtime = os_file_mtime_ms(p->elf_path);
+    } else if (p->elf_path[0]) {
+        g_app.elf = NULL;
+        _snwprintf(g_app.elf_path, MAX_PATH, L"%s", p->elf_path);
+    } else {
+        g_app.elf = NULL;
+        g_app.elf_path[0] = 0;
+    }
+    proj_cfg_to_toolbar(p);
+    refresh_status();
+    os_mainwin_update_buttons();
+    {
+        wchar_t wpath[MAX_PATH];
+        _snwprintf(wpath, MAX_PATH, L"%s", g_app.elf_path);
+        os_srcmap_load_for_elf(&g_srcmap, wpath);
+        refresh_src_tree();
+    }
+}
+
+static void device_add_kind(int dev_kind)
+{
+    int idx = os_ws_add_device(dev_kind, NULL);
+    OS_Project* p;
+    if (idx < 0) {
+        MessageBoxW(g_app.hMain, L"设备数量已达上限", L"添加设备", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    p = os_ws_project_at(idx);
+    os_ws_set_active(idx);
+    device_set_active_index(idx);
+    device_refresh_ui();
+    tree_select_device_root(idx);
+    os_log(OS_LOG_INFO, "已添加设备: [%s] %s（id=%d）— 右键设备节点可修改配置",
+           os_ws_dev_kind_name(dev_kind), p ? p->name : "?", p ? p->id : -1);
+}
+
+static void device_add_menu(HWND owner)
+{
+    POINT pt;
+    HMENU m = CreatePopupMenu();
+    int cmd;
+    AppendMenuW(m, MF_STRING, IDM_DEV_ADD_JLINK, L"J-Link");
+    AppendMenuW(m, MF_STRING, IDM_DEV_ADD_STLINK, L"ST-Link");
+    AppendMenuW(m, MF_STRING, IDM_DEV_ADD_DAS, L"miniWiggler (DAS)");
+    AppendMenuW(m, MF_STRING, IDM_DEV_ADD_XCP, L"XCP");
+    AppendMenuW(m, MF_STRING, IDM_DEV_ADD_NET, L"网络 (WebSocket)");
+    GetCursorPos(&pt);
+    os_theme_menu_show(m);
+    cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                               pt.x, pt.y, 0, owner ? owner : g_app.hMain, NULL);
+    os_theme_menu_end();
+    DestroyMenu(m);
+    switch (cmd) {
+    case IDM_DEV_ADD_JLINK:  device_add_kind(OS_DEVK_JLINK); break;
+    case IDM_DEV_ADD_STLINK: device_add_kind(OS_DEVK_STLINK); break;
+    case IDM_DEV_ADD_DAS:    device_add_kind(OS_DEVK_DAS); break;
+    case IDM_DEV_ADD_XCP:    device_add_kind(OS_DEVK_XCP); break;
+    case IDM_DEV_ADD_NET:    device_add_kind(OS_DEVK_NET); break;
+    }
+}
+
+static void device_disconnect_index(int index)
+{
+    OS_Project* p = os_ws_project_at(index);
+    if (!p) return;
+    os_ws_set_active(index);
+    cmd_disconnect();
+}
+
+static void device_connect_index(int index)
+{
+    OS_Project* p = os_ws_project_at(index);
+    int i;
+    if (!p) return;
+    os_ws_set_active(index);
+    device_set_active_index(index);
+    if (p->kind == OS_PROJ_NET) {
+        OS_NetCfg cfg;
+        int rc, c = 1;
+        memset(&cfg, 0, sizeof(cfg));
+        _snprintf(cfg.ip, sizeof(cfg.ip), "%s", p->net_ip);
+        cfg.port = p->net_port;
+        if (!g_app.netmod || !g_app.netmod->command) {
+            os_log(OS_LOG_ERROR, "网络: 未加载 network 模块");
+            return;
+        }
+        if (p->net_mode) rc = g_app.netmod->command(g_app.netmod_ctx, OS_CMD_NET_START, &cfg, NULL);
+        else rc = g_app.netmod->command(g_app.netmod_ctx, OS_CMD_NET_CONNECT, &cfg, NULL);
+        if (rc == OS_ERR_OK && g_app.netmod->command)
+            g_app.netmod->command(g_app.netmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+        p->connected = (rc == OS_ERR_OK) ? 1 : 0;   /* 监听/连接成功即视为在线 */
+        os_log(rc == OS_ERR_OK ? OS_LOG_INFO : OS_LOG_ERROR,
+               "网络设备 %s: %s %s:%d rc=%d", p->name,
+               p->net_mode ? "监听" : "连接", p->net_ip, p->net_port, rc);
+    } else if (p->kind == OS_PROJ_XCP) {
+        OS_ConnectCfg cfg;
+        int rc, c = 0;
+        for (i = 0; i < os_ws()->project_count; i++) {
+            OS_Project* q = os_ws_project_at(i);
+            if (q && q != p && q->kind == OS_PROJ_XCP && q->connected) {
+                if (g_app.xcpmod && g_app.xcpmod->command)
+                    g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_DISCONNECT, NULL, NULL);
+                q->connected = 0;
+            }
+        }
+        if (!g_app.xcpmod || !g_app.xcpmod->command) {
+            os_log(OS_LOG_ERROR, "XCP: 未加载模块");
+            return;
+        }
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.probe_index = 0;
+        _snprintf(cfg.device, sizeof(cfg.device), "%s",
+                  p->xcp_transport[0] ? p->xcp_transport : "serial");
+        _snprintf(cfg.serial, sizeof(cfg.serial), "%s", p->xcp_port);
+        cfg.speed_khz = p->xcp_baud > 0 ? p->xcp_baud : 115200;
+        rc = g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_CONNECT, &cfg, NULL);
+        if (rc == OS_ERR_OK)
+            g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_IS_CONNECTED, NULL, &c);
+        g_app.xcp_connected = c;
+        p->connected = c ? 1 : 0;
+        _snprintf(g_app.xcp_transport, sizeof(g_app.xcp_transport), "%s", cfg.device);
+        _snprintf(g_app.xcp_port, sizeof(g_app.xcp_port), "%s", cfg.serial);
+        g_app.xcp_baud = cfg.speed_khz;
+        os_log(rc == OS_ERR_OK ? OS_LOG_INFO : OS_LOG_ERROR,
+               "XCP 设备 %s: 连接 %s:%s rc=%d", p->name, cfg.device, cfg.serial, rc);
+    } else {
+        /* 探针：异步连接 + 同类设备互斥；设备配置可默认 Attach */
+        if (p->attach_default) cmd_attach(); else cmd_connect();
+        return;
+    }
+    device_refresh_ui();
+    os_xcpwin_refresh();
+}
+
+/* 删叶后叶 id 压缩：所有原生窗口按 (name, project) 重新绑定 */
+static void windows_rebind_all(void)
+{
+    int wi, k;
+    for (wi = 0; wi < g_app.win_count; wi++) {
+        for (k = 0; k < g_app.wins[wi].group_count; k++) {
+            HWND w = g_app.wins[wi].group[k];
+            if (!w || !IsWindow(w) || g_app.wins[wi].is_module) continue;
+            if (os_chart_is(w)) os_chart_rebind(w);
+            else if (os_num_is(w)) os_num_rebind(w);
+        }
+    }
+}
+
+/* MAP 文件 → 该设备变量树（每设备独立；XCP 页仍用全局符号注册表） */
+static int device_apply_map_symbols(OS_Project* p)
+{
+    OS_XcpSym s;
+    int i, n, added = 0;
+    if (!p) return 0;
+    /* 重新加载 MAP：先删该设备旧 MAP 叶，再加入新符号，最后按名重绑窗口（叶 id 已压缩） */
+    os_vartree_remove_project(p->id, 1);
+    n = os_xcpsym_count();
+    for (i = 0; i < n; i++) {
+        if (os_xcpsym_get(i, &s) != 0 || !s.from_map || !s.name[0]) continue;
+        added += os_vartree_add_map_symbol(p->id, s.name, s.address, s.size);
+    }
+    windows_rebind_all();
+    if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    return added;
+}
+
+static int device_load_symbol_dialog(int index, int which)
+{
+    OPENFILENAMEW ofn;
+    wchar_t file[MAX_PATH] = L"";
+    OS_Project* p = os_ws_project_at(index);
+    if (!p) return -1;
+    os_ws_set_active(index);
+    device_set_active_index(index);
+    memset(&ofn, 0, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = g_app.hMain;
+    if (which == 0) ofn.lpstrFilter = L"ELF/OUT 符号\0*.elf;*.out;*.axf\0所有文件\0*.*\0";
+    else if (which == 1) ofn.lpstrFilter = L"A2L 文件\0*.a2l\0所有文件\0*.*\0";
+    else ofn.lpstrFilter = L"MAP 符号\0*.map\0所有文件\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) return -1;
+    if (which == 0) {
+        if (load_elf_path(file) != 0) return -1;
+    } else if (which == 1) {
+        int n = os_a2l_import(file, p->id);
+        if (n < 0) {
+            os_log(OS_LOG_ERROR, "A2L 加载失败: %ls", file);
+            return -1;
+        }
+        _snwprintf(p->a2l_path, MAX_PATH, L"%s", file);
+        if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+        os_log(OS_LOG_INFO, "设备 %s 加载 A2L: %ls（+%d 变量）", p->name, file, n);
+    } else {
+        char err[256];
+        int n = os_xcpsym_load_map(file, err, sizeof(err));
+        if (n < 0) {
+            os_log(OS_LOG_ERROR, "MAP 加载失败: %s", err);
+            return -1;
+        }
+        _snwprintf(p->map_path, MAX_PATH, L"%s", file);
+        {
+            int added = device_apply_map_symbols(p);
+            os_log(OS_LOG_INFO, "设备 %s 加载 MAP: %ls（%d 符号，变量树更新 %d）",
+                   p->name, file, n, added);
+        }
+        os_xcpwin_refresh();
+    }
+    os_ws_save_auto();
+    refresh_status();
+    os_mainwin_update_buttons();
+    return 0;
+}
+
+/* ---------- 设备配置对话框 ---------- */
+
+typedef struct DevCfgState {
+    int  id;                 /* 稳定 project id（数组下标可能因删除设备漂移） */
+    int  probe_n;
+    char probe_serial[32][64];
+    wchar_t orig_elf[MAX_PATH];
+    wchar_t orig_a2l[MAX_PATH];
+    wchar_t orig_map[MAX_PATH];
+} DevCfgState;
+
+static OS_Project* devcfg_project(void* state)
+{
+    DevCfgState* st = (DevCfgState*)state;
+    return st ? os_ws_project(st->id) : NULL;
+}
+
+static int devcfg_index(void* state)
+{
+    DevCfgState* st = (DevCfgState*)state;
+    return st ? os_ws_device_index_by_id(st->id) : -1;
+}
+
+static int devcfg_browse(HWND dlg, int edit_id, const wchar_t* filter)
+{
+    OPENFILENAMEW ofn;
+    wchar_t file[MAX_PATH];
+    HWND e = GetDlgItem(dlg, edit_id);
+    file[0] = 0;
+    if (e) GetWindowTextW(e, file, MAX_PATH);
+    memset(&ofn, 0, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = dlg;
+    ofn.lpstrFilter = filter;
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+    if (!GetOpenFileNameW(&ofn)) return -1;
+    if (e) SetWindowTextW(e, file);
+    return 0;
+}
+
+static void devcfg_status(HWND dlg, const wchar_t* text)
+{
+    HWND h = GetDlgItem(dlg, IDD_DEVCFG_STATUS);
+    if (h) SetWindowTextW(h, text ? text : L"");
+}
+
+static void devcfg_fill_combo(HWND dlg, int id, const wchar_t* const* items, int n, int sel)
+{
+    HWND h = GetDlgItem(dlg, id);
+    int i;
+    if (!h) return;
+    SendMessageW(h, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < n; i++) SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)items[i]);
+    if (sel >= 0 && sel < n) SendMessageW(h, CB_SETCURSEL, (WPARAM)sel, 0);
+}
+
+static void devcfg_show_groups(HWND dlg, int dev_kind)
+{
+    static const int probe_ids[] = { IDD_DEVCFG_IFACE, IDD_DEVCFG_SPEED, IDD_DEVCFG_DEVICE,
+                                     IDD_DEVCFG_PROBE, IDD_DEVCFG_REFRESH,
+                                     IDD_DEVCFG_ATTACH, IDD_DEVCFG_UNDERRESET };
+    static const int xcp_ids[] = { IDD_DEVCFG_XCP_TRANSPORT, IDD_DEVCFG_XCP_PORT,
+                                   IDD_DEVCFG_XCP_BAUD, IDD_DEVCFG_XCP_SCAN };
+    static const int net_ids[] = { IDD_DEVCFG_NET_MODE, IDD_DEVCFG_NET_IP, IDD_DEVCFG_NET_PORT,
+                                   IDD_DEVCFG_NET_UPELF, IDD_DEVCFG_NET_DOWNELF };
+    int i;
+    int is_probe = (dev_kind == OS_DEVK_JLINK || dev_kind == OS_DEVK_STLINK || dev_kind == OS_DEVK_DAS);
+    int is_xcp = (dev_kind == OS_DEVK_XCP);
+    int is_net = (dev_kind == OS_DEVK_NET);
+    for (i = 0; i < (int)(sizeof(probe_ids)/sizeof(probe_ids[0])); i++) {
+        HWND h = GetDlgItem(dlg, probe_ids[i]);
+        if (h) ShowWindow(h, is_probe ? SW_SHOW : SW_HIDE);
+    }
+    for (i = 0; i < (int)(sizeof(xcp_ids)/sizeof(xcp_ids[0])); i++) {
+        HWND h = GetDlgItem(dlg, xcp_ids[i]);
+        if (h) ShowWindow(h, is_xcp ? SW_SHOW : SW_HIDE);
+    }
+    for (i = 0; i < (int)(sizeof(net_ids)/sizeof(net_ids[0])); i++) {
+        HWND h = GetDlgItem(dlg, net_ids[i]);
+        if (h) ShowWindow(h, is_net ? SW_SHOW : SW_HIDE);
+    }
+    /* ELF / A2L / MAP 都是“每设备符号来源”，任意设备都可加载 */
+}
+
+static void device_cfg_fill_probes(HWND dlg, void* state)
+{
+    DevCfgState* st = (DevCfgState*)state;
+    OS_Project* p = devcfg_project(state);
+    HWND combo = GetDlgItem(dlg, IDD_DEVCFG_PROBE);
+    OS_DeviceInfo items[32];
+    OS_ScanReq req;
+    int i, n = 0, sel = -1;
+    if (!p || !combo) return;
+    memset(items, 0, sizeof(items));
+    st->probe_n = 0;
+    if (os_ws_bind_device_driver(p) == 0 && p->driver_index >= 0 &&
+        p->driver_index < g_app.driver_count) {
+        OS_Module* m = g_app.drivers[p->driver_index];
+        memset(&req, 0, sizeof(req));
+        req.items = items;
+        req.capacity = 32;
+        if (m && m->command) m->command(g_app.driver_ctxs[p->driver_index], OS_CMD_SCAN, &req, NULL);
+        n = req.count;
+        if (n > 32) n = 32;
+    }
+    SendMessageW(combo, CB_RESETCONTENT, 0, 0);
+    for (i = 0; i < n; i++) {
+        wchar_t line[256];
+        _snwprintf(line, 256, L"%hs (SN:%hs)", items[i].name, items[i].serial);
+        SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)line);
+        _snprintf(st->probe_serial[i], sizeof(st->probe_serial[i]), "%s", items[i].serial);
+        if (p->serial[0] && strcmp(p->serial, items[i].serial) == 0) sel = i;
+    }
+    st->probe_n = n;
+    if (n <= 0) {
+        SendMessageW(combo, CB_ADDSTRING, 0, (LPARAM)L"未发现设备");
+        sel = 0;
+    } else if (sel < 0 && p->probe_index >= 0 && p->probe_index < n) {
+        sel = p->probe_index;
+    } else if (sel < 0) {
+        sel = 0;
+    }
+    SendMessageW(combo, CB_SETCURSEL, (WPARAM)sel, 0);
+    devcfg_status(dlg, n > 0 ? L"设备扫描完成" : L"未发现设备，请检查 USB/驱动");
+}
+
+static void device_cfg_commit(HWND dlg, void* state)
+{
+    DevCfgState* st = (DevCfgState*)state;
+    OS_Project* p = devcfg_project(state);
+    wchar_t w[512];
+    char a[512];
+    HWND h;
+    if (!p) return;
+    h = GetDlgItem(dlg, IDD_DEVCFG_NAME);
+    if (h) {
+        GetWindowTextW(h, w, 64);
+        os_wide_to_utf8_buf(w, p->name, (int)sizeof(p->name));
+        if (!p->name[0]) _snprintf(p->name, sizeof(p->name), "%s", os_ws_dev_kind_name(p->dev_kind));
+    }
+    h = GetDlgItem(dlg, IDD_DEVCFG_ELF);
+    if (h) GetWindowTextW(h, p->elf_path, MAX_PATH);
+    h = GetDlgItem(dlg, IDD_DEVCFG_A2L);
+    if (h) GetWindowTextW(h, p->a2l_path, MAX_PATH);
+    h = GetDlgItem(dlg, IDD_DEVCFG_MAP);
+    if (h) GetWindowTextW(h, p->map_path, MAX_PATH);
+    if (p->kind == OS_PROJ_PROBE) {
+        LRESULT sel;
+        h = GetDlgItem(dlg, IDD_DEVCFG_IFACE);
+        if (h) p->iface = (SendMessageW(h, CB_GETCURSEL, 0, 0) == 1) ? 1 : 0;
+        h = GetDlgItem(dlg, IDD_DEVCFG_SPEED);
+        if (h) {
+            GetWindowTextW(h, w, 64);
+            os_wide_to_utf8_buf(w, a, sizeof(a));
+            p->speed_khz = atoi(a);
+            if (p->speed_khz < 0) p->speed_khz = 0;
+        }
+        h = GetDlgItem(dlg, IDD_DEVCFG_DEVICE);
+        if (h) {
+            GetWindowTextW(h, w, 128);
+            os_wide_to_utf8_buf(w, p->device, (int)sizeof(p->device));
+        }
+        h = GetDlgItem(dlg, IDD_DEVCFG_PROBE);
+        sel = h ? SendMessageW(h, CB_GETCURSEL, 0, 0) : CB_ERR;
+        if (sel != CB_ERR) {
+            p->probe_index = (int)sel;
+            if ((int)sel < st->probe_n && st->probe_serial[sel][0])
+                _snprintf(p->serial, sizeof(p->serial), "%s", st->probe_serial[sel]);
+        }
+        h = GetDlgItem(dlg, IDD_DEVCFG_ATTACH);
+        if (h) p->attach_default = (SendMessageW(h, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+        h = GetDlgItem(dlg, IDD_DEVCFG_UNDERRESET);
+        if (h) p->connect_under_reset = (SendMessageW(h, BM_GETCHECK, 0, 0) == BST_CHECKED) ? 1 : 0;
+    } else if (p->kind == OS_PROJ_XCP) {
+        LRESULT sel;
+        static const char* tr[] = { "serial", "can", "tcp" };
+        h = GetDlgItem(dlg, IDD_DEVCFG_XCP_TRANSPORT);
+        sel = h ? SendMessageW(h, CB_GETCURSEL, 0, 0) : 0;
+        if (sel >= 0 && sel < 3) _snprintf(p->xcp_transport, sizeof(p->xcp_transport), "%s", tr[sel]);
+        h = GetDlgItem(dlg, IDD_DEVCFG_XCP_PORT);
+        if (h) {
+            GetWindowTextW(h, w, 128);
+            os_wide_to_utf8_buf(w, p->xcp_port, (int)sizeof(p->xcp_port));
+        }
+        h = GetDlgItem(dlg, IDD_DEVCFG_XCP_BAUD);
+        if (h) {
+            GetWindowTextW(h, w, 32);
+            p->xcp_baud = _wtoi(w);
+            if (p->xcp_baud <= 0) p->xcp_baud = 115200;
+        }
+    } else if (p->kind == OS_PROJ_NET) {
+        h = GetDlgItem(dlg, IDD_DEVCFG_NET_MODE);
+        if (h) p->net_mode = (SendMessageW(h, CB_GETCURSEL, 0, 0) == 1) ? 1 : 0;
+        h = GetDlgItem(dlg, IDD_DEVCFG_NET_IP);
+        if (h) {
+            GetWindowTextW(h, w, 64);
+            os_wide_to_utf8_buf(w, p->net_ip, (int)sizeof(p->net_ip));
+            if (!p->net_ip[0]) _snprintf(p->net_ip, sizeof(p->net_ip), "127.0.0.1");
+        }
+        h = GetDlgItem(dlg, IDD_DEVCFG_NET_PORT);
+        if (h) {
+            GetWindowTextW(h, w, 16);
+            p->net_port = _wtoi(w);
+            if (p->net_port <= 0) p->net_port = 10000;
+        }
+    }
+    proj_cfg_to_toolbar(p);   /* 隐藏兼容控件与设备配置保持一致 */
+    os_ws_save_auto();
+}
+
+static void device_cfg_apply_symbols(HWND dlg, void* state)
+{
+    DevCfgState* st = (DevCfgState*)state;
+    OS_Project* p = devcfg_project(state);
+    int idx = devcfg_index(state);
+    if (!p) return;
+    (void)dlg;
+    if (p->elf_path[0] && _wcsicmp(st->orig_elf, p->elf_path) != 0) {
+        os_ws_set_active(idx);
+        device_set_active_index(idx);
+        if (load_elf_path(p->elf_path) == 0)
+            _snwprintf(st->orig_elf, MAX_PATH, L"%s", p->elf_path);
+    }
+    if (p->a2l_path[0] && _wcsicmp(st->orig_a2l, p->a2l_path) != 0) {
+        int n = os_a2l_import(p->a2l_path, p->id);
+        if (n >= 0) _snwprintf(st->orig_a2l, MAX_PATH, L"%s", p->a2l_path);
+        if (g_app.hTree) os_vartree_fill_tree(g_app.hTree);
+    }
+    if (p->map_path[0] && _wcsicmp(st->orig_map, p->map_path) != 0) {
+        char err[256];
+        if (os_xcpsym_load_map(p->map_path, err, sizeof(err)) >= 0) {
+            _snwprintf(st->orig_map, MAX_PATH, L"%s", p->map_path);
+            device_apply_map_symbols(p);
+        }
+        os_xcpwin_refresh();
+    }
+    os_ws_save_auto();
+}
+
+static LRESULT CALLBACK devcfg_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    DevCfgState* st = (DevCfgState*)GetWindowLongPtrW(dlg, GWLP_USERDATA);
+    switch (msg) {
+    case WM_ERASEBKGND: {
+        RECT rc;
+        HDC hdc = (HDC)wParam;
+        GetClientRect(dlg, &rc);
+        FillRect(hdc, &rc, os_theme_brush(TH_BG));
+        return 1;
+    }
+    case WM_CTLCOLORBTN:
+    case WM_CTLCOLORSTATIC:
+        return theme_ctlcolor((HDC)wParam, 0);
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX:
+        return theme_ctlcolor((HDC)wParam, 1);
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case IDD_DEVCFG_ELF_BROWSE:
+            devcfg_browse(dlg, IDD_DEVCFG_ELF,
+                          L"ELF/OUT 符号\0*.elf;*.out;*.axf\0所有文件\0*.*\0");
+            return 0;
+        case IDD_DEVCFG_A2L_BROWSE:
+            devcfg_browse(dlg, IDD_DEVCFG_A2L, L"A2L 文件\0*.a2l\0所有文件\0*.*\0");
+            return 0;
+        case IDD_DEVCFG_MAP_BROWSE:
+            devcfg_browse(dlg, IDD_DEVCFG_MAP, L"MAP 符号\0*.map\0所有文件\0*.*\0");
+            return 0;
+        case IDD_DEVCFG_REFRESH:
+            if (st) device_cfg_fill_probes(dlg, st);
+            return 0;
+        case IDD_DEVCFG_XCP_SCAN: {
+            OS_Project* p = devcfg_project(st);
+            OS_ScanReq req;
+            OS_DeviceInfo items[32];
+            int i;
+            if (!p || !g_app.xcpmod || !g_app.xcpmod->command) return 0;
+            memset(&req, 0, sizeof(req));
+            req.items = items;
+            req.capacity = 32;
+            g_app.xcpmod->command(g_app.xcpmod_ctx, OS_CMD_SCAN, &req, NULL);
+            for (i = 0; i < req.count; i++) {
+                const char* name = items[i].name;
+                const char* colon = strchr(name, ':');
+                wchar_t wp[128];
+                os_utf8_to_wide_buf(colon ? colon + 1 : name, wp, 128);
+                SetWindowTextW(GetDlgItem(dlg, IDD_DEVCFG_XCP_PORT), wp);
+                break;
+            }
+            devcfg_status(dlg, req.count > 0 ? L"XCP 扫描完成" : L"未发现 XCP 从站");
+            return 0;
+        }
+        case IDD_DEVCFG_CONNECT:
+            if (st) {
+                int idx = devcfg_index(st);
+                device_cfg_commit(dlg, st);
+                device_cfg_apply_symbols(dlg, st); /* 新选择的 ELF/A2L/MAP 立即生效 */
+                if (idx >= 0) device_connect_index(idx);
+                devcfg_status(dlg, L"连接请求已发出（详见消息栏）");
+            }
+            return 0;
+        case IDD_DEVCFG_DISCONNECT:
+            if (st) {
+                int idx = devcfg_index(st);
+                if (idx >= 0) device_disconnect_index(idx);
+                devcfg_status(dlg, L"已断开");
+            }
+            return 0;
+        case IDD_DEVCFG_NET_UPELF:
+            if (st) {
+                device_cfg_commit(dlg, st);
+                os_mainwin_net_cmd(OS_CMD_NET_SYNC_ELF, NULL, 0);
+                devcfg_status(dlg, L"已上传 ELF 变量表");
+            }
+            return 0;
+        case IDD_DEVCFG_NET_DOWNELF:
+            if (st) {
+                device_cfg_commit(dlg, st);
+                os_mainwin_net_cmd(OS_CMD_NET_ELF_PULL, NULL, 0);
+                devcfg_status(dlg, L"已请求远端 ELF 变量表");
+            }
+            return 0;
+        case IDD_DEVCFG_OK:
+            if (st) {
+                int idx = devcfg_index(st);
+                device_cfg_commit(dlg, st);
+                device_cfg_apply_symbols(dlg, st);
+                if (idx >= 0) device_refresh_ui();
+                os_log(OS_LOG_INFO, "设备配置已保存: %s", devcfg_project(st) ? devcfg_project(st)->name : "?");
+            }
+            DestroyWindow(dlg);
+            return 0;
+        case IDD_DEVCFG_CANCEL:
+            DestroyWindow(dlg);
+            return 0;
+        case IDD_DEVCFG_DELETE:
+            if (st) {
+                OS_Project* p = devcfg_project(st);
+                int idx = devcfg_index(st);
+                wchar_t msg[256];
+                if (p && idx >= 0) {
+                    _snwprintf(msg, 256, L"删除设备“%hs”？\n（会先断开连接；其变量窗口保留但不再更新）", p->name);
+                    if (MessageBoxW(dlg, msg, L"删除设备", MB_YESNO | MB_ICONWARNING) == IDYES) {
+                        device_disconnect_index(idx);
+                        os_ws_remove_device(idx);
+                        windows_rebind_all();
+                        device_refresh_ui();
+                        os_log(OS_LOG_INFO, "设备已删除: %s", p->name);
+                        DestroyWindow(dlg);
+                    }
+                }
+            }
+            return 0;
+        }
+        break;
+    case WM_CLOSE:
+        DestroyWindow(dlg);
+        return 0;
+    case WM_DESTROY:
+        free(st);
+        SetWindowLongPtrW(dlg, GWLP_USERDATA, 0);
+        return 0;
+    }
+    return DefWindowProcW(dlg, msg, wParam, lParam);
+}
+
+static void device_configure_dialog(int project_index)
+{
+    OS_Project* p = os_ws_project_at(project_index);
+    DevCfgState* st;
+    HWND dlg, h;
+    int y;
+    static const wchar_t* ifaces[] = { L"SWD", L"JTAG" };
+    static const wchar_t* speeds[] = { L"0 (自动)", L"50", L"100", L"200", L"400", L"1000",
+                                       L"2000", L"4000", L"5000", L"8000", L"10000",
+                                       L"12000", L"15000", L"20000", L"25000", L"30000",
+                                       L"40000", L"50000" };
+    static const wchar_t* xcp_tr[] = { L"串口 (serial)", L"CAN", L"TCP" };
+    static const wchar_t* net_modes[] = { L"客户端（连接远端）", L"服务端（监听）" };
+    if (!p) return;
+    st = (DevCfgState*)calloc(1, sizeof(DevCfgState));
+    if (!st) return;
+    st->id = p->id;
+    _snwprintf(st->orig_elf, MAX_PATH, L"%s", p->elf_path);
+    _snwprintf(st->orig_a2l, MAX_PATH, L"%s", p->a2l_path);
+    _snwprintf(st->orig_map, MAX_PATH, L"%s", p->map_path);
+    dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, L"OSDlgDevCfg", L"设备配置",
+                          WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+                          (GetSystemMetrics(SM_CXSCREEN) - 620) / 2,
+                          (GetSystemMetrics(SM_CYSCREEN) - 400) / 2,
+                          620, 400, g_app.hMain, NULL, g_app.hInst, NULL);
+    if (!dlg) { free(st); return; }
+    SetWindowLongPtrW(dlg, GWLP_USERDATA, (LONG_PTR)st);
+    {
+        wchar_t wn[64], wk[64];
+        os_utf8_to_wide_buf(p->name, wn, 64);
+        os_utf8_to_wide_buf(os_ws_dev_kind_name(p->dev_kind), wk, 64);
+        CreateWindowW(L"STATIC", L"设备名称", WS_CHILD | WS_VISIBLE, 14, 16, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wn, WS_CHILD | WS_VISIBLE | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                          96, 12, 230, 22, dlg, (HMENU)IDD_DEVCFG_NAME, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"STATIC", wk, WS_CHILD | WS_VISIBLE, 338, 16, 240, 22, dlg, NULL, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    }
+    /* 符号文件 */
+    {
+        wchar_t we[MAX_PATH], wa[MAX_PATH], wm[MAX_PATH];
+        _snwprintf(we, MAX_PATH, L"%s", p->elf_path);
+        _snwprintf(wa, MAX_PATH, L"%s", p->a2l_path);
+        _snwprintf(wm, MAX_PATH, L"%s", p->map_path);
+        y = 48;
+        CreateWindowW(L"STATIC", L"ELF/out", WS_CHILD | WS_VISIBLE, 14, y + 4, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", we, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                          96, y, 420, 22, dlg, (HMENU)IDD_DEVCFG_ELF, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                          522, y, 76, 24, dlg, (HMENU)IDD_DEVCFG_ELF_BROWSE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        y = 80;
+        CreateWindowW(L"STATIC", L"A2L", WS_CHILD | WS_VISIBLE, 14, y + 4, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wa, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                          96, y, 420, 22, dlg, (HMENU)IDD_DEVCFG_A2L, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                          522, y, 76, 24, dlg, (HMENU)IDD_DEVCFG_A2L_BROWSE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        y = 112;
+        CreateWindowW(L"STATIC", L"MAP", WS_CHILD | WS_VISIBLE, 14, y + 4, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wm, WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
+                          96, y, 420, 22, dlg, (HMENU)IDD_DEVCFG_MAP, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"浏览...", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+                          522, y, 76, 24, dlg, (HMENU)IDD_DEVCFG_MAP_BROWSE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    }
+    /* 探针配置 */
+    {
+        wchar_t wdev[128];
+        int speed_sel = 7;
+        os_utf8_to_wide_buf(p->device[0] ? p->device : "Cortex-M4", wdev, 128);
+        h = CreateWindowW(L"STATIC", L"接口", WS_CHILD, 14, 158, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+                          96, 154, 120, 120, dlg, (HMENU)IDD_DEVCFG_IFACE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        combo_install_theme(h);
+        devcfg_fill_combo(dlg, IDD_DEVCFG_IFACE, ifaces, 2, p->iface ? 1 : 0);
+        h = CreateWindowW(L"STATIC", L"速度(kHz)", WS_CHILD, 236, 158, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | CBS_DROPDOWN | WS_TABSTOP,
+                          312, 154, 120, 240, dlg, (HMENU)IDD_DEVCFG_SPEED, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        combo_install_theme(h);
+        devcfg_fill_combo(dlg, IDD_DEVCFG_SPEED, speeds,
+                          (int)(sizeof(speeds) / sizeof(speeds[0])), speed_sel);
+        {
+            wchar_t ws[32];
+            _snwprintf(ws, 32, L"%d", p->speed_khz);
+            SetWindowTextW(h, ws);
+        }
+        CreateWindowW(L"STATIC", L"目标器件", WS_CHILD, 14, 190, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"COMBOBOX", wdev, WS_CHILD | CBS_DROPDOWN | WS_TABSTOP,
+                          96, 186, 200, 240, dlg, (HMENU)IDD_DEVCFG_DEVICE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        combo_install_theme(h);
+        {
+            int i;
+            for (i = 0; i < (int)(sizeof(g_devices) / sizeof(g_devices[0])); i++)
+                SendMessageW(h, CB_ADDSTRING, 0, (LPARAM)g_devices[i]);
+        }
+        CreateWindowW(L"STATIC", L"探针", WS_CHILD, 14, 222, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+                          96, 218, 320, 240, dlg, (HMENU)IDD_DEVCFG_PROBE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        combo_install_theme(h);
+        h = CreateWindowW(L"BUTTON", L"刷新", WS_CHILD | BS_PUSHBUTTON,
+                          424, 218, 76, 24, dlg, (HMENU)IDD_DEVCFG_REFRESH, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"Attach（不打断运行）", WS_CHILD | BS_AUTOCHECKBOX,
+                          14, 250, 200, 22, dlg, (HMENU)IDD_DEVCFG_ATTACH, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        if (p->attach_default) SendMessageW(h, BM_SETCHECK, BST_CHECKED, 0);
+        h = CreateWindowW(L"BUTTON", L"复位下连接", WS_CHILD | BS_AUTOCHECKBOX,
+                          230, 250, 130, 22, dlg, (HMENU)IDD_DEVCFG_UNDERRESET, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        if (p->connect_under_reset) SendMessageW(h, BM_SETCHECK, BST_CHECKED, 0);
+    }
+    /* XCP 配置 */
+    {
+        wchar_t wp[128], wb[32];
+        os_utf8_to_wide_buf(p->xcp_port, wp, 128);
+        _snwprintf(wb, 32, L"%d", p->xcp_baud > 0 ? p->xcp_baud : 115200);
+        CreateWindowW(L"STATIC", L"传输", WS_CHILD, 14, 158, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+                          96, 154, 160, 120, dlg, (HMENU)IDD_DEVCFG_XCP_TRANSPORT, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        combo_install_theme(h);
+        {
+            int sel = 0;
+            if (!strcmp(p->xcp_transport, "can")) sel = 1;
+            else if (!strcmp(p->xcp_transport, "tcp")) sel = 2;
+            devcfg_fill_combo(dlg, IDD_DEVCFG_XCP_TRANSPORT, xcp_tr, 3, sel);
+        }
+        CreateWindowW(L"STATIC", L"端口/地址", WS_CHILD, 276, 158, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wp, WS_CHILD | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                          356, 154, 160, 22, dlg, (HMENU)IDD_DEVCFG_XCP_PORT, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        CreateWindowW(L"STATIC", L"波特率", WS_CHILD, 14, 190, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wb, WS_CHILD | WS_BORDER | WS_TABSTOP | ES_NUMBER,
+                          96, 186, 100, 22, dlg, (HMENU)IDD_DEVCFG_XCP_BAUD, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"扫描", WS_CHILD | BS_PUSHBUTTON,
+                          210, 186, 76, 24, dlg, (HMENU)IDD_DEVCFG_XCP_SCAN, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    }
+    /* 网络配置 */
+    {
+        wchar_t wip[64], wport[16];
+        os_utf8_to_wide_buf(p->net_ip[0] ? p->net_ip : "127.0.0.1", wip, 64);
+        _snwprintf(wport, 16, L"%d", p->net_port > 0 ? p->net_port : 10000);
+        CreateWindowW(L"STATIC", L"模式", WS_CHILD, 14, 158, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"COMBOBOX", L"", WS_CHILD | CBS_DROPDOWNLIST | WS_TABSTOP,
+                          96, 154, 180, 120, dlg, (HMENU)IDD_DEVCFG_NET_MODE, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        combo_install_theme(h);
+        devcfg_fill_combo(dlg, IDD_DEVCFG_NET_MODE, net_modes, 2, p->net_mode ? 1 : 0);
+        CreateWindowW(L"STATIC", L"IP 地址", WS_CHILD, 14, 190, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wip, WS_CHILD | WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                          96, 186, 160, 22, dlg, (HMENU)IDD_DEVCFG_NET_IP, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        CreateWindowW(L"STATIC", L"端口", WS_CHILD, 276, 190, 70, 22, dlg, NULL, g_app.hInst, NULL);
+        h = CreateWindowW(L"EDIT", wport, WS_CHILD | WS_BORDER | WS_TABSTOP | ES_NUMBER,
+                          356, 186, 100, 22, dlg, (HMENU)IDD_DEVCFG_NET_PORT, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"上传 ELF", WS_CHILD | BS_PUSHBUTTON,
+                          14, 222, 96, 24, dlg, (HMENU)IDD_DEVCFG_NET_UPELF, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        h = CreateWindowW(L"BUTTON", L"下载 ELF", WS_CHILD | BS_PUSHBUTTON,
+                          120, 222, 96, 24, dlg, (HMENU)IDD_DEVCFG_NET_DOWNELF, g_app.hInst, NULL);
+        SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    }
+    h = CreateWindowW(L"STATIC", L"", WS_CHILD, 14, 288, 580, 22, dlg, (HMENU)IDD_DEVCFG_STATUS, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    /* 底部按钮 */
+    h = CreateWindowW(L"BUTTON", L"连接", WS_CHILD | BS_PUSHBUTTON,
+                      14, 324, 84, 28, dlg, (HMENU)IDD_DEVCFG_CONNECT, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"断开", WS_CHILD | BS_PUSHBUTTON,
+                      106, 324, 84, 28, dlg, (HMENU)IDD_DEVCFG_DISCONNECT, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"删除设备", WS_CHILD | BS_PUSHBUTTON,
+                      198, 324, 92, 28, dlg, (HMENU)IDD_DEVCFG_DELETE, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"确定", WS_CHILD | BS_DEFPUSHBUTTON | WS_TABSTOP,
+                      418, 324, 84, 28, dlg, (HMENU)IDD_DEVCFG_OK, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    h = CreateWindowW(L"BUTTON", L"取消", WS_CHILD | WS_TABSTOP,
+                      510, 324, 84, 28, dlg, (HMENU)IDD_DEVCFG_CANCEL, g_app.hInst, NULL);
+    SendMessageW(h, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    devcfg_show_groups(dlg, p->dev_kind);
+    if (p->kind == OS_PROJ_PROBE) device_cfg_fill_probes(dlg, st);
+    run_modal(dlg, g_app.hMain);
+}
+
 static int conn_busy_refuse(const char* what)
 {
     if (g_step_job) {
@@ -2811,6 +3752,8 @@ void os_mainwin_cfg_init(void)
     }
     cfg_fill_speeds();
     cfg_fill_emus();
+    /* 启动时把活动设备配置同步到隐藏兼容控件（脚本读取/修改时值一致） */
+    proj_cfg_to_toolbar(os_ws_active());
 }
 
 /* 向所有原生波形窗口广播视图消息（FITALL=整体展示，LIVE=跟随最新）。
@@ -2830,8 +3773,12 @@ static void chart_broadcast(UINT msg)
 
 static void cmd_start_acq(void)
 {
-    if (0 && g_app.net_mode) {
-        cmd_net_action(OS_CMD_NET_WATCH);
+    OS_Project* ap = os_ws_active();
+    if (ap && ap->kind == OS_PROJ_NET) {
+        /* 网络设备：开始采集 = 向远端下达监视列表 */
+        os_mainwin_net_cmd(OS_CMD_NET_WATCH, ap->net_ip, ap->net_port);
+        refresh_status();
+        os_mainwin_update_buttons();
         return;
     }
     if (!os_ds_any_connected()) {
@@ -2848,8 +3795,12 @@ static void cmd_start_acq(void)
 
 static void cmd_stop_acq(void)
 {
-    if (0 && g_app.net_mode) {
-        cmd_net_action(OS_CMD_NET_WATCH_STOP);
+    OS_Project* ap = os_ws_active();
+    if (ap && ap->kind == OS_PROJ_NET) {
+        /* 网络设备：停止采集 = 停止下达（空监视列表） */
+        os_mainwin_net_cmd(OS_CMD_NET_WATCH_STOP, ap->net_ip, ap->net_port);
+        refresh_status();
+        os_mainwin_update_buttons();
         return;
     }
     os_ds_stop();
@@ -3077,22 +4028,15 @@ HWND os_win_add_to_tab(int tab, const char* type, const wchar_t* title)
 
 static void cmd_add_window(int native_chart)
 {
-    wchar_t title[128];
-    static int chart_no = 1, num_no = 1;
-    if (native_chart) _snwprintf(title, 128, L"波形窗口 %d", chart_no++);
-    else _snwprintf(title, 128, L"数值窗口 %d", num_no++);
-    os_win_add_to_tab(-1, native_chart ? "chart" : "num", title);
+    /* 标签默认名 Default；双击标签或右键“重命名标签”可改（清空也回落到 Default） */
+    os_win_add_to_tab(-1, native_chart ? "chart" : "num", L"Default");
 }
 
 /* N11: 在当前 tab 内附加一个新的波形/数值窗口 */
 static void cmd_add_to_tab(int native_chart)
 {
-    wchar_t title[128];
-    static int tchart_no = 1, tnum_no = 1;
     if (g_cur_tab < 0 || g_cur_tab >= g_app.win_count) { cmd_add_window(native_chart); return; }
-    if (native_chart) _snwprintf(title, 128, L"波形窗口 %d", tchart_no++);
-    else _snwprintf(title, 128, L"数值窗口 %d", tnum_no++);
-    os_win_add_to_tab(g_cur_tab, native_chart ? "chart" : "num", title);
+    os_win_add_to_tab(g_cur_tab, native_chart ? "chart" : "num", L"Default");
 }
 
 static HMENU g_menu_proj; /* 文件 → 活动 Project */
@@ -3107,9 +4051,13 @@ static void rebuild_project_menu(void)
     for (i = 0; i < os_ws()->project_count && i < OS_MAX_PROJECTS; i++) {
         OS_Project* pr = os_ws_project_at(i);
         if (!pr) continue;
-        os_utf8_to_wide_buf(pr->name, pn, 80);
-        _snwprintf(wname, 160, L"%s (%s)", pn,
-                   pr->kind == OS_PROJ_XCP ? L"XCP" : L"Probe");
+        {
+            wchar_t wk[32];
+            os_utf8_to_wide_buf(pr->name, pn, 80);
+            os_utf8_to_wide_buf(os_ws_dev_kind_name(pr->dev_kind), wk, 32);
+            _snwprintf(wname, 160, L"[%ls] %ls (id=%d)%ls", wk, pn, pr->id,
+                       pr->connected ? L" [已连接]" : L"");
+        }
         AppendMenuW(g_menu_proj,
                     MF_STRING | (i == os_ws()->active ? MF_CHECKED : 0),
                     IDM_WS_PROJ_BASE + i, wname);
@@ -3187,11 +4135,13 @@ static void pick_refresh(HWND dlg)
     SendMessageW(hList, LVM_DELETEALLITEMS, 0, 0);
     for (i = 0; i < st->count; i++) {
         const OS_Leaf* L = os_vartree_leaf(st->ids[i]);
-        char full[420];
-        wchar_t wfull[420];
+        char label[320], full[480];
+        wchar_t wfull[480];
         LVITEMW it;
         if (!L) continue;
-        _snprintf(full, 420, "%s @0x%llX", L->name, (unsigned long long)L->address);
+        os_ws_leaf_label(L, label, sizeof(label));
+        if (!label[0]) _snprintf(label, sizeof(label), "%s", L->name);
+        _snprintf(full, 480, "%s @0x%llX", label, (unsigned long long)L->address);
         os_utf8_to_wide_buf(full, wfull, 420);
         memset(&it, 0, sizeof(it));
         it.mask = LVIF_TEXT;
@@ -3333,6 +4283,16 @@ static LRESULT CALLBACK pick_proc(HWND dlg, UINT msg, WPARAM wParam, LPARAM lPar
         n = st->pr->count;
         if (n > 512) n = 512;
         for (i = 0; i < n; i++) ids[i] = st->pr->ids[i];
+        {   /* 测试钩子：没有原生窗口时直接建目标类型，避免弹“选择窗口类型”模态框阻塞自动化 */
+            int have = 0, wi, k;
+            for (wi = 0; wi < g_app.win_count && !have; wi++)
+                for (k = 0; k < g_app.wins[wi].group_count; k++)
+                    if (g_app.wins[wi].group[k] &&
+                        (os_chart_is(g_app.wins[wi].group[k]) || os_num_is(g_app.wins[wi].group[k]))) {
+                        have = 1; break;
+                    }
+            if (!have) cmd_add_window(wParam ? 1 : 0);
+        }
         add_ids_to_native(wParam ? 1 : 0, ids, n);
         os_log(OS_LOG_INFO, "搜索对话框添加变量: %d 个到%s", n,
                wParam ? "波形窗口" : "数值窗口");
@@ -4007,6 +4967,171 @@ static void tree_context_select_hit(void)
     TreeView_SelectItem(g_app.hTree, ht.hItem);
 }
 
+/* 从任意节点向上找所属设备根；返回设备数组下标，-1=不在设备下 */
+static int tree_item_device_index(HTREEITEM h)
+{
+    while (h) {
+        TVITEMW it;
+        memset(&it, 0, sizeof(it));
+        it.mask = TVIF_PARAM;
+        it.hItem = h;
+        if (TreeView_GetItem(g_app.hTree, &it)) {
+            int pid = os_vartree_lparam_project(it.lParam);
+            if (pid >= 0) return os_ws_device_index_by_id(pid);
+        }
+        h = (HTREEITEM)SendMessageW(g_app.hTree, TVM_GETNEXTITEM, TVGN_PARENT, (LPARAM)h);
+    }
+    return -1;
+}
+
+/* 光标下的树节点；无节点返回 NULL（空白区） */
+static HTREEITEM tree_hit_at_cursor(LPARAM* out_lp)
+{
+    TVHITTESTINFO ht;
+    POINT pt;
+    HTREEITEM h;
+    TVITEMW it;
+    if (!g_app.hTree) return NULL;
+    memset(&ht, 0, sizeof(ht));
+    GetCursorPos(&pt);
+    ScreenToClient(g_app.hTree, &pt);
+    ht.pt = pt;
+    TreeView_HitTest(g_app.hTree, &ht);
+    h = ht.hItem;
+    if (out_lp) *out_lp = -1;
+    if (!h) return NULL;
+    memset(&it, 0, sizeof(it));
+    it.mask = TVIF_PARAM;
+    it.hItem = h;
+    if (TreeView_GetItem(g_app.hTree, &it) && out_lp) *out_lp = it.lParam;
+    return h;
+}
+
+static void device_context_menu(int project_index)
+{
+    OS_Project* p = os_ws_project_at(project_index);
+    HMENU m, add;
+    POINT pt;
+    int cmd, is_probe;
+    if (!p) return;
+    is_probe = (p->kind == OS_PROJ_PROBE);
+    m = CreatePopupMenu();
+    AppendMenuW(m, MF_STRING, IDM_DEV_SET_ACTIVE, L"设为当前设备");
+    AppendMenuW(m, MF_STRING, IDM_DEV_CFG, L"设备配置...");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING | (is_probe ? 0 : MF_GRAYED), IDM_DEV_CONNECT, L"连接");
+    AppendMenuW(m, MF_STRING | (is_probe ? 0 : MF_GRAYED), IDM_DEV_ATTACH, L"Attach");
+    AppendMenuW(m, MF_STRING, IDM_DEV_DISCONNECT, L"断开");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_DEV_LOAD_ELF, L"加载 ELF/out...");
+    AppendMenuW(m, MF_STRING, IDM_DEV_LOAD_A2L, L"加载 A2L...");
+    AppendMenuW(m, MF_STRING, IDM_DEV_LOAD_MAP, L"加载 MAP...");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    add = CreatePopupMenu();
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_JLINK, L"J-Link");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_STLINK, L"ST-Link");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_DAS, L"miniWiggler (DAS)");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_XCP, L"XCP");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_NET, L"网络 (WebSocket)");
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)add, L"添加同类/其它设备");
+    AppendMenuW(m, MF_STRING, IDM_DEV_DELETE, L"删除设备");
+    GetCursorPos(&pt);
+    os_theme_menu_show(m);
+    cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                               pt.x, pt.y, 0, g_app.hMain, NULL);
+    os_theme_menu_end();
+    DestroyMenu(m);
+    switch (cmd) {
+    case IDM_DEV_SET_ACTIVE:
+        device_set_active_index(project_index);
+        tree_select_device_root(project_index);
+        break;
+    case IDM_DEV_CFG:
+        device_configure_dialog(project_index);
+        break;
+    case IDM_DEV_CONNECT:
+        device_connect_index(project_index);
+        break;
+    case IDM_DEV_ATTACH:
+        device_set_active_index(project_index);
+        cmd_attach();
+        break;
+    case IDM_DEV_DISCONNECT:
+        device_disconnect_index(project_index);
+        break;
+    case IDM_DEV_LOAD_ELF:
+        device_load_symbol_dialog(project_index, 0);
+        break;
+    case IDM_DEV_LOAD_A2L:
+        device_load_symbol_dialog(project_index, 1);
+        break;
+    case IDM_DEV_LOAD_MAP:
+        device_load_symbol_dialog(project_index, 2);
+        break;
+    case IDM_DEV_DELETE: {
+        wchar_t msg[256];
+        _snwprintf(msg, 256, L"删除设备“%hs”？", p->name);
+        if (MessageBoxW(g_app.hMain, msg, L"删除设备", MB_YESNO | MB_ICONWARNING) == IDYES) {
+            device_disconnect_index(project_index);
+            os_ws_remove_device(project_index);
+            windows_rebind_all();
+            device_refresh_ui();
+            os_log(OS_LOG_INFO, "设备已删除: %s", p->name);
+        }
+        break;
+    }
+    case IDM_DEV_ADD_JLINK:  device_add_kind(OS_DEVK_JLINK); break;
+    case IDM_DEV_ADD_STLINK: device_add_kind(OS_DEVK_STLINK); break;
+    case IDM_DEV_ADD_DAS:    device_add_kind(OS_DEVK_DAS); break;
+    case IDM_DEV_ADD_XCP:    device_add_kind(OS_DEVK_XCP); break;
+    case IDM_DEV_ADD_NET:    device_add_kind(OS_DEVK_NET); break;
+    }
+}
+
+static void device_blank_menu(void)
+{
+    HMENU m, add;
+    POINT pt;
+    int cmd;
+    if (!os_ws_active()) {
+        int di = os_ws_default_device_index();
+        if (di >= 0) os_ws_set_active(di);
+    }
+    m = CreatePopupMenu();
+    add = CreatePopupMenu();
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_JLINK, L"J-Link");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_STLINK, L"ST-Link");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_DAS, L"miniWiggler (DAS)");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_XCP, L"XCP");
+    AppendMenuW(add, MF_STRING, IDM_DEV_ADD_NET, L"网络 (WebSocket)");
+    AppendMenuW(m, MF_POPUP, (UINT_PTR)add, L"添加设备");
+    AppendMenuW(m, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(m, MF_STRING, IDM_DEV_LOAD_ELF, L"为当前设备加载 ELF/out...");
+    AppendMenuW(m, MF_STRING, IDM_DEV_REFRESH, L"刷新设备列表");
+    GetCursorPos(&pt);
+    os_theme_menu_show(m);
+    cmd = (int)TrackPopupMenu(m, TPM_LEFTALIGN | TPM_RIGHTBUTTON | TPM_RETURNCMD,
+                               pt.x, pt.y, 0, g_app.hMain, NULL);
+    os_theme_menu_end();
+    DestroyMenu(m);
+    switch (cmd) {
+    case IDM_DEV_ADD_JLINK:  device_add_kind(OS_DEVK_JLINK); break;
+    case IDM_DEV_ADD_STLINK: device_add_kind(OS_DEVK_STLINK); break;
+    case IDM_DEV_ADD_DAS:    device_add_kind(OS_DEVK_DAS); break;
+    case IDM_DEV_ADD_XCP:    device_add_kind(OS_DEVK_XCP); break;
+    case IDM_DEV_ADD_NET:    device_add_kind(OS_DEVK_NET); break;
+    case IDM_DEV_LOAD_ELF: {
+        int idx = os_ws()->active;
+        if (idx >= 0) device_load_symbol_dialog(idx, 0);
+        break;
+    }
+    case IDM_DEV_REFRESH:
+        device_refresh_ui();
+        os_log(OS_LOG_INFO, "设备列表已刷新（%d 个设备）", os_ws()->project_count);
+        break;
+    }
+}
+
 static void tree_context_menu(HWND hwnd, LPARAM lParam)
 {
     HTREEITEM h;
@@ -4016,6 +5141,21 @@ static void tree_context_menu(HWND hwnd, LPARAM lParam)
     POINT pt;
     (void)hwnd;
     (void)lParam;
+    h = tree_hit_at_cursor(&lp);
+    /* 设备根节点：设备专用菜单 */
+    if (h) {
+        int pid = os_vartree_lparam_project(lp);
+        int idx = pid >= 0 ? os_ws_device_index_by_id(pid) : -1;
+        if (idx >= 0) {
+            TreeView_SelectItem(g_app.hTree, h);
+            device_context_menu(idx);
+            return;
+        }
+    } else {
+        /* 空白处：添加设备 / 为当前设备加载符号 */
+        device_blank_menu();
+        return;
+    }
     tree_context_select_hit();
     h = TreeView_GetSelection(g_app.hTree);
     if (h) {
@@ -4996,17 +6136,8 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             SendMessageW(c, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         }
 
-        {
-            HWND bar = os_dockbar_hwnd(OS_DOCKBAR_MAIN);
-            int ids[] = { IDC_CFG_DRIVER, IDC_CFG_DEVICE, IDC_CFG_IFACE, IDC_CFG_SPEED, IDC_CFG_EMU, IDC_CFG_REFRESH,
-                          IDD_NET_IP, IDD_NET_PORT, IDD_NET_LISTEN, IDD_NET_CONNECT, IDD_NET_UPELF, IDD_NET_DOWNELF };
-            /* XCP 控件由 layout() 归入调试栏，不在此处挂主栏 */
-            int k;
-            if (bar) for (k = 0; k < (int)(sizeof(ids)/sizeof(ids[0])); k++) {
-                HWND c = GetDlgItem(hwnd, ids[k]);
-                if (c) SetParent(c, bar);
-            }
-        }
+        /* 旧连接/网络/XCP 配置控件不再挂到命令栏：保留句柄供自动化脚本按 ID 访问，
+         * 但作为主窗口隐藏子控件存在，不参与布局（show_bar_children 不会重新显示）。 */
         g_app.hTree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"",
                                       WS_CHILD | WS_VISIBLE | TVS_HASLINES | TVS_HASBUTTONS |
                                       TVS_LINESATROOT | TVS_SHOWSELALWAYS,
@@ -5118,9 +6249,9 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         AppendMenuW(mFile, MF_SEPARATOR, 0, NULL);
         AppendMenuW(mFile, MF_STRING, IDM_WS_LOAD, L"打开 Workspace...");
         AppendMenuW(mFile, MF_STRING, IDM_WS_SAVE, L"保存 Workspace...");
-        AppendMenuW(mFile, MF_STRING, IDM_WS_ADD_PROJ, L"添加 Project...");
+        AppendMenuW(mFile, MF_STRING, IDC_BTN_ADD_DEV, L"添加设备...");
         g_menu_proj = CreatePopupMenu();
-        AppendMenuW(mFile, MF_POPUP, (UINT_PTR)g_menu_proj, L"活动 Project");
+        AppendMenuW(mFile, MF_POPUP, (UINT_PTR)g_menu_proj, L"当前设备");
         rebuild_project_menu();
         AppendMenuW(mFile, MF_STRING, IDM_SRCMAP, L"源码目录关联...");
         AppendMenuW(mFile, MF_STRING, IDM_SRC_QUICK, L"快速打开源码...\tCtrl+P");
@@ -5185,6 +6316,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         refresh_tree_pin();
         os_log_set(os_mainwin_append_log);
         os_log(OS_LOG_INFO, "OpenScope 已启动");
+        hide_legacy_cfg_controls(); /* 设备配置移入左树右键菜单：隐藏旧工具栏控件 */
         refresh_status();
         os_mainwin_update_buttons();
         os_theme_apply(hwnd); /* F20: 主题（标题栏/菜单/树/日志/状态栏/控件色） */
@@ -5487,6 +6619,15 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         return 0;
     }
+    case WM_OS_DEV_ADD:
+        device_add_kind((int)wParam);
+        return 0;
+    case WM_OS_DEV_CFG: {
+        int idx = (int)wParam;
+        if (idx < 0) idx = os_ws()->active;
+        device_configure_dialog(idx);
+        return 0;
+    }
     case WM_OS_DOCK_CMD:
         return os_mainwin_dock_cmd((OS_DockReq*)lParam);
     case WM_OS_WIN_FULLSCREEN: {
@@ -5617,6 +6758,27 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
                 tree_context_menu(hwnd, lParam);
                 return 0;
             }
+            if (h->code == TVN_SELCHANGEDW || h->code == TVN_SELCHANGEDA) {
+                /* 选中设备根或设备下的变量 → 当前设备随之切换 */
+                NMTREEVIEWW* tv = (NMTREEVIEWW*)lParam;
+                int idx = (tv && tv->itemNew.hItem) ? tree_item_device_index(tv->itemNew.hItem) : -1;
+                if (idx >= 0 && idx != os_ws()->active) {
+                    device_set_active_index(idx);
+                }
+                return 0;
+            }
+            if (h->code == NM_DBLCLK) {
+                HTREEITEM it = TreeView_GetSelection(g_app.hTree);
+                TVITEMW vi;
+                memset(&vi, 0, sizeof(vi));
+                vi.mask = TVIF_PARAM;
+                vi.hItem = it;
+                if (it && TreeView_GetItem(g_app.hTree, &vi) &&
+                    os_vartree_lparam_project(vi.lParam) >= 0) {
+                    device_configure_dialog(tree_item_device_index(it));
+                    return 0;
+                }
+            }
             if (h->code == TVN_BEGINDRAGW || h->code == TVN_BEGINDRAGA) {
                 NMTREEVIEWW* tv = (NMTREEVIEWW*)lParam;
                 /* 拖拽前确保命中项在选区；支持 Shift/Ctrl 多选后整批拖入 */
@@ -5645,6 +6807,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             break;
         }
         switch (LOWORD(wParam)) {
+        case IDC_BTN_ADD_DEV: device_add_menu(hwnd); break;
         case IDC_BTN_OPEN: cmd_open_elf(); break;
         case IDC_BTN_CONNECT: cmd_connect(); break;
         case IDC_BTN_ATTACH: cmd_attach(); break;
@@ -5945,6 +7108,7 @@ LRESULT CALLBACK os_mainwin_proc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
         }
         return 0;
     case WM_DESTROY:
+        os_ws_save_auto();   /* 设备列表/配置随退出持久化 */
         KillTimer(hwnd, 1);
         KillTimer(hwnd, 2);
         KillTimer(hwnd, 3);
@@ -6069,6 +7233,12 @@ void os_mainwin_register(void)
     wc.hInstance = g_app.hInst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
     wc.lpszClassName = L"OSDlgNetCfg";
+    RegisterClassW(&wc);
+    memset(&wc, 0, sizeof(wc));
+    wc.lpfnWndProc = devcfg_proc;
+    wc.hInstance = g_app.hInst;
+    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wc.lpszClassName = L"OSDlgDevCfg";
     RegisterClassW(&wc);
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = flash_proc;

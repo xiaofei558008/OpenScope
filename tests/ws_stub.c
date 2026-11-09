@@ -57,6 +57,17 @@ void os_ws_leaf_label(const OS_Leaf* L, char* out, int cap)
     out[0] = 0;
     if (L) _snprintf(out, cap, "%s", L->name);
 }
+const char* os_ws_dev_kind_name(int dev_kind)
+{
+    switch (dev_kind) {
+    case OS_DEVK_JLINK:  return "J-Link";
+    case OS_DEVK_STLINK: return "ST-Link";
+    case OS_DEVK_DAS:    return "miniWiggler";
+    case OS_DEVK_XCP:    return "XCP";
+    case OS_DEVK_NET:    return "网络";
+    default:             return "设备";
+    }
+}
 int os_ws_save(const wchar_t* path_w) { (void)path_w; return -1; }
 int os_ws_load(const wchar_t* path_w) { (void)path_w; return -1; }
 int os_ws_save_dialog(HWND owner) { (void)owner; return -1; }

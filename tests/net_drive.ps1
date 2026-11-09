@@ -30,10 +30,13 @@ if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out
 $logA = Join-Path $outDir "net_a.log"   # 探针侧实例日志
 $logB = Join-Path $outDir "net_b.log"   # 远端显示侧实例日志
 $logC = Join-Path $outDir "net_c.log"   # 第二个远端实例日志
+$wsA = Join-Path $outDir "net_ws_a.json"  # 每实例独立设备工作区（避免互相加载对方 ELF）
+$wsB = Join-Path $outDir "net_ws_b.json"
+$wsC = Join-Path $outDir "net_ws_c.json"
 $shotBmp = Join-Path $outDir "net_remote_chart.bmp"
 $shotMain = Join-Path $outDir "net_remote_main.png"
 $shotProbe = Join-Path $outDir "net_probe_main.png"
-foreach ($p in @($logA, $logB, $logC, $shotBmp, $shotMain, $shotProbe)) {
+foreach ($p in @($logA, $logB, $logC, $wsA, $wsB, $wsC, $shotBmp, $shotMain, $shotProbe)) {
     if (Test-Path $p) { Remove-Item $p -Force }
 }
 
@@ -133,7 +136,7 @@ function Save-WindowPng([IntPtr]$h, [string]$path) {
 }
 
 # ---- 阶段 1：A（探针）启动 + UI 点击连接 J-Link（本地勾选 g_counter 验证"本地+远端监视叠加"） ----
-$a = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logA","--net-listen=$netPort","--watch=g_counter" -PassThru
+$a = Start-Process -FilePath $exe -ArgumentList $Elf,"--no-layout","--log=$logA","--workspace=$wsA","--net-listen=$netPort","--watch=g_counter" -PassThru
 $hA = Wait-Main $a.Id 8000
 if ($hA -eq [IntPtr]::Zero) { Write-Output "FAIL A 主窗口未出现"; exit 1 }
 Start-Sleep -Milliseconds 1500   # 等模块加载/设备扫描完成
@@ -150,7 +153,7 @@ if ($hw) { Write-Output "INFO A 已连接 J-Link（硬件就绪）" } else { Wri
 
 # ---- 阶段 2：B（远端显示侧）启动——不加载本地 ELF，变量列表全靠"下载ELF"同步应用 ----
 $bArgs = @(
-    "--no-layout","--log=$logB","--net-connect=127.0.0.1:$netPort","--net-sync",
+    "--no-layout","--log=$logB","--workspace=$wsB","--net-connect=127.0.0.1:$netPort","--net-sync",
     "--watch=g_counter,g_cfg.a","--net-win=chart,g_counter,g_cfg.a","--net-watch",
     "--net-write=g_cfg.b=123","--net-download","--net-watchstop=7000",
     "--net-shot-at=$shotBmp,10500","--net-exit=13500"
@@ -172,7 +175,7 @@ if ($ipEdit -ne [IntPtr]::Zero -and $portEdit -ne [IntPtr]::Zero) { Write-Output
 
 # ---- 阶段 3：C（第二个远端，一对多 fan-out）----
 Start-Sleep -Seconds 2
-$c = Start-Process -FilePath $exe -ArgumentList "--no-layout","--log=$logC","--net-connect=127.0.0.1:$netPort","--net-sync","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
+$c = Start-Process -FilePath $exe -ArgumentList "--no-layout","--log=$logC","--workspace=$wsC","--net-connect=127.0.0.1:$netPort","--net-sync","--watch=g_counter","--net-watch","--net-watchstop=8000","--net-exit=11000" -PassThru
 
 # ---- 阶段 3.5：采集运行中抓取两个主窗口（报告用，WM_PRINT 抓取）----
 Start-Sleep -Seconds 5

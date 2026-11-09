@@ -6,6 +6,9 @@ ROOT="D:/OpenScope"
 DEV="$ROOT/bin/Release/OpenScope.exe"
 INSTALLED="C:/Program Files/OpenScope/OpenScope.exe"
 JROOT="$ROOT/module/jlink/tests"
+# 每个回归用例独立设备工作区，避免用户/上一次测试的 workspace.json 干扰
+export OPENSCOPE_WORKSPACE="/tmp/openscope_reg_workspace.json"
+rm -f "$OPENSCOPE_WORKSPACE"
 
 NON_JLINK=(
   ui_windows_drive.ps1
@@ -38,6 +41,8 @@ NON_JLINK=(
   ui_replay_all_drive.ps1
   ui_elf_autoload_drive.ps1
   ui_flash_drive.ps1
+  ui_devices_drive.ps1
+  ui_devices_symbols_drive.ps1
 )
 JLINK=(
   ui_record_dialog_drive.ps1
@@ -49,6 +54,7 @@ JLINK=(
 
 run_one() { # <script> <exe> <label>
   local script="$1" exe="$2" label="$3"
+  rm -f "$OPENSCOPE_WORKSPACE"
   taskkill //F //IM OpenScope.exe >/dev/null 2>&1
   sleep 1
   if [[ "$script" == *ui_connect_drive.ps1* ]]; then

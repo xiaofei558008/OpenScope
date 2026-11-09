@@ -74,6 +74,8 @@ typedef struct {
 #define WM_OS_STEPOUT_DONE   (WM_APP + 62) /* 第四轮 任务1: 后台 StepOut 完成 (lParam=OS_CmdJob*，主线程 on_step_out_done 回收) */
 #define WM_OS_ELF_OPEN       (WM_APP + 52) /* AI/工作线程 → 主线程：同步加载 ELF (lParam=heap wchar_t*，SendMessage 同步) */
 #define WM_OS_DOCK_CMD       (WM_APP + 54) /* AI → 主线程：停靠管理命令 (lParam=OS_DockReq*，SendMessage 同步) */
+#define WM_OS_DEV_ADD        (WM_APP + 70) /* 测试钩子：添加设备 (wParam=OS_DeviceKind) */
+#define WM_OS_DEV_CFG        (WM_APP + 71) /* 测试钩子：打开设备配置窗 (wParam=项目下标，-1=当前) */
 #define WM_OS_XCP_SHOW       (WM_APP + 53) /* AI → 主线程：显示/隐藏 XCP 标定页 (wParam=1/0) */
 #define IDM_XCP_WIN          2706          /* XCP 标定窗口 */
 #define IDM_A2L_EXPORT       2707          /* 导出 A2L（含标定量） */
@@ -119,7 +121,8 @@ typedef struct OS_Leaf {
     OS_Sample   sample;
     int         is_synth; /* 需求14：远端同步进来的变量（非本机 ELF 解析） */
     int         from_a2l; /* A2L 导入 */
-    int         project_id; /* 所属 Workspace Project */
+    int         is_map;   /* MAP 导入（每设备独立；XCP/探针均可读） */
+    int         project_id; /* 所属 Workspace 设备 */
 } OS_Leaf;
 
 /* 右侧窗口区的一个 tab。N11: 一个 tab 可容纳多个窗口（group[0]==hwnd）。 */

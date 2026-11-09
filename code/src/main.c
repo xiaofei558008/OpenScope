@@ -187,6 +187,7 @@ static void parse_cmdline(wchar_t* cmd, wchar_t** elf, wchar_t** select_leaf,
         sp = wcschr(tok, L' ');
         if (sp) *sp = 0; /* 先截断尾部空格再匹配，避免 "--no-layout " 匹配失败 */
         if (wcsncmp(tok, L"--log=", 6) == 0) { /* 已预扫描处理，跳过（勿当 ELF 路径） */ }
+        else if (wcsncmp(tok, L"--workspace=", 12) == 0) { /* 已预扫描处理，跳过（勿当 ELF 路径） */ }
         else if (wcsncmp(tok, L"--remote-", 9) == 0) { /* remote.dll 自行解析（勿当 ELF 路径） */ }
         else if (wcsncmp(tok, L"--select-leaf=", 14) == 0) *select_leaf = tok + 14;
         else if (wcsncmp(tok, L"--layout-load=", 14) == 0) *layout_load = tok + 14;
@@ -373,6 +374,20 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR lpCmdLin
                 memcpy(tmp, t + 6, (size_t)len * sizeof(wchar_t));
                 tmp[len] = 0;
                 os_log_file_set_override(tmp);
+            }
+        }
+    }
+    /* --workspace=<path>：多实例/测试用独立设备工作区（须在 os_ws_init 前生效） */
+    {
+        wchar_t* t = wcsstr(lpCmdLine, L"--workspace=");
+        if (t) {
+            wchar_t tmp[MAX_PATH];
+            wchar_t* sp = wcschr(t + 12, L' ');
+            int len = sp ? (int)(sp - (t + 12)) : (int)wcslen(t + 12);
+            if (len > 0 && len < MAX_PATH) {
+                memcpy(tmp, t + 12, (size_t)len * sizeof(wchar_t));
+                tmp[len] = 0;
+                SetEnvironmentVariableW(L"OPENSCOPE_WORKSPACE", tmp);
             }
         }
     }

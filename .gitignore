@@ -37,3 +37,7 @@ tests/out/
 
 # agent 临时测试目录
 _agent_test/
+
+# 本地 mock/ORP 测试日志
+orp_mock*.log
+orp_mock*.err.log

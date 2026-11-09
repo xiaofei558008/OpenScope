@@ -3,6 +3,8 @@ setlocal
 rem UI 回归测试实例使用独立布局文件，避免覆盖用户 %LOCALAPPDATA%\OpenScope\layout.ini
 if not exist "%~dp0bin" mkdir "%~dp0bin"
 set "OPENSCOPE_LAYOUT=%~dp0bin\test_layout.ini"
+set "OPENSCOPE_WORKSPACE=%~dp0bin\test_workspace.json"
+del /q "%~dp0bin\test_workspace.json" >nul 2>&1
 rem 测试程序的 .obj 统一输出到 tests\bin\obj（原先散落在仓库根目录）
 if not exist tests\bin\obj mkdir tests\bin\obj
 set "CL=/Fotests\bin\obj\\"
@@ -365,6 +367,20 @@ echo Running flash dialog UI...
 powershell -NoProfile -ExecutionPolicy Bypass -File tests\ui_flash_drive.ps1
 if errorlevel 1 (
   echo [ERROR] ui_flash_drive FAILED
+  exit /b 1
+)
+
+echo Running device list UI (jlink/stlink/das/xcp/network 设备节点 + 右键配置)...
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\ui_devices_drive.ps1
+if errorlevel 1 (
+  echo [ERROR] ui_devices_drive FAILED
+  exit /b 1
+)
+
+echo Running per-device symbols + fuzzy search UI...
+powershell -NoProfile -ExecutionPolicy Bypass -File tests\ui_devices_symbols_drive.ps1
+if errorlevel 1 (
+  echo [ERROR] ui_devices_symbols_drive FAILED
   exit /b 1
 )
 

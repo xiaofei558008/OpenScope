@@ -454,3 +454,17 @@
 ## 2026-10-25 规范 v0.6：control.changed 通知
 - 控制权任何变化（acquire/release/auto_release/expired）推送 control.changed 给所有在线会话，held_by_me 按接收方计算；mock 与 remote.dll 实现。
 - 一致性测试 22 例（新增广播、持有者断线 15 s 自动释放）：mock 3 次、真机 3 次全部通过；build.bat 通过。
+
+## 2026-11-09 设备列表统一改造（1.29.0：每设备独立 ELF/A2L/MAP + 混源窗口 + 命令栏精简）
+
+- [x] 设备模型：`OS_Project` 增加 `dev_kind`（J-Link/ST-Link/miniWiggler(DAS)/XCP/网络）、`serial`、`map_path`、`net_ip/net_port/net_mode`、`attach_default`；workspace.json v2 持久化并将驱动下标按类型重绑；启动自动恢复设备列表，退出/增删改自动保存。
+- [x] 左树设备节点：根节点显示 `[类型] 名称 #ID [已连接] 接口/速度/SN`，变量按设备分组；空白处右键“添加设备”（五类），设备节点右键“设备配置/连接/Attach/断开/加载 ELF/A2L/MAP/删除”；双击设备打开配置；选中设备或变量即切换当前设备。
+- [x] 设备配置对话框 `OSDlgDevCfg`：通用名称 + ELF/A2L/MAP；探针接口/速度/器件/探针扫描(SN)/Attach/复位下连接；XCP 传输/端口/波特/扫描；网络模式/IP/端口/上传下载 ELF；连接/断开/删除/确定的完整闭环。
+- [x] 每设备独立符号：`os_vartree_merge_elf` 按 project 合并（保留其它设备）；A2L 按 project 导入；新增 MAP 符号入该设备变量树（`os_vartree_add_map_symbol`，ELF/A2L 同名优先），设备删除时清理其叶并压缩叶 id。
+- [x] 混源窗口：同一波形/数值窗口可添加不同设备的叶子（叶 id 全局唯一、样本带 project_id）；图例/数值列表显示 `设备::变量`，同名设备追加 `#id`。
+- [x] 模糊搜索：`Ctrl+F` 支持变量名、设备名/类型、`设备::变量` / `设备 #id::变量` 前缀；结果行显示所属设备与地址。
+- [x] 命令栏精简：J-Link/ST-Link/DAS/XCP/网络 的接口、速度、器件、刷新、IP/端口、XCP 传输等控件全部移入设备配置对话框；命令栏只保留“添加设备/打开ELF/连接/Attach/断开/开始/停止/录制/烧录/回放”和调试/断点按钮。旧控件保留隐藏句柄以兼容既有自动化脚本。
+- [x] 标签默认名改为 `Default`（双击/右键重命名，清空回落 Default）。
+- [x] ELF 重载保留该设备原观测并按名恢复；日志统一 `ELF 变量表重建: N 个叶子（原观测 X 个，缺失 Y 个）`。
+- 限制：同一驱动类型（如两台 J-Link）目前共用一路驱动会话，连接新设备会自动断开同类旧设备并在日志说明；真正并行需 module_api v6 / 驱动多实例（docs/multi_target_design.md M3）。
+- 测试：`tests/ui_devices_drive.ps1`（五类设备添加/配置改名/持久化/旧控件隐藏，ALL PASS）、`tests/ui_devices_symbols_drive.ps1`（两个 J-Link 各自 ELF+MAP、模糊搜索设备隔离、同一波形/数值窗口混源，ALL PASS）；`build_tests.bat` 全量通过；真机 J-Link 主界面连接/断开 `ui_connect_drive.ps1` ALL PASS。
