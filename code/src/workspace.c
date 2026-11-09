@@ -128,16 +128,33 @@ void os_ws_init(void)
     memset(&g_ws, 0, sizeof(g_ws));
     _snprintf(g_ws.name, sizeof(g_ws.name), "Default");
     g_next_id = 1;
-    /* 首次运行：每个已加载数据源模块一个设备，便于 J-Link/ST-Link/DAS/XCP/网络并行 */
-    for (i = 0; i < g_app.driver_count && g_ws.project_count < OS_MAX_PROJECTS; i++) {
-        int idx, kind;
-        char nm[64];
-        _snprintf(nm, sizeof(nm), "%s",
-                  g_app.drivers[i] && g_app.drivers[i]->name ? g_app.drivers[i]->name : "Probe");
-        kind = os_ws_dev_kind_from_module(nm);
-        if (kind == OS_DEVK_UNKNOWN) kind = OS_DEVK_JLINK;
-        idx = os_ws_add_device(kind, NULL);
-        if (idx >= 0) g_ws.projects[idx].driver_index = i; /* 绑定到实际驱动槽位 */
+    /* 首次运行：每个已加载数据源模块一个设备，按常用顺序 J-Link/ST-Link/DAS 排列 */
+    {
+        static const int order[] = { OS_DEVK_JLINK, OS_DEVK_STLINK, OS_DEVK_DAS };
+        int k;
+        for (k = 0; k < (int)(sizeof(order) / sizeof(order[0])) && g_ws.project_count < OS_MAX_PROJECTS; k++) {
+            int drv = os_ws_first_driver_for_kind(order[k]);
+            if (drv >= 0) {
+                int idx = os_ws_add_device(order[k], NULL);
+                if (idx >= 0) g_ws.projects[idx].driver_index = drv;
+            }
+        }
+        /* 未知类型的驱动模块也保留（按 J-Link 处理，用户可改） */
+        for (i = 0; i < g_app.driver_count && g_ws.project_count < OS_MAX_PROJECTS; i++) {
+            int already = 0, j, kind;
+            char nm[64];
+            _snprintf(nm, sizeof(nm), "%s",
+                      g_app.drivers[i] && g_app.drivers[i]->name ? g_app.drivers[i]->name : "Probe");
+            kind = os_ws_dev_kind_from_module(nm);
+            for (j = 0; j < g_ws.project_count; j++)
+                if (g_ws.projects[j].driver_index == i) { already = 1; break; }
+            if (already) continue;
+            if (kind == OS_DEVK_UNKNOWN) kind = OS_DEVK_JLINK;
+            {
+                int idx = os_ws_add_device(kind, NULL);
+                if (idx >= 0) g_ws.projects[idx].driver_index = i;
+            }
+        }
     }
     if (g_app.driver_count == 0) {
         /* 无驱动模块时也放一个 J-Link 占位设备，用户可右键修改/加载符号 */
