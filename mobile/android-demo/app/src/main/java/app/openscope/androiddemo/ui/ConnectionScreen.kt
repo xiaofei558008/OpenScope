@@ -208,7 +208,7 @@ private fun PairingCard(state: DemoSnapshot, viewModel: DemoViewModel) {
         TextButton(onClick = { viewModel.selfApprove() }) { Text("尝试由手机自行批准") }
         state.storedApproval?.let { Text("记录中的审批：${DemoCopy.approval(it)}") }
         Text(
-            "兑换计数 ${state.redemptionCount} · 本次新发授权 ${yesNo(state.grantCreatedOnLastAttempt)} · " +
+            "兑换计数 ${state.redemptionCount} · 最近一次配对尝试新发授权 ${yesNo(state.grantCreatedOnLastAttempt)} · " +
                 "延长有效期 ${yesNo(state.ttlExtended)} · 再次消耗 ${yesNo(state.reconsumed)}",
             style = MaterialTheme.typography.bodySmall,
         )

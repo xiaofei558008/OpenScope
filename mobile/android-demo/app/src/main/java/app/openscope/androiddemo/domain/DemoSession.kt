@@ -375,7 +375,9 @@ class DemoSession(
         acceptingPc = false
         dropLiveView("已请求重连。这不是授权恢复。")
         transport = TransportState.Down
-        retarget("来源已变更：重连使用新代数 $epoch，旧代数样本已清除。")
+        retarget { newEpoch ->
+            "来源已变更：重连使用新代数 $newEpoch，旧代数样本已清除。"
+        }
     }
 
     fun injectLanFailure() {
@@ -624,11 +626,15 @@ class DemoSession(
     }
 
     private fun retarget(note: String) {
+        retarget { note }
+    }
+
+    private fun retarget(note: (Long) -> String) {
         epoch += 1
         rings.retarget(epoch, sourceKey())
         published = List(DemoOnlySettings.MAX_CHANNELS) { emptyList() }
         frozenChannels = null
-        sourceChangeNote = note
+        sourceChangeNote = note(epoch)
         publishUi()
     }
 

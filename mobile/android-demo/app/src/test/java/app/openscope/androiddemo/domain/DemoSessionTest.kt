@@ -171,6 +171,38 @@ class DemoSessionTest {
     }
 
     @Test
+    fun revokedSavedDeviceCannotSilentlyRestorePermission() {
+        val session = DemoSession()
+        approve(session, "demo-ok")
+        session.onGeneratorTick()
+        session.rememberDevice("车间平板")
+        val saved = session.exportSaved().single()
+        val requestId = session.bindingForTest()!!.requestId
+        session.revokeServer()
+        assertTrue(session.samples(0).isEmpty())
+        session.selectSaved(saved.localId)
+        val selected = session.snapshot()
+        assertFalse(selected.viewingLive)
+        assertTrue(selected.serverRevoked)
+        assertFalse(selected.preview!!.verified)
+        assertFalse(selected.savedRestoresAuth)
+        assertTrue(session.samples(0).isEmpty())
+        session.recoverSame()
+        assertEquals("DEVICE_REVOKED", session.snapshot().lastCode)
+        assertEquals(Approval.Revoked, session.snapshot().storedApproval)
+        assertFalse(session.snapshot().grantCreatedOnLastAttempt)
+        assertFalse(session.snapshot().ttlExtended)
+        assertEquals(1, session.grantCreationsForTest(requestId))
+        session.verify()
+        session.applyPairing()
+        assertEquals("DEVICE_REVOKED", session.snapshot().lastCode)
+        assertNotEquals(Approval.Pending, session.snapshot().storedApproval)
+        session.resumeViewing()
+        assertFalse(session.snapshot().viewingLive)
+        assertEquals(0, session.snapshot().replayCount)
+    }
+
+    @Test
     fun serverRevokeBlocksResumeAndDoesNotReplay() {
         val session = DemoSession()
         approve(session, "demo-ok")
@@ -349,10 +381,26 @@ class DemoSessionTest {
         assertTrue(session.snapshot().waves.liveCount > session.snapshot().waves.channels.sumOf { it.size })
         val oldEpoch = session.snapshot().epoch
         session.requestReconnect()
+        val after = session.snapshot()
         assertTrue(session.samples(0).isEmpty())
-        assertTrue(session.snapshot().epoch > oldEpoch)
-        assertTrue(session.snapshot().sourceChangeNote!!.contains("旧代数"))
-        assertFalse(session.snapshot().viewingLive)
+        assertTrue(after.epoch > oldEpoch)
+        assertTrue(after.sourceChangeNote!!.contains("旧代数"))
+        assertTrue(after.sourceChangeNote!!.contains("新代数 ${after.epoch}"))
+        assertFalse(after.sourceChangeNote!!.contains("新代数 $oldEpoch"))
+        assertFalse(after.viewingLive)
+    }
+
+    @Test
+    fun coldStartIsNotAFailedForegroundRecheck() {
+        val session = DemoSession()
+        val snap = session.snapshot()
+        assertNull(snap.lifecycleNote)
+        assertFalse(snap.backgroundPaused)
+        assertFalse(snap.viewingLive)
+        assertTrue(snap.health.freshness.contains("无样本"))
+        session.onForeground()
+        assertNull(session.snapshot().lifecycleNote)
+        assertFalse(session.snapshot().backgroundPaused)
     }
 
     @Test
@@ -361,17 +409,24 @@ class DemoSessionTest {
         approve(session, "demo-ok")
         session.injectReceipt(CloudRaw.Accepted)
         session.onGeneratorTick()
+        val before = session.samples(0).map { it.seq }
         session.onBackground()
-        val size = session.samples(0).size
         session.onGeneratorTick()
-        assertEquals(size, session.samples(0).size)
+        assertEquals(before, session.samples(0).map { it.seq })
+        assertTrue(session.snapshot().backgroundPaused)
+        assertTrue(session.snapshot().lifecycleNote!!.contains("已进入后台"))
+        assertTrue(session.snapshot().health.freshness.contains("已暂停"))
         assertEquals(CloudRaw.Accepted, session.snapshot().commands.single().raw)
         assertTrue(session.snapshot().commands.single().localLabel.contains("已提交"))
         session.onForeground()
         session.onGeneratorTick()
         assertTrue(session.samples(0).last().gapBefore)
+        assertEquals(before, session.samples(0).dropLast(1).map { it.seq })
         assertEquals(0, session.snapshot().replayCount)
+        assertEquals(0, session.snapshot().controlQueryCount)
         assertTrue(session.snapshot().lifecycleNote!!.contains("缺口"))
+        assertTrue(session.snapshot().lifecycleNote!!.contains("未重放"))
+        assertFalse(session.snapshot().backgroundPaused)
     }
 
     @Test
