@@ -1,0 +1,26 @@
+{
+  "pages": [
+    "pages/mode/mode",
+    "pages/pair/pair",
+    "pages/devices/devices",
+    "pages/browser/browser",
+    "pages/monitor/monitor",
+    "pages/commands/commands",
+    "pages/plan/plan"
+  ],
+  "window": {
+    "navigationBarTitleText": "OpenScope DEMO",
+    "navigationBarBackgroundColor": "#101820",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#101820",
+    "backgroundTextStyle": "light"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json",
+  "lazyCodeLoading": "requiredComponents",
+  "usingComponents": {
+    "demo-banner": "/components/demo-banner/demo-banner",
+    "status-strip": "/components/status-strip/status-strip",
+    "section-nav": "/components/section-nav/section-nav"
+  }
+}

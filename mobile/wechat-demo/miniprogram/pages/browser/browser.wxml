@@ -1,0 +1,24 @@
+<view class="page">
+  <demo-banner />
+  <section-nav current="browser" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">工程 / 模块 / 变量</view>
+  <view class="muted">目录来自本地夹具，不是在线 ELF。没有观察者权限时这里是空的。</view>
+  <view class="card" wx:if="{{!snap.canBrowse}}">
+    <view class="danger">{{snap.accessDeniedReason}}</view>
+  </view>
+  <view class="card" wx:for="{{snap.projects}}" wx:key="id" wx:for-item="project">
+    <view class="item {{project.selected ? 'ok' : ''}}" data-id="{{project.id}}" bindtap="onProject">工程 {{project.name}}</view>
+    <view wx:for="{{project.modules}}" wx:key="id" wx:for-item="module">
+      <view class="item pad {{module.selected ? 'ok' : ''}}" data-id="{{module.id}}" bindtap="onModule">模块 {{module.name}}</view>
+      <view
+        class="item pad2 {{variable.selected ? 'ok' : ''}}"
+        wx:for="{{module.variables}}"
+        wx:key="id"
+        wx:for-item="variable"
+        data-id="{{variable.id}}"
+        bindtap="onVariable"
+      >{{variable.name}} · {{variable.type}} · {{variable.unit}}</view>
+    </view>
+  </view>
+</view>

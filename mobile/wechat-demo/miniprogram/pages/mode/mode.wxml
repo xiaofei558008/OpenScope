@@ -1,0 +1,28 @@
+<view class="page">
+  <demo-banner />
+  <section-nav current="mode" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">连接模式</view>
+  <view class="muted">三种模式只是选择。选中之后不会自动切换，也没有网络通道。失败不会改播模拟在线数据。</view>
+  <view class="card {{item.selected ? 'on' : ''}}" wx:for="{{snap.modes}}" wx:key="id">
+    <view class="h1">{{item.label}}</view>
+    <view class="muted">{{item.detail}}</view>
+    <button class="btn" data-mode="{{item.id}}" bindtap="onPickMode">选择此模式</button>
+  </view>
+  <view class="card">
+    <view class="h1">尝试连接</view>
+    <view class="muted">端点只用于本地分类，提交后即从输入框清除。不会按这个地址拨号，也不会把原文写进状态。</view>
+    <input class="input" value="{{draft}}" placeholder="可选。裸 IP 会按平台限制处理" bindinput="onDraft" />
+    <view class="row">
+      <button class="btn btn-danger" bindtap="onConnect">尝试连接（将失败，且不会回退）</button>
+      <button class="btn btn-quiet" bindtap="onIdle">回到未连接（不恢复链路）</button>
+    </view>
+  </view>
+  <view class="card" wx:if="{{snap.platformRestriction}}">
+    <view class="warn">{{snap.platformRestriction}}</view>
+  </view>
+  <view class="notice muted">{{snap.notice}}</view>
+  <view class="muted">{{snap.encryptionLabel}}</view>
+  <view class="muted">TTL {{snap.ttlLabel}}</view>
+  <view class="muted">schema {{snap.schemaVersion}}</view>
+</view>

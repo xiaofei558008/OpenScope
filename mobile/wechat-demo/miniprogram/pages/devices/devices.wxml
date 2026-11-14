@@ -1,0 +1,21 @@
+<view class="page">
+  <demo-banner />
+  <section-nav current="devices" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">记住的模拟设备</view>
+  <view class="muted">这里只保存夹具身份。撤销后不能再浏览变量或播放合成样本。没有长期密钥。</view>
+  <button class="btn" bindtap="onRemember">记住当前观察者设备</button>
+  <view class="card" wx:if="{{snap.devices.length === 0}}">
+    <view class="muted">还没有记住的设备。先在配对页得到观察者，再回来记住。</view>
+  </view>
+  <view class="card" wx:for="{{snap.devices}}" wx:key="id">
+    <view>{{item.label}} · {{item.role}} · {{item.revoked ? '已撤销' : '未撤销'}}</view>
+    <view class="muted">{{item.bindingId}} / {{item.identityId}}</view>
+    <view class="row">
+      <button class="btn" data-id="{{item.id}}" bindtap="onSelect">选中</button>
+      <button class="btn btn-danger" data-id="{{item.id}}" bindtap="onRevoke">撤销</button>
+    </view>
+  </view>
+  <view class="notice">{{snap.notice}}</view>
+  <view class="muted" wx:if="{{!snap.canBrowse}}">{{snap.accessDeniedReason}}</view>
+</view>

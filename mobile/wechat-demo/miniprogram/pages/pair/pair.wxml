@@ -1,0 +1,44 @@
+<view class="page">
+  <demo-banner />
+  <section-nav current="pair" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">模拟扫码 / 短码</view>
+  <view class="warn">{{snap.scanNotice}}</view>
+  <view class="muted">短码不是控制权限，也没有长期密钥。未知格式会直接拒绝。二维码里的地址和路径不会被打开。</view>
+  <input class="input" value="{{draft}}" placeholder="手动输入演示短码，例如 OSC-DEMO01" bindinput="onDraft" />
+  <view class="row">
+    <button class="btn" bindtap="onSubmitCode">提交短码</button>
+    <button class="btn btn-quiet" data-key="demo" bindtap="onFixture">演示短码</button>
+    <button class="btn btn-quiet" data-key="deny" bindtap="onFixture">可被拒绝的夹具</button>
+    <button class="btn btn-quiet" data-key="expired" bindtap="onFixture">过期夹具</button>
+    <button class="btn btn-quiet" data-key="revoked" bindtap="onFixture">撤销夹具</button>
+    <button class="btn btn-quiet" data-key="other" bindtap="onFixture">其他声称者</button>
+  </view>
+  <view class="cols">
+    <view class="col">
+      <text class="k">声称（未验证）</text>
+      <text class="v">{{snap.claimedServer}}</text>
+      <text class="v">{{snap.claimedPc}}</text>
+    </view>
+    <view class="col">
+      <text class="k">已验证预览</text>
+      <text class="v">{{snap.verifiedServer}}</text>
+      <text class="v">{{snap.verifiedPc}}</text>
+    </view>
+  </view>
+  <view class="card">
+    <view>角色 {{snap.roleLabel}}</view>
+    <view class="muted">兑换 {{snap.redemptionCount}} · 授权 {{snap.grantCount}} · 到期戳 {{snap.expiresAt}}</view>
+    <view class="row">
+      <button class="btn" bindtap="onVerify">校验声称</button>
+      <button class="btn" bindtap="onRequest">请求 PC 批准</button>
+      <button class="btn btn-danger" bindtap="onSelf">本机自行批准（应失败）</button>
+      <button class="btn" data-decision="approved" bindtap="onPc">模拟对端 PC 批准</button>
+      <button class="btn btn-danger" data-decision="denied" bindtap="onPc">模拟对端 PC 拒绝</button>
+      <button class="btn btn-quiet" bindtap="onRestore">恢复同一身份+请求+绑定</button>
+      <button class="btn btn-quiet" bindtap="onExpire">模拟 TTL 到期后再恢复</button>
+    </view>
+    <view class="muted">对端 PC 按钮是夹具事件，不是这台手机自己批准。恢复不会第二次兑换，也不会延长 TTL。</view>
+  </view>
+  <view class="notice">{{snap.notice}}</view>
+</view>
