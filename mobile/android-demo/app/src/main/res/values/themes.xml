@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.OpenScopeDemo" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#3D3422</item>
+        <item name="android:navigationBarColor">#102024</item>
+        <item name="android:windowBackground">#F3F5F7</item>
+    </style>
+</resources>

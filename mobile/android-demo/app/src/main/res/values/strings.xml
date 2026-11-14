@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">OpenScope DEMO</string>
+    <string name="banner_demo">DEMO · 模拟数据 · 进程内演示 · 不连接真实设备</string>
+    <string name="banner_cd">持久演示标记：DEMO，模拟数据，不连接真实设备</string>
+</resources>
