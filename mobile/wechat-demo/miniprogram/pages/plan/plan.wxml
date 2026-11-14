@@ -1,0 +1,36 @@
+<view class="page">
+  <demo-banner />
+  <section-nav current="plan" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">支付 / 套餐 / 权益夹具</view>
+  <view class="warn">没有支付 SDK，没有价格，没有订单，没有密钥。支付返回、服务端已付、权益生效互不推导，也不能代替连接或控制。</view>
+  <view class="card">
+    <view class="k">支付返回</view>
+    <view class="v mono">{{snap.payment.paymentReturn}}</view>
+    <view class="row">
+      <button class="btn" data-value="returned" bindtap="onReturn">返回页：已返回</button>
+      <button class="btn btn-quiet" data-value="cancelled" bindtap="onReturn">返回页：已取消</button>
+      <button class="btn btn-quiet" data-value="none" bindtap="onReturn">返回页：无</button>
+    </view>
+  </view>
+  <view class="card">
+    <view class="k">服务端已付</view>
+    <view class="v mono">{{snap.payment.serverPaid}}</view>
+    <view class="row">
+      <button class="btn" data-value="paid" bindtap="onPaid">夹具：已付</button>
+      <button class="btn btn-quiet" data-value="unpaid" bindtap="onPaid">夹具：未付</button>
+      <button class="btn btn-quiet" data-value="unknown" bindtap="onPaid">夹具：未知</button>
+    </view>
+  </view>
+  <view class="card">
+    <view class="k">权益</view>
+    <view class="v mono">{{snap.payment.entitlement}}</view>
+    <view class="row">
+      <button class="btn" data-value="active" bindtap="onEntitlement">夹具：生效</button>
+      <button class="btn btn-quiet" data-value="inactive" bindtap="onEntitlement">夹具：未生效</button>
+      <button class="btn btn-quiet" data-value="unknown" bindtap="onEntitlement">夹具：未知</button>
+    </view>
+  </view>
+  <view class="notice">{{snap.notice}}</view>
+  <view class="muted">{{snap.noNetworkNotice}}</view>
+</view>

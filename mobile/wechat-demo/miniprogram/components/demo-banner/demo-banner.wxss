@@ -1,0 +1,34 @@
+.banner {
+  display: flex;
+  gap: 16rpx;
+  align-items: flex-start;
+  background: #3a2a10;
+  border: 1rpx solid #f0b429;
+  border-radius: 16rpx;
+  padding: 16rpx;
+  margin-bottom: 16rpx;
+}
+
+.tag {
+  background: #f0b429;
+  color: #1b1408;
+  font-weight: 700;
+  border-radius: 8rpx;
+  padding: 4rpx 10rpx;
+  font-size: 22rpx;
+}
+
+.copy {
+  flex: 1;
+}
+
+.line {
+  display: block;
+  color: #ffe7b8;
+  font-size: 24rpx;
+}
+
+.dim {
+  color: #f3d7a1;
+  margin-top: 4rpx;
+}

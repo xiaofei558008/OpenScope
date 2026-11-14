@@ -1,0 +1,7 @@
+{
+  "usingComponents": {
+    "demo-banner": "/components/demo-banner/demo-banner",
+    "status-strip": "/components/status-strip/status-strip",
+    "section-nav": "/components/section-nav/section-nav"
+  }
+}

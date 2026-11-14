@@ -1,0 +1,7 @@
+<view class="banner">
+  <text class="tag">DEMO</text>
+  <view class="copy">
+    <text class="line">模拟数据 · 非生产环境 · 没有网络通道</text>
+    <text class="line dim">DEMO/SIMULATED DATA · 不是桌面端联调 · 不是生产就绪</text>
+  </view>
+</view>

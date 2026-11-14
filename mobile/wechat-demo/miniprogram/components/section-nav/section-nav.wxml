@@ -1,0 +1,9 @@
+<view class="nav">
+  <navigator
+    wx:for="{{items}}"
+    wx:key="id"
+    url="{{item.url}}"
+    open-type="redirect"
+    class="link {{item.id === current ? 'on' : ''}}"
+  >{{item.label}}</navigator>
+</view>

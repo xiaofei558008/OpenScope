@@ -1,0 +1,39 @@
+<view class="page">
+  <demo-banner />
+  <section-nav current="commands" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">命令状态（只展示）</view>
+  <view class="muted">这些按钮不发送、不执行、不重放。原始状态和本地置信分开保存。断开连接不会把原始状态改成失败。</view>
+  <view class="cols">
+    <view class="col">
+      <text class="k">原始状态</text>
+      <text class="v mono">{{snap.command.rawState}}</text>
+    </view>
+    <view class="col">
+      <text class="k">本地置信</text>
+      <text class="v mono">{{snap.command.localConfidence}}</text>
+    </view>
+  </view>
+  <view class="muted">已执行 {{snap.command.executed}} · 已确认 {{snap.command.confirmed}} · 断开被当成失败 {{snap.command.disconnectTreatedAsFailure}} · 已重放 {{snap.command.replayed}}</view>
+  <view class="card" wx:for="{{snap.commandCatalog}}" wx:key="id">
+    <view>{{item.label}}</view>
+    <view class="muted">{{item.note}}</view>
+    <button class="btn" data-state="{{item.id}}" bindtap="onShowState">展示此状态</button>
+  </view>
+  <view class="card">
+    <view class="h1">控制保持关闭</view>
+    <view class="muted">{{snap.controlReason}}</view>
+    <switch checked="{{snap.controlEnabled}}" disabled="{{true}}" />
+    <view class="row">
+      <button class="btn btn-danger" data-name="RUN_CTL" bindtap="onExec">RUN_CTL</button>
+      <button class="btn btn-danger" data-name="flash" bindtap="onExec">烧录</button>
+      <button class="btn btn-danger" data-name="shell" bindtap="onExec">Shell</button>
+      <button class="btn btn-danger" data-name="write" bindtap="onExec">写入变量</button>
+      <button class="btn btn-danger" data-name="arbitrary" bindtap="onExec">任意命令</button>
+      <button class="btn" bindtap="onControl">尝试打开控制</button>
+      <button class="btn btn-quiet" bindtap="onReplay">重放（应失败）</button>
+      <button class="btn btn-quiet" bindtap="onDisconnect">断开传输</button>
+    </view>
+  </view>
+  <view class="notice">{{snap.notice}}</view>
+</view>
