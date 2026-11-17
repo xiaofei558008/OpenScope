@@ -49,6 +49,33 @@ page {
   margin: 8rpx 0 16rpx;
 }
 
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8rpx;
+  margin-bottom: 16rpx;
+}
+
+button.nav-btn {
+  margin: 0;
+  padding: 8rpx 18rpx;
+  line-height: 1.4;
+  font-size: 24rpx;
+  background: #1b2836;
+  color: #c5d2de;
+  border-radius: 999rpx;
+  min-height: 0;
+}
+
+button.nav-btn::after {
+  border: none;
+}
+
+button.nav-btn.on {
+  background: #f0b429;
+  color: #1b1408;
+}
+
 .row {
   display: flex;
   flex-wrap: wrap;

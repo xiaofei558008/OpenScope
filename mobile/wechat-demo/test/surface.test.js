@@ -73,3 +73,35 @@ test('tourist appid is set and the mini-program source has no network path', fun
   assert.equal(monitor.indexOf('onHide') >= 0, true);
   assert.equal(fs.readFileSync(path.join(mini, 'app.js'), 'utf8').indexOf('setInterval'), -1);
 });
+
+test('nav buttons are page-level and docs do not claim tourist CLI open works', function () {
+  var readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
+  var ignore = fs.readFileSync(path.join(root, '.gitignore'), 'utf8');
+  assert.ok(readme.indexOf('not a working DevTools open path') >= 0);
+  assert.ok(readme.indexOf('project.private.config.json') >= 0);
+  assert.ok(ignore.indexOf('project.private.config.json') >= 0);
+  assert.equal(/wx[0-9a-f]{16}/i.test(readme), false);
+
+  var nav = fs.readFileSync(path.join(mini, 'templates/section-nav.wxml'), 'utf8');
+  var ids = ['nav-mode', 'nav-pair', 'nav-devices', 'nav-browser', 'nav-monitor', 'nav-commands', 'nav-plan'];
+  var i;
+  for (i = 0; i < ids.length; i += 1) {
+    assert.ok(nav.indexOf('id="' + ids[i] + '"') >= 0);
+  }
+  assert.ok(nav.indexOf('<button') >= 0);
+  assert.equal(nav.indexOf('<navigator'), -1);
+
+  var pages = ['mode', 'pair', 'devices', 'browser', 'monitor', 'commands', 'plan'];
+  for (i = 0; i < pages.length; i += 1) {
+    var wxml = fs.readFileSync(path.join(mini, 'pages', pages[i], pages[i] + '.wxml'), 'utf8');
+    var js = fs.readFileSync(path.join(mini, 'pages', pages[i], pages[i] + '.js'), 'utf8');
+    assert.ok(wxml.indexOf('template is="section-nav"') >= 0);
+    assert.equal(wxml.indexOf('<navigator'), -1);
+    assert.ok(js.indexOf('onNav: nav.onNav') >= 0);
+  }
+  var pair = fs.readFileSync(path.join(mini, 'pages/pair/pair.wxml'), 'utf8');
+  assert.ok(pair.indexOf('id="pair-next"') >= 0);
+  assert.ok(pair.indexOf('id="pair-verify"') >= 0);
+  assert.ok(pair.indexOf('id="pair-verify-block"') >= 0);
+  assert.ok(pair.indexOf('disabled="{{!snap.actions.canRequest}}"') >= 0);
+});

@@ -1,0 +1,11 @@
+<template name="section-nav">
+  <view class="nav" id="section-nav">
+    <button id="nav-mode" class="nav-btn {{current === 'mode' ? 'on' : ''}}" data-url="/pages/mode/mode" bindtap="onNav">模式</button>
+    <button id="nav-pair" class="nav-btn {{current === 'pair' ? 'on' : ''}}" data-url="/pages/pair/pair" bindtap="onNav">配对</button>
+    <button id="nav-devices" class="nav-btn {{current === 'devices' ? 'on' : ''}}" data-url="/pages/devices/devices" bindtap="onNav">设备</button>
+    <button id="nav-browser" class="nav-btn {{current === 'browser' ? 'on' : ''}}" data-url="/pages/browser/browser" bindtap="onNav">变量</button>
+    <button id="nav-monitor" class="nav-btn {{current === 'monitor' ? 'on' : ''}}" data-url="/pages/monitor/monitor" bindtap="onNav">波形</button>
+    <button id="nav-commands" class="nav-btn {{current === 'commands' ? 'on' : ''}}" data-url="/pages/commands/commands" bindtap="onNav">命令</button>
+    <button id="nav-plan" class="nav-btn {{current === 'plan' ? 'on' : ''}}" data-url="/pages/plan/plan" bindtap="onNav">权益</button>
+  </view>
+</template>

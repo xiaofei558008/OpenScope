@@ -1,6 +1,7 @@
+<import src="../../templates/section-nav.wxml" />
 <view class="page">
   <demo-banner />
-  <section-nav current="plan" />
+  <template is="section-nav" data="{{current: 'plan'}}" />
   <status-strip snap="{{snap}}" />
   <view class="h1">支付 / 套餐 / 权益夹具</view>
   <view class="warn">没有支付 SDK，没有价格，没有订单，没有密钥。支付返回、服务端已付、权益生效互不推导，也不能代替连接或控制。</view>

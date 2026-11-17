@@ -403,28 +403,122 @@ test('a different claimant, an expired code, or a revoked code is denied', funct
   assert.equal(revoked.snapshot().projects.length, 0);
 });
 
-test('self-host bare public IP is a platform restriction and not a connection', function () {
+test('self-host attempt is unimplemented transport, not a platform rejection', function () {
   var store = pairViewer(engine.createDemoStore());
   store.setMode('selfhost_relay');
+  var beforePlay = store.snapshot();
+  assert.equal(beforePlay.generator, 'stopped');
+  assert.equal(beforePlay.bufferLength, 0);
+  assert.equal(beforePlay.bufferLimit, 180);
+  assert.equal(beforePlay.canPlayback, false);
+  assert.ok(beforePlay.playbackBlock.indexOf('没有实现传输') >= 0);
   var result = store.attemptConnect({ host: '203.0.113.10' });
   var snap = store.snapshot();
   assert.equal(result.ok, false);
-  assert.equal(result.reason, 'wechat_platform_restriction');
+  assert.equal(result.reason, 'demo_has_no_transport');
   assert.equal(result.pretendConnected, false);
   assert.equal(result.fellBack, false);
   assert.equal(result.network, false);
-  assert.equal(snap.transport, 'restricted');
+  assert.equal(snap.transport, 'failed');
   assert.equal(snap.liveLink, false);
   assert.equal(snap.mode, 'selfhost_relay');
   assert.equal(snap.generator, 'stopped');
   assert.equal(snap.ring.length, 0);
-  assert.ok(snap.platformRestriction.length > 0);
+  assert.equal(snap.platformRestriction, '');
+  assert.ok(snap.productionPrerequisite.indexOf('裸公网 IP') >= 0);
+  assert.ok(snap.productionPrerequisite.indexOf('本 DEMO 未实现') >= 0);
+  assert.ok(snap.notice.indexOf('不是这次已经发生的平台拒绝') >= 0);
+  var selfhost = snap.modes[2];
+  assert.equal(selfhost.id, 'selfhost_relay');
+  assert.ok(selfhost.detail.indexOf('没有实现自建传输') >= 0);
+  assert.ok(selfhost.detail.indexOf('生产前提') >= 0);
+  var lan = snap.modes[0];
+  assert.equal(lan.id, 'lan_direct');
+  assert.ok(lan.detail.indexOf('没有把局域网写成微信平台禁令') >= 0);
+  assert.ok(lan.detail.indexOf('不要求额外网关') >= 0);
   assert.equal(JSON.stringify(snap).indexOf('203.0.113.10'), -1);
   assert.equal(store.getNetworkCallCount(), 0);
-  assert.equal(store.startDemoStream().reason, 'wechat_platform_restriction');
+  var play = store.startDemoStream();
+  assert.equal(play.ok, false);
+  assert.equal(play.reason, 'mode_blocks_generator');
+  assert.equal(play.fellBack, false);
+  assert.equal(store.snapshot().generator, 'stopped');
+  assert.equal(store.snapshot().bufferLength, 0);
+  assert.equal(store.snapshot().mode, 'selfhost_relay');
   assert.equal(snap.e2ee, false);
   assert.equal(store.snapshot().encryption, 'not-implemented');
   assert.equal(store.snapshot().schemaVersion, 'demo-injected-not-wire');
+});
+
+test('skipped verify does not advance, and the verified order reaches viewer', function () {
+  var clock = { t: 1000 };
+  var store = engine.createDemoStore({ now: function () { return clock.t; }, ttlMs: 5000 });
+  assert.equal(store.snapshot().nextStep.id, 'submit_code');
+  var early = store.requestPairing();
+  assert.equal(early.ok, false);
+  assert.equal(early.reason, 'not_verified');
+  assert.equal(early.missing, 'submit_code');
+  assert.equal(store.snapshot().redemptionCount, 0);
+  assert.equal(store.snapshot().grantCount, 0);
+
+  assert.equal(store.submitShortCode('OSC-DEMO01').ok, true);
+  var claimed = store.snapshot();
+  assert.equal(claimed.auth, 'claimed_unverified');
+  assert.equal(claimed.nextStep.id, 'verify_claim');
+  assert.equal(claimed.actions.canVerify, true);
+  assert.equal(claimed.actions.canRequest, false);
+  assert.equal(claimed.actions.canPc, false);
+  assert.equal(claimed.verifiedServer, '—');
+  assert.equal(claimed.grantCount, 0);
+  var skipped = store.requestPairing();
+  assert.equal(skipped.reason, 'not_verified');
+  assert.equal(skipped.missing, 'verify_claim');
+  assert.equal(store.snapshot().auth, 'claimed_unverified');
+  assert.equal(store.snapshot().redemptionCount, 0);
+
+  assert.equal(store.verifyClaim().ok, true);
+  var preview = store.snapshot();
+  assert.equal(preview.auth, 'verified_preview');
+  assert.equal(preview.nextStep.id, 'request_pairing');
+  assert.equal(preview.role, 'none');
+  assert.equal(preview.grantCount, 0);
+  assert.equal(preview.actions.canRequest, true);
+  assert.equal(preview.actions.canPc, false);
+  assert.equal(preview.verifiedPc, 'PC-LAB-1');
+  assert.notEqual(preview.claimedPc, preview.verifiedPc);
+
+  assert.equal(store.requestPairing().ok, true);
+  var pending = store.snapshot();
+  assert.equal(pending.auth, 'pending');
+  assert.equal(pending.nextStep.id, 'wait_pc');
+  assert.equal(pending.redemptionCount, 1);
+  assert.equal(pending.grantCount, 0);
+  assert.equal(pending.actions.canPc, true);
+  assert.equal(pending.controlEnabled, false);
+  assert.equal(pending.transport, 'not_connected');
+  assert.equal(store.approveAsSelf().ok, false);
+  assert.equal(store.snapshot().auth, 'pending');
+  assert.equal(store.snapshot().grantCount, 0);
+
+  assert.equal(store.applyPcDecision('approved').ok, true);
+  var viewer = store.snapshot();
+  assert.equal(viewer.nextStep.id, 'viewer_ready');
+  assert.equal(viewer.role, 'viewer');
+  assert.equal(viewer.redemptionCount, 1);
+  assert.equal(viewer.grantCount, 1);
+  assert.equal(viewer.controlEnabled, false);
+  assert.equal(viewer.transport, 'not_connected');
+  assert.equal(viewer.liveLink, false);
+
+  var denied = engine.createDemoStore({ now: function () { return clock.t; }, ttlMs: 5000 });
+  denied.submitFixtureKey('deny');
+  denied.verifyClaim();
+  denied.requestPairing();
+  assert.equal(denied.applyPcDecision('denied').ok, true);
+  assert.equal(denied.snapshot().auth, 'denied');
+  assert.equal(denied.snapshot().nextStep.id, 'denied');
+  assert.equal(denied.snapshot().grantCount, 0);
+  assert.equal(denied.snapshot().role, 'none');
 });
 
 test('executable controls are rejected and never run', function () {

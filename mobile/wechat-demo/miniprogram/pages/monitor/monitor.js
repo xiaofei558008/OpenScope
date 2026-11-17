@@ -2,8 +2,10 @@
 
 var engine = require('../../domain/engine.js');
 var waveform = require('../../domain/waveform.js');
+var nav = require('../../utils/nav.js');
 
 Page({
+  onNav: nav.onNav,
   data: { snap: engine.getStore().snapshot() },
   onReady: function () {
     this.initCanvas();

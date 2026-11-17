@@ -1,7 +1,7 @@
 {
   "miniprogramRoot": "miniprogram/",
   "projectname": "OpenScope-wechat-demo",
-  "description": "OpenScope WeChat mini-program DEMO shell. Simulated fixtures only. Tourist appid. No network.",
+  "description": "OpenScope WeChat mini-program DEMO shell. Public placeholder appid only. Open with a local project.private.config.json test AppID. Simulated fixtures. No network.",
   "appid": "touristappid",
   "compileType": "miniprogram",
   "libVersion": "3.5.5",

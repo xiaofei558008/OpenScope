@@ -1,6 +1,7 @@
+<import src="../../templates/section-nav.wxml" />
 <view class="page">
   <demo-banner />
-  <section-nav current="commands" />
+  <template is="section-nav" data="{{current: 'commands'}}" />
   <status-strip snap="{{snap}}" />
   <view class="h1">命令状态（只展示）</view>
   <view class="muted">这些按钮不发送、不执行、不重放。原始状态和本地置信分开保存。断开连接不会把原始状态改成失败。</view>

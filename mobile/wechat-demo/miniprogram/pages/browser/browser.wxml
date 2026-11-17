@@ -1,6 +1,7 @@
+<import src="../../templates/section-nav.wxml" />
 <view class="page">
   <demo-banner />
-  <section-nav current="browser" />
+  <template is="section-nav" data="{{current: 'browser'}}" />
   <status-strip snap="{{snap}}" />
   <view class="h1">工程 / 模块 / 变量</view>
   <view class="muted">目录来自本地夹具，不是在线 ELF。没有观察者权限时这里是空的。</view>

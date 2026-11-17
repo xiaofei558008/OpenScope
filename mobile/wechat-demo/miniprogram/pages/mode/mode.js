@@ -1,8 +1,10 @@
 'use strict';
 
 var engine = require('../../domain/engine.js');
+var nav = require('../../utils/nav.js');
 
 Page({
+  onNav: nav.onNav,
   data: {
     snap: engine.getStore().snapshot(),
     draft: '',

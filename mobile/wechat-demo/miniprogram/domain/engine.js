@@ -137,6 +137,7 @@ function createDemoStore(options) {
         entitlement: 'inactive',
       },
       platformRestriction: '',
+      productionPrerequisite: '',
       notice: '这是本地夹具 DEMO。没有网络通道。',
       logs: [],
     };
@@ -393,8 +394,8 @@ function createDemoStore(options) {
 
   function verifyClaim() {
     if (!state.fixture || state.auth !== 'claimed_unverified') {
-      note('没有待验证的声称。');
-      return { ok: false, reason: 'nothing_claimed', network: false, grantsControl: false };
+      note('还不能校验声称：请先提交演示短码。校验不是授权。');
+      return { ok: false, reason: 'nothing_claimed', missing: 'submit_code', network: false, grantsControl: false };
     }
     var fixture = state.fixture;
     if (fixture.expired) {
@@ -431,7 +432,7 @@ function createDemoStore(options) {
     state.pc = 'verified_present';
     state.role = 'none';
     state.controlEnabled = false;
-    note('验证预览完成。这还不是授权，默认也不是控制方。');
+    note('验证预览完成。这还不是授权。下一步才是请求 PC 批准，而且不能由本机批准。');
     return { ok: true, reason: 'verified_preview', network: false, grantsControl: false, role: 'none' };
   }
 
@@ -463,8 +464,16 @@ function createDemoStore(options) {
       return { ok: false, reason: 'use_restore_not_rerequest', network: false, redemptionCount: state.redemptionCount, expiresAt: state.expiresAt, grantCount: state.grantCount };
     }
     if (state.auth !== 'verified_preview' || !state.fixture || !state.verified) {
-      note('要先完成验证预览，才能请求 PC 批准。');
-      return { ok: false, reason: 'not_verified', network: false };
+      var missing = state.auth === 'claimed_unverified' ? 'verify_claim' : 'submit_code';
+      if (state.auth === 'claimed_unverified') {
+        note('还不能请求 PC 批准：请先点“校验声称”。校验只产生验证预览，不是授权，也不能由本机批准。');
+      } else if (state.auth === 'anonymous') {
+        note('还不能请求 PC 批准：请先提交演示短码，再点“校验声称”。校验不是授权。');
+      } else {
+        note('当前状态不能发起新的配对请求。');
+        missing = 'not_verified';
+      }
+      return { ok: false, reason: 'not_verified', missing: missing, network: false };
     }
     if (state.fixture.claimantId !== selfClaimant) {
       state.auth = 'denied';
@@ -691,6 +700,7 @@ function createDemoStore(options) {
       return { ok: false, reason: 'unknown_mode', mode: state.mode, fellBack: false };
     }
     state.mode = mode;
+    state.productionPrerequisite = '';
     if (mode !== 'lan_direct' && (state.generator === 'running' || state.streamDesired)) {
       state.streamDesired = false;
       state.generator = 'stopped';
@@ -715,15 +725,16 @@ function createDemoStore(options) {
     state.fellBack = false;
     state.liveLink = false;
     stopGenerator();
+    state.transport = 'failed';
+    state.platformRestriction = '';
     if (state.mode === 'selfhost_relay') {
-      state.transport = 'restricted';
-      state.platformRestriction = endpoint.isBareIp
-        ? '检测到裸 IP 形态地址，已丢弃且未拨号。微信小程序不能把裸公网 IP 当作 request 或 socket 合法域名。本 DEMO 没有连接。'
-        : '自建中继在这个 DEMO 里不会连接。生产环境里，裸公网 IP 也不是合法的微信 request 或 socket 域名。';
-      note(state.platformRestriction);
+      state.productionPrerequisite = endpoint.isBareIp
+        ? '生产前提（本 DEMO 未实现，也没有拨号）：将来若小程序要请求自建端点，裸公网 IP 不能作为微信 request 或 socket 合法域名。这次失败只因为 DEMO 没有传输。'
+        : '生产前提（本 DEMO 未实现，也没有拨号）：将来的自建端点需要微信允许的 request 或 socket 合法域名。裸公网 IP 不能当这个域名。';
+      note('本 DEMO 没有实现自建中继传输，所以没有连接。合法域名那一句是生产前提，不是这次已经发生的平台拒绝。');
       return {
         ok: false,
-        reason: 'wechat_platform_restriction',
+        reason: 'demo_has_no_transport',
         network: false,
         fellBack: false,
         pretendConnected: false,
@@ -731,9 +742,12 @@ function createDemoStore(options) {
         transport: state.transport,
       };
     }
-    state.transport = 'failed';
-    state.platformRestriction = '';
-    note('连接失败。此构建没有网络通道。失败不会回退到模拟在线数据，也不会自动切换模式。');
+    state.productionPrerequisite = '';
+    if (state.mode === 'lan_direct') {
+      note('本 DEMO 没有实现局域网传输，所以没有连接。这不是微信对局域网的平台禁令，也不要求额外网关。失败不会自动改走云端，也不会改播模拟在线数据。');
+    } else {
+      note('本 DEMO 没有实现托管中继传输，所以没有连接。失败不会自动改回局域网，也不会改播模拟在线数据。');
+    }
     return {
       ok: false,
       reason: 'no_network_path',
@@ -758,6 +772,7 @@ function createDemoStore(options) {
     clearRings();
     state.freshness = 'stale_cleared';
     state.target = 'none';
+    state.productionPrerequisite = '';
     note('传输回到“未连接”。没有重放命令，没有恢复链路，也没有开始合成数据。');
     return { ok: true, transport: state.transport, fellBack: false, generator: 'stopped', network: false };
   }
@@ -787,13 +802,9 @@ function createDemoStore(options) {
   }
 
   function startDemoStream() {
-    if (state.mode === 'selfhost_relay') {
-      note('自建中继模式不会用本地曲线假装已经连上。');
-      return { ok: false, reason: 'wechat_platform_restriction', fellBack: false, network: false, mode: state.mode };
-    }
     if (state.mode !== 'lan_direct') {
-      note('当前模式没有本地合成播放。不会自动改回局域网模式。');
-      return { ok: false, reason: 'mode_blocks_generator', fellBack: false, network: false, mode: state.mode };
+      note('没有开始本地合成。这个 DEMO 没有传输，所以当前模式保持停止、不把曲线当成已经连通。这不是一次真实连接被平台拒绝，也不会自动改回局域网。');
+      return { ok: false, reason: 'mode_blocks_generator', fellBack: false, network: false, mode: state.mode, generator: 'stopped' };
     }
     if (state.transport !== 'not_connected') {
       note('传输不是“未连接”。拒绝把失败、限制或断开伪装成模拟在线数据。');
@@ -1067,6 +1078,50 @@ function createDemoStore(options) {
     return cards;
   }
 
+  function nextStep() {
+    if (state.auth === 'claimed_unverified') {
+      return { id: 'verify_claim', label: '下一步：校验声称。结果只是验证预览，不是授权，也不能代替 PC 批准。' };
+    }
+    if (state.auth === 'verified_preview') {
+      return { id: 'request_pairing', label: '下一步：请求 PC 批准。本机不能自行批准。' };
+    }
+    if (state.auth === 'pending') {
+      return { id: 'wait_pc', label: '下一步：等待对端 PC。可使用“模拟对端 PC 批准”或“拒绝”。本机自行批准会失败。' };
+    }
+    if (state.auth === 'viewer') {
+      return { id: 'viewer_ready', label: '已是观察者。控制关闭。传输仍未连接。这不是控制权限。' };
+    }
+    if (state.auth === 'denied') {
+      return { id: 'denied', label: '已拒绝。授权仍是 0。同一请求可以恢复，恢复不会变成观察者。' };
+    }
+    if (state.auth === 'expired') {
+      return { id: 'expired', label: '已过期。不会延长 TTL，也不会补发授权。' };
+    }
+    if (state.auth === 'revoked') {
+      return { id: 'revoked', label: '已撤销。没有目录和样本访问。' };
+    }
+    return { id: 'submit_code', label: '下一步：提交演示短码。提交后必须先“校验声称”，校验不是授权。' };
+  }
+
+  function canPlayback() {
+    return canGenerate();
+  }
+
+  function playbackBlock() {
+    if (canPlayback()) return '';
+    if (state.mode !== 'lan_direct') {
+      return '本地合成保持停止。这个 DEMO 没有实现传输，所以自建或托管模式不会用曲线表示已经连通。这不是一次真实连接被平台拒绝。局域网是另一条将来的 PC 路径，本 DEMO 也还没实现它；只有该模式、观察者、且传输为未连接时才播放本地样本。';
+    }
+    if (state.transport !== 'not_connected') {
+      return '传输不是“未连接”，所以不播放。失败不会改用模拟在线数据。';
+    }
+    if (state.role !== 'viewer' || state.auth !== 'viewer' || state.revoked) {
+      return '需要未撤销的观察者会话，才会播放本地合成样本。';
+    }
+    if (state.hidden) return '页面不可见时不播放，也没有后台保活。';
+    return '当前不能播放本地合成样本。';
+  }
+
   function snapshot() {
     var ring = selectedRing();
     var variable = selectedVariable();
@@ -1156,6 +1211,20 @@ function createDemoStore(options) {
       commandCatalog: COMMAND_CATALOG,
       payment: copyPayment(),
       platformRestriction: state.platformRestriction,
+      productionPrerequisite: state.productionPrerequisite,
+      demoTransportNote: '这个 DEMO 没有实现任何传输。局域网、托管中继、自建中继都不会拨号。失败不会自动切换模式，也不会改播模拟在线数据。',
+      nextStep: nextStep(),
+      actions: {
+        canVerify: state.auth === 'claimed_unverified',
+        canRequest: state.auth === 'verified_preview',
+        canPc: state.auth === 'pending' && !isExpired(),
+        verifyBlock: state.auth === 'claimed_unverified' ? '' : '校验声称需要一条已提交、尚未校验的短码。没有这一步就不会进入验证预览。',
+        requestBlock: state.auth === 'verified_preview' ? '' : '请求 PC 批准需要先完成校验声称。验证预览不是授权。',
+        pcBlock: state.auth === 'pending' && !isExpired() ? '' : '模拟对端 PC 批准或拒绝需要一条等待中的请求。这不是本机批准。',
+        selfBlock: '本机不能批准自己的请求。点此会失败，等待状态和授权数都不变。',
+      },
+      canPlayback: canPlayback(),
+      playbackBlock: playbackBlock(),
       notice: state.notice,
       scanNotice: '模拟扫码：只接受手动输入或演示夹具。不会打开相机，也不会做真实扫码。',
       noNetworkNotice: '本构建没有任何网络通道。真实连接失败不会改播模拟数据。',

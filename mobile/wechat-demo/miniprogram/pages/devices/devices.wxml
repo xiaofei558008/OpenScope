@@ -1,6 +1,7 @@
+<import src="../../templates/section-nav.wxml" />
 <view class="page">
   <demo-banner />
-  <section-nav current="devices" />
+  <template is="section-nav" data="{{current: 'devices'}}" />
   <status-strip snap="{{snap}}" />
   <view class="h1">记住的模拟设备</view>
   <view class="muted">这里只保存夹具身份。撤销后不能再浏览变量或播放合成样本。没有长期密钥。</view>
