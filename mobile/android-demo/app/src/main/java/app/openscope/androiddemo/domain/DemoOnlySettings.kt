@@ -17,5 +17,6 @@ object DemoOnlySettings {
     val note: String =
         "演示专用设置：环容量 $RING_CAPACITY、最多 $MAX_CHANNELS 条曲线；" +
             "数据生成节拍 ${GENERATOR_PERIOD_MS} ms，界面刷新 ${UI_REFRESH_PERIOD_MS} ms，两者分开。" +
-            "不是产品性能指标，也不是配额、价格或协议默认值。"
+            "不是产品性能指标，也不是配额、价格或协议默认值。" +
+            " 样本入口只收下当前代数和来源、且数值有限的点；错代或错来源不进可见环。超过环容量时丢掉最旧的已接收点。"
 }

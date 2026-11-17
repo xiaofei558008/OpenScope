@@ -484,10 +484,14 @@ class DemoSessionTest {
         val before = session.snapshot().numbers.first { it.name.endsWith("zero") }
         assertEquals("无样本", before.displayValue)
         session.onGeneratorTick()
+        assertTrue(session.samples(3).single().gapBefore)
+        assertEquals(0f, session.samples(3).single().value)
+        session.onGeneratorTick()
         session.publishUi()
         val after = session.snapshot().numbers.first { it.name.endsWith("zero") }
         assertEquals("0", after.displayValue)
         assertTrue(after.quality.contains("不是无样本"))
+        assertTrue(session.samples(3).first().gapBefore)
     }
 
     @Test

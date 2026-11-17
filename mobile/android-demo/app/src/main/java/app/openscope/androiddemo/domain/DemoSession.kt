@@ -776,8 +776,5 @@ class DemoSession(
         return samples.takeLast(count)
     }
 
-    private fun formatValue(value: Float): String {
-        val rounded = (value * 10f).toInt() / 10f
-        return if (rounded == 0f) "0" else rounded.toString()
-    }
+    private fun formatValue(value: Float): String = formatDemoValue(value)
 }

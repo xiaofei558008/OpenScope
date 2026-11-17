@@ -49,7 +49,31 @@ class SampleRings(
         this.epoch = epoch
         this.sourceKey = sourceKey
         seq = 0L
-        rings.forEach { it.clear() }
+        rings.forEach {
+            it.clear()
+            it.armGap()
+        }
+    }
+
+    fun offer(sample: Sample): IngressReason? {
+        val reason = SampleIngress.decide(epoch, sourceKey, rings.size, sample)
+        if (reason != null) return reason
+        rings[sample.channel].append(sample)
+        return null
+    }
+
+    fun offerBatch(samples: List<Sample>): IngressTally {
+        var accepted = 0
+        val rejected = mutableMapOf<IngressReason, Int>()
+        for (sample in samples) {
+            val reason = offer(sample)
+            if (reason == null) {
+                accepted += 1
+            } else {
+                rejected[reason] = (rejected[reason] ?: 0) + 1
+            }
+        }
+        return IngressTally(accepted, rejected)
     }
 
     fun clearAndKeepSource() {
@@ -66,7 +90,7 @@ class SampleRings(
         seq += 1
         rings.forEachIndexed { channel, ring ->
             if (channel == 1 && seq % 48L == 0L) ring.armGap()
-            ring.append(
+            val decision = offer(
                 Sample(
                     seq = seq,
                     tMillis = now,
@@ -77,6 +101,7 @@ class SampleRings(
                     sourceKey = sourceKey,
                 ),
             )
+            check(decision == null)
         }
         return true
     }

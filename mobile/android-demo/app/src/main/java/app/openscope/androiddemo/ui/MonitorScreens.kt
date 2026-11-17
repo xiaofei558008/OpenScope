@@ -27,6 +27,8 @@ import app.openscope.androiddemo.domain.DemoSnapshot
 import app.openscope.androiddemo.domain.Freshness
 import app.openscope.androiddemo.domain.PcCommandConfirm
 import app.openscope.androiddemo.domain.Sample
+import app.openscope.androiddemo.domain.SampleIngress
+import app.openscope.androiddemo.domain.formatDemoValue
 
 private val ChannelColors = listOf(
     Color(0xFF0F6E6E),
@@ -115,16 +117,17 @@ fun WaveformScreen(state: DemoSnapshot, viewModel: DemoViewModel, tablet: Boolea
 
 @Composable
 private fun WaveCanvas(samples: List<Sample>, color: Color, modifier: Modifier) {
+    val drawable = SampleIngress.drawable(samples)
+    val spanPair = SampleIngress.span(drawable)
     Canvas(modifier) {
-        if (samples.size < 2) return@Canvas
-        val min = samples.minOf { it.value }
-        val max = samples.maxOf { it.value }
+        if (drawable.size < 2 || spanPair == null) return@Canvas
+        val (min, max) = spanPair
         val span = (max - min).let { if (it < 0.001f) 1f else it }
-        fun x(index: Int) = size.width * index / (samples.size - 1)
+        fun x(index: Int) = size.width * index / (drawable.size - 1)
         fun y(value: Float) = size.height - (value - min) / span * (size.height - 8f) - 4f
         var previous = Offset.Zero
         var pen = false
-        samples.forEachIndexed { index, sample ->
+        drawable.forEachIndexed { index, sample ->
             val point = Offset(x(index), y(sample.value))
             if (!pen || sample.gapBefore) {
                 drawCircle(color, radius = 3.5f, center = point)
@@ -182,7 +185,4 @@ fun DebugScreen(state: DemoSnapshot, viewModel: DemoViewModel) {
     }
 }
 
-private fun format(value: Float): String {
-    val rounded = (value * 10f).toInt() / 10f
-    return if (rounded == 0f) "0" else rounded.toString()
-}
+private fun format(value: Float): String = formatDemoValue(value)
