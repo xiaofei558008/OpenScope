@@ -1,0 +1,9 @@
+<view class="strip" wx:if="{{snap}}">
+  <view class="cell"><text class="k">来源</text><text class="v">{{snap.sourceLabel}}</text></view>
+  <view class="cell"><text class="k">模式</text><text class="v">{{snap.mode}}</text></view>
+  <view class="cell"><text class="k">传输</text><text class="v">{{snap.transportLabel}}</text></view>
+  <view class="cell"><text class="k">认证</text><text class="v">{{snap.authLabel}}</text></view>
+  <view class="cell"><text class="k">PC</text><text class="v">{{snap.pcLabel}}</text></view>
+  <view class="cell"><text class="k">目标</text><text class="v">{{snap.targetLabel}}</text></view>
+  <view class="cell"><text class="k">新鲜度</text><text class="v">{{snap.freshnessLabel}}</text></view>
+</view>

@@ -1,0 +1,9 @@
+{
+  "desc": "OpenScope WeChat DEMO shell. Local simulated pages only.",
+  "rules": [
+    {
+      "action": "allow",
+      "page": "*"
+    }
+  ]
+}

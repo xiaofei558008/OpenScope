@@ -1,0 +1,30 @@
+<import src="../../templates/section-nav.wxml" />
+<view class="page">
+  <demo-banner />
+  <template is="section-nav" data="{{current: 'mode'}}" />
+  <status-strip snap="{{snap}}" />
+  <view class="h1">连接模式</view>
+  <view class="muted">{{snap.demoTransportNote}}</view>
+  <view class="card {{item.selected ? 'on' : ''}}" wx:for="{{snap.modes}}" wx:key="id">
+    <view class="h1">{{item.label}}</view>
+    <view class="muted">{{item.detail}}</view>
+    <button class="btn" data-mode="{{item.id}}" bindtap="onPickMode">选择此模式</button>
+  </view>
+  <view class="card">
+    <view class="h1">尝试连接</view>
+    <view class="muted">端点只用于本地分类，提交后即从输入框清除。不会按这个地址拨号，也不会把原文写进状态。按钮保持可点，用来展示失败；它不是一条已经存在的通道。</view>
+    <input class="input" value="{{draft}}" placeholder="可选。原文不会被保存" bindinput="onDraft" />
+    <view class="row">
+      <button id="mode-connect" class="btn btn-danger" bindtap="onConnect">尝试连接（将失败，且不会回退）</button>
+      <button class="btn btn-quiet" bindtap="onIdle">回到未连接（不恢复链路）</button>
+    </view>
+  </view>
+  <view class="card" wx:if="{{snap.productionPrerequisite}}">
+    <view class="k">生产前提（本 DEMO 未实现）</view>
+    <view class="warn">{{snap.productionPrerequisite}}</view>
+  </view>
+  <view class="notice muted">{{snap.notice}}</view>
+  <view class="muted">{{snap.encryptionLabel}}</view>
+  <view class="muted">TTL {{snap.ttlLabel}}</view>
+  <view class="muted">schema {{snap.schemaVersion}}</view>
+</view>
