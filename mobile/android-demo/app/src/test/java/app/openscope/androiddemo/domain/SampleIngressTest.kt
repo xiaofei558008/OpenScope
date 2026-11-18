@@ -187,9 +187,114 @@ class SampleIngressTest {
         assertEquals(snap.epoch, session.samples(0).single().epoch)
     }
 
+    @Test
+    fun closedOrPausedRingRejectsFurtherPoints() {
+        val rings = open(epoch = 1L, source = "src-live", capacity = 4)
+        assertNull(rings.offer(sample(epoch = 1L, source = "src-live", seq = 1, value = 1f)))
+        val before = rings.rings[0].snapshot()
+        rings.enabled = false
+        assertEquals(
+            IngressReason.NotAccepting,
+            rings.offer(sample(epoch = 1L, source = "src-live", seq = 2, value = 9f)),
+        )
+        rings.enabled = true
+        rings.paused = true
+        assertEquals(
+            IngressReason.NotAccepting,
+            rings.offer(sample(epoch = 1L, source = "src-live", seq = 3, value = 8f)),
+        )
+        assertEquals(before, rings.rings[0].snapshot())
+        assertEquals(before.map { it.value }, rings.visible(0).map { it.value })
+    }
+
+    @Test
+    fun sameSourceResetInsideABatchDoesNotSeedTheClearedBuffer() {
+        val rings = open(epoch = 1L, source = "src-a", capacity = 8)
+        val batch = listOf(
+            sample(epoch = 1L, source = "src-a", seq = 1, value = 1f),
+            sample(epoch = 1L, source = "src-a", seq = 2, value = 2f),
+            sample(epoch = 1L, source = "src-a", seq = 3, value = 3f),
+            sample(epoch = 1L, source = "src-a", seq = 4, value = 4f),
+        )
+        val tally = rings.offerBatch(object : Iterable<Sample> {
+            override fun iterator(): Iterator<Sample> = object : Iterator<Sample> {
+                var index = 0
+                override fun hasNext(): Boolean = index < batch.size
+                override fun next(): Sample {
+                    if (index == 2) rings.retarget(1L, "src-a")
+                    return batch[index++]
+                }
+            }
+        })
+        assertEquals(2, tally.accepted)
+        assertEquals(2, tally.rejected[IngressReason.BufferReset])
+        assertTrue(rings.rings.all { it.snapshot().isEmpty() })
+        assertTrue(rings.visible(0).isEmpty())
+        rings.enabled = false
+        assertEquals(
+            IngressReason.NotAccepting,
+            rings.offer(sample(epoch = 1L, source = "src-a", seq = 5, value = 5f)),
+        )
+        assertTrue(rings.visible(0).isEmpty())
+    }
+
+    @Test
+    fun visibleChannelHidesCrossChannelAndStalePoints() {
+        val rings = open(epoch = 4L, source = "src-live", capacity = 8)
+        assertNull(rings.offer(sample(epoch = 4L, source = "src-live", seq = 1, value = 10f, channel = 0)))
+        assertNull(rings.offer(sample(epoch = 4L, source = "src-live", seq = 2, value = 20f, channel = 1)))
+        rings.rings[0].append(
+            sample(epoch = 4L, source = "src-live", seq = 3, value = 77f, channel = 1),
+        )
+        rings.rings[0].append(
+            sample(epoch = 3L, source = "src-live", seq = 4, value = 88f, channel = 0),
+        )
+        rings.rings[1].append(
+            sample(epoch = 4L, source = "other", seq = 5, value = 99f, channel = 1),
+        )
+        assertEquals(listOf(10f), rings.visible(0).map { it.value })
+        assertEquals(listOf(20f), rings.visible(1).map { it.value })
+        assertTrue(rings.visible(0).all { it.channel == 0 && it.sourceKey == "src-live" && it.epoch == 4L })
+        assertTrue(rings.visible(1).all { it.channel == 1 && it.sourceKey == "src-live" && it.epoch == 4L })
+    }
+
+    @Test
+    fun disconnectTicksDoNotGrowSamplesOrAuthorizeControl() {
+        val session = DemoSession()
+        session.parseInput("demo-ok")
+        session.verify()
+        session.applyPairing()
+        session.pcDecide(PcDecision.Approve)
+        session.injectReceipt(CloudRaw.Running)
+        session.onGeneratorTick()
+        session.publishUi()
+        val seqs = session.samples(0).map { it.seq }
+        val mode = session.snapshot().mode
+        val epoch = session.snapshot().epoch
+        session.disconnect()
+        repeat(4) {
+            session.onGeneratorTick()
+            session.publishUi()
+        }
+        val snap = session.snapshot()
+        assertEquals(seqs, session.samples(0).map { it.seq })
+        assertEquals(seqs, session.publishedSamples(0).map { it.seq })
+        assertEquals(mode, snap.mode)
+        assertEquals(epoch, snap.epoch)
+        assertFalse(snap.controlExecutable)
+        assertFalse(snap.silentCloudSwitch)
+        assertEquals(CloudRaw.Running, snap.commands.single().raw)
+        assertTrue(snap.commands.single().localLabel.contains("断线后未知"))
+        assertEquals(0, snap.replayCount)
+        assertEquals(0, snap.controlQueryCount)
+        assertTrue(session.publishedSamples(0).all { it.channel == 0 })
+        assertTrue(session.publishedSamples(1).all { it.channel == 1 })
+    }
+
     private fun open(epoch: Long, source: String, capacity: Int): SampleRings {
         return SampleRings(channels = DemoOnlySettings.MAX_CHANNELS, capacity = capacity).also {
             it.retarget(epoch, source)
+            it.enabled = true
         }
     }
 

@@ -44,8 +44,10 @@ class SampleRings(
         private set
     var enabled: Boolean = false
     var paused: Boolean = false
+    private var bufferFence: Long = 0
 
     fun retarget(epoch: Long, sourceKey: String) {
+        bufferFence += 1
         this.epoch = epoch
         this.sourceKey = sourceKey
         seq = 0L
@@ -56,17 +58,35 @@ class SampleRings(
     }
 
     fun offer(sample: Sample): IngressReason? {
+        if (!enabled || paused) return IngressReason.NotAccepting
         val reason = SampleIngress.decide(epoch, sourceKey, rings.size, sample)
         if (reason != null) return reason
         rings[sample.channel].append(sample)
         return null
     }
 
-    fun offerBatch(samples: List<Sample>): IngressTally {
+    /**
+     * One batch stays on the buffer it started with.
+     * If [retarget] or [clearAndKeepSource] runs before the batch finishes,
+     * the remainder is rejected and does not seed the cleared buffer.
+     * The fence that detects this is in-process only and is not stored on [Sample].
+     */
+    fun offerBatch(samples: Iterable<Sample>): IngressTally {
+        val fence = bufferFence
+        val boundEpoch = epoch
+        val boundSource = sourceKey
         var accepted = 0
         val rejected = mutableMapOf<IngressReason, Int>()
         for (sample in samples) {
-            val reason = offer(sample)
+            val reason = if (bufferFence != fence || epoch != boundEpoch || sourceKey != boundSource) {
+                when {
+                    epoch != boundEpoch -> IngressReason.StaleEpoch
+                    sourceKey != boundSource -> IngressReason.SourceMismatch
+                    else -> IngressReason.BufferReset
+                }
+            } else {
+                offer(sample)
+            }
             if (reason == null) {
                 accepted += 1
             } else {
@@ -76,7 +96,18 @@ class SampleRings(
         return IngressTally(accepted, rejected)
     }
 
+    fun visible(channel: Int): List<Sample> {
+        if (channel !in rings.indices) return emptyList()
+        return rings[channel].snapshot().filter {
+            it.channel == channel &&
+                it.epoch == epoch &&
+                it.sourceKey == sourceKey &&
+                it.value.isFinite()
+        }
+    }
+
     fun clearAndKeepSource() {
+        bufferFence += 1
         rings.forEach { it.clear() }
         seq = 0L
     }

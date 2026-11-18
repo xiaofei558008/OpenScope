@@ -12,6 +12,8 @@ enum class IngressReason {
     SourceMismatch,
     ChannelOutOfRange,
     NonFiniteValue,
+    NotAccepting,
+    BufferReset,
 }
 
 data class IngressTally(

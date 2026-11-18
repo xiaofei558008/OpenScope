@@ -525,7 +525,7 @@ class DemoSession(
     }
 
     fun publishUi() {
-        published = rings.rings.map { it.snapshot() }
+        published = List(rings.rings.size) { channel -> rings.visible(channel) }
         uiPublishes += 1
     }
 

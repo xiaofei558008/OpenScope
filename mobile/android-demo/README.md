@@ -62,3 +62,5 @@ app/build/outputs/apk/debug/app-debug.apk
 `SampleIngress` 只认现有 `Sample` 上的 `epoch` 与 `sourceKey`。错代或错来源的点直接拒绝，不写入可见环。换代或换来源会清空旧点，并给下一点记缺口。非有限 `Float` 不进环，画图时被跳过且不会当成 0。环超过 `DemoOnlySettings.RING_CAPACITY` 时只留最新的已接收点。
 
 `tMillis` 是 `Long`，这个模型表达不了非有限时间戳，也没有单独的线协议代数、通道凭据或配额字段。回归在 `SampleIngressTest`。入口拒绝不会改连接模式，也不会把控制变成可执行。
+
+环在暂停或未接收时拒绝后续点。同一批样本若中途清空，剩余点不进入新缓冲。界面按通道读可见点，通道号、代数或来源对不上的点不会出现在该通道里。
