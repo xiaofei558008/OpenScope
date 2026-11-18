@@ -3,6 +3,7 @@
 var fixtures = require('./fixtures.js');
 var qr = require('./qr.js');
 var waveform = require('./waveform.js');
+var ingress = require('./ingress.js');
 
 var COMMAND_STATES = [
   'rejected',
@@ -104,6 +105,9 @@ function createDemoStore(options) {
       lastValues: {},
       gapCount: 0,
       sampleSeq: 0,
+      ingressEpoch: null,
+      ingressSource: null,
+      gapPending: false,
       streamDesired: false,
       hidden: false,
       redemptionCount: 0,
@@ -212,6 +216,15 @@ function createDemoStore(options) {
     var i;
     for (i = 0; i < variables.length; i += 1) {
       if (variables[i].id === state.selectedVariableId) return variables[i];
+    }
+    return null;
+  }
+
+  function findVariable(id) {
+    var variables = fixtures.allVariables();
+    var i;
+    for (i = 0; i < variables.length; i += 1) {
+      if (variables[i].id === id) return variables[i];
     }
     return null;
   }
@@ -495,7 +508,7 @@ function createDemoStore(options) {
       claimantId: selfClaimant,
       auth: 'pending',
     };
-    note('已请求配对，等待 PC 批准。本机不能自己批准。默认不会变成控制方。');
+    note('已请求配对，等待 PC 批准。本机不能自己批准。取消只清本机演示请求，不会联系 PC。');
     return {
       ok: true,
       reason: 'pending',
@@ -504,6 +517,51 @@ function createDemoStore(options) {
       redemptionCount: state.redemptionCount,
       expiresAt: state.expiresAt,
       grantCount: state.grantCount,
+    };
+  }
+
+  function cancelPairing() {
+    var redemption = state.redemptionCount;
+    var grant = state.grantCount;
+    if (state.auth === 'viewer' || state.role === 'viewer') {
+      note('已经是观察者。取消不会收回授权，也不是在 PC 上结束会话，不会自行批准，也不会再兑换。');
+      return {
+        ok: false,
+        reason: 'viewer_not_a_pc_session',
+        network: false,
+        redemptionCount: redemption,
+        grantCount: grant,
+        role: 'viewer',
+        controlEnabled: false,
+      };
+    }
+    if (state.auth !== 'claimed_unverified' && state.auth !== 'verified_preview' && state.auth !== 'pending' && state.auth !== 'denied' && state.auth !== 'expired') {
+      note('没有可取消的演示请求。');
+      return { ok: false, reason: 'nothing_to_cancel', network: false, redemptionCount: redemption, grantCount: grant, role: state.role };
+    }
+    state.fixture = null;
+    state.claimed = null;
+    state.verified = null;
+    state.receipt = null;
+    state.expiresAt = null;
+    state.forceExpired = false;
+    state.auth = 'anonymous';
+    state.role = 'none';
+    state.controlEnabled = false;
+    state.pc = 'unknown';
+    state.revoked = false;
+    state.redemptionCount = redemption;
+    state.grantCount = grant;
+    note('已取消本机演示请求，回到未认证。没有自行批准，没有新的兑换或授权，也没有联系 PC。');
+    return {
+      ok: true,
+      reason: 'cancelled_local',
+      network: false,
+      auth: 'anonymous',
+      redemptionCount: redemption,
+      grantCount: grant,
+      role: 'none',
+      controlEnabled: false,
     };
   }
 
@@ -856,23 +914,84 @@ function createDemoStore(options) {
     state.sampleSeq += 1;
     var variables = fixtures.allVariables();
     var i;
+    var accepted = 0;
     for (i = 0; i < variables.length; i += 1) {
       var variable = variables[i];
       var value = synth(variable, state.sampleSeq);
-      state.lastValues[variable.id] = value;
-      if (!state.rings[variable.id]) state.rings[variable.id] = [];
-      pushRing(state.rings[variable.id], {
-        kind: 'point',
-        t: state.sampleSeq,
+      var stored = acceptSample({
+        variableId: variable.id,
         value: value,
         generation: state.generation,
-        variableId: variable.id,
+        source: 'demo-local',
+        t: state.sampleSeq,
+        batch: true,
       });
+      if (stored.stored) accepted += 1;
     }
+    state.gapPending = false;
+    if (!accepted) return { ok: false, reason: 'not_running', network: false };
     state.freshness = 'fresh';
     state.target = 'simulated_fixture';
     state.liveLink = false;
     return { ok: true, seq: state.sampleSeq, network: false };
+  }
+
+  function acceptSample(input) {
+    input = input || {};
+    if (!canGenerate()) {
+      return { ok: false, reason: 'not_running', stored: false, network: false, liveLink: false };
+    }
+    if (input.variableId && !findVariable(input.variableId)) {
+      return { ok: false, reason: 'unknown_variable', stored: false, network: false };
+    }
+    var before = selectedRing().length;
+    var decision = ingress.judgeSample({
+      epoch: state.ingressEpoch,
+      source: state.ingressSource,
+    }, input);
+    if (decision.action === 'reject') {
+      return {
+        ok: false,
+        reason: decision.reason,
+        stored: false,
+        network: false,
+        bufferLength: before,
+      };
+    }
+    var variableId = input.variableId || state.selectedVariableId;
+    if (!variableId) return { ok: false, reason: 'no_variable', stored: false, network: false };
+    if (decision.action === 'switch') {
+      clearRings();
+      state.gapPending = true;
+      state.ingressEpoch = input.generation;
+      state.ingressSource = input.source;
+    } else if (state.ingressEpoch == null) {
+      state.ingressEpoch = input.generation;
+      state.ingressSource = input.source;
+    }
+    if (!state.rings[variableId]) state.rings[variableId] = [];
+    if (state.gapPending) {
+      pushRing(state.rings[variableId], { kind: 'gap', generation: input.generation });
+      state.gapCount += 1;
+    }
+    pushRing(state.rings[variableId], {
+      kind: 'point',
+      t: typeof input.t === 'number' ? input.t : state.sampleSeq,
+      value: input.value,
+      generation: input.generation,
+      variableId: variableId,
+    });
+    state.lastValues[variableId] = input.value;
+    if (!input.batch) state.gapPending = false;
+    if (state.freshness !== 'gap') state.freshness = 'fresh';
+    state.liveLink = false;
+    return {
+      ok: true,
+      reason: decision.reason,
+      stored: true,
+      network: false,
+      bufferLength: state.rings[variableId].length,
+    };
   }
 
   function markGap() {
@@ -1218,10 +1337,16 @@ function createDemoStore(options) {
         canVerify: state.auth === 'claimed_unverified',
         canRequest: state.auth === 'verified_preview',
         canPc: state.auth === 'pending' && !isExpired(),
+        canCancel: state.auth === 'claimed_unverified' || state.auth === 'verified_preview' || state.auth === 'pending' || state.auth === 'denied' || state.auth === 'expired',
         verifyBlock: state.auth === 'claimed_unverified' ? '' : '校验声称需要一条已提交、尚未校验的短码。没有这一步就不会进入验证预览。',
         requestBlock: state.auth === 'verified_preview' ? '' : '请求 PC 批准需要先完成校验声称。验证预览不是授权。',
         pcBlock: state.auth === 'pending' && !isExpired() ? '' : '模拟对端 PC 批准或拒绝需要一条等待中的请求。这不是本机批准。',
         selfBlock: '本机不能批准自己的请求。点此会失败，等待状态和授权数都不变。',
+        cancelBlock: (state.auth === 'viewer' || state.role === 'viewer')
+          ? '已经是观察者。取消不会收回授权，也不是在 PC 上结束会话。'
+          : ((state.auth === 'claimed_unverified' || state.auth === 'verified_preview' || state.auth === 'pending' || state.auth === 'denied' || state.auth === 'expired')
+            ? ''
+            : '没有可取消的演示请求。'),
       },
       canPlayback: canPlayback(),
       playbackBlock: playbackBlock(),
@@ -1239,6 +1364,8 @@ function createDemoStore(options) {
     submitFixtureKey: submitFixtureKey,
     verifyClaim: verifyClaim,
     requestPairing: requestPairing,
+    cancelPairing: cancelPairing,
+    acceptSample: acceptSample,
     approveAsSelf: approveAsSelf,
     applyPcDecision: applyPcDecision,
     restore: restore,
@@ -1281,6 +1408,7 @@ module.exports = {
   createDemoStore: createDemoStore,
   getStore: getStore,
   parseDemoCode: qr.parseDemoCode,
+  judgeSample: ingress.judgeSample,
   buildDrawSegments: waveform.buildDrawSegments,
   DEMO_SCHEMA: fixtures.DEMO_SCHEMA,
   COMMAND_STATES: COMMAND_STATES,

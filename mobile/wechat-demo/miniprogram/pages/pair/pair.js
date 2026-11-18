@@ -36,6 +36,10 @@ Page({
     engine.getStore().requestPairing();
     this.refresh();
   },
+  onCancel: function () {
+    engine.getStore().cancelPairing();
+    this.refresh();
+  },
   onSelf: function () {
     engine.getStore().approveAsSelf();
     this.refresh();

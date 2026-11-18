@@ -102,6 +102,8 @@ test('nav buttons are page-level and docs do not claim tourist CLI open works', 
   var pair = fs.readFileSync(path.join(mini, 'pages/pair/pair.wxml'), 'utf8');
   assert.ok(pair.indexOf('id="pair-next"') >= 0);
   assert.ok(pair.indexOf('id="pair-verify"') >= 0);
+  assert.ok(pair.indexOf('id="pair-cancel"') >= 0);
+  assert.ok(pair.indexOf('id="pair-cancel-block"') >= 0);
   assert.ok(pair.indexOf('id="pair-verify-block"') >= 0);
   assert.ok(pair.indexOf('disabled="{{!snap.actions.canRequest}}"') >= 0);
 });

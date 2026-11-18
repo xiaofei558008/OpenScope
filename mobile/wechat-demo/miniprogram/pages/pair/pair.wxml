@@ -36,6 +36,7 @@
     <view class="row">
       <button id="pair-verify" class="btn" disabled="{{!snap.actions.canVerify}}" bindtap="onVerify">校验声称</button>
       <button id="pair-request" class="btn" disabled="{{!snap.actions.canRequest}}" bindtap="onRequest">请求 PC 批准</button>
+      <button id="pair-cancel" class="btn btn-quiet" disabled="{{!snap.actions.canCancel}}" bindtap="onCancel">取消本机演示请求</button>
       <button id="pair-self" class="btn btn-danger" bindtap="onSelf">本机自行批准（应失败）</button>
       <button id="pair-pc-approve" class="btn" data-decision="approved" disabled="{{!snap.actions.canPc}}" bindtap="onPc">模拟对端 PC 批准</button>
       <button id="pair-pc-deny" class="btn btn-danger" data-decision="denied" disabled="{{!snap.actions.canPc}}" bindtap="onPc">模拟对端 PC 拒绝</button>
@@ -46,6 +47,7 @@
     <view id="pair-request-block" class="muted">{{snap.actions.requestBlock}}</view>
     <view id="pair-pc-block" class="muted">{{snap.actions.pcBlock}}</view>
     <view id="pair-self-block" class="muted">{{snap.actions.selfBlock}}</view>
+    <view id="pair-cancel-block" class="muted">{{snap.actions.cancelBlock}}</view>
     <view class="muted">对端 PC 按钮是夹具事件，不是这台手机自己批准。恢复不会第二次兑换，也不会延长 TTL。</view>
   </view>
   <view class="notice">{{snap.notice}}</view>

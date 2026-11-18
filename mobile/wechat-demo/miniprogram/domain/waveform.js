@@ -20,7 +20,9 @@ function buildDrawSegments(entries, width, height, yMin, yMax) {
   var i;
   for (i = 0; i < total; i += 1) {
     var entry = list[i];
-    if (!entry || entry.kind === 'gap' || typeof entry.value !== 'number') {
+    var finite = entry && typeof entry.value === 'number' && entry.value === entry.value &&
+      entry.value !== Infinity && entry.value !== -Infinity;
+    if (!entry || entry.kind === 'gap' || !finite) {
       flush();
       continue;
     }
